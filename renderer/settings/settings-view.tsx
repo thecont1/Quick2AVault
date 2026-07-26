@@ -31,8 +31,20 @@ import {
   toast,
 } from "@glaze/core/components";
 import { useTheme } from "@glaze/core/hooks";
+import { cn } from "@glaze/core/utils";
 import type { NativeThemeInfo } from "@glaze/core/ipc";
-import { Check, FolderOpen, Pencil, X } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  ChevronRight,
+  FolderOpen,
+  GraduationCap,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Trash2,
+  X,
+} from "lucide-react";
 
 interface DocumentRecord {
   id: number;
@@ -102,6 +114,354 @@ function AppLogo() {
         <path d="M13.6 12.6c-.4-.5-1-.7-1.6-.7-1 0-1.7.5-1.7 1.2 0 .8.7 1 1.7 1.2 1 .2 1.7.5 1.7 1.3 0 .7-.8 1.2-1.8 1.2-.7 0-1.3-.3-1.6-.8" />
       </svg>
     </span>
+  );
+}
+
+// ── Training Mode ─────────────────────────────────────────────────────────
+
+type RuleType = "vendor_category" | "person_variant" | "keyword_doctype" | "source_scope";
+
+interface RuleEvidence {
+  filename: string;
+  phrase?: string;
+  docId?: number;
+}
+
+interface LearnedRule {
+  id: number;
+  ruleType: RuleType;
+  matchKey: string;
+  value: string;
+  confidence: number;
+  source: "confirmed" | "manual";
+  autoApply: boolean;
+  evidence: RuleEvidence[];
+}
+
+interface TrainingStats {
+  reviewed: number;
+  ruleCount: number;
+  mode: boolean;
+}
+
+const RULE_TYPE_LABEL: Record<RuleType, string> = {
+  vendor_category: "Vendor → Category",
+  person_variant: "Name variant → Person",
+  keyword_doctype: "Keyword → Doc type",
+  source_scope: "Account → Business / Personal",
+};
+const RULE_TYPES = Object.keys(RULE_TYPE_LABEL) as RuleType[];
+
+/** A single learned rule with inline value editing, evidence, and controls. */
+function RuleRow({
+  rule,
+  onEdit,
+  onDelete,
+  onToggleAuto,
+}: {
+  rule: LearnedRule;
+  onEdit: (value: string) => void;
+  onDelete: () => void;
+  onToggleAuto: (autoApply: boolean) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(rule.value);
+  const [showEvidence, setShowEvidence] = useState(false);
+  const evidenceFiles = Array.from(new Set(rule.evidence.map((e) => e.filename))).filter(Boolean);
+
+  const commit = () => {
+    const next = draft.trim();
+    if (next && next !== rule.value) onEdit(next);
+    setEditing(false);
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-panel bg-control-subtle px-3 py-2">
+      <div className="flex items-center gap-2">
+        <Badge color="secondary" className="shrink-0">
+          {RULE_TYPE_LABEL[rule.ruleType]}
+        </Badge>
+        <div className="flex items-center gap-1 min-w-0 flex-1">
+          <Text variant="small" className="truncate max-w-[110px]" title={rule.matchKey}>
+            {rule.matchKey}
+          </Text>
+          <ArrowRight className="size-3 text-tertiary shrink-0" />
+          {editing ? (
+            <Input
+              autoFocus
+              size="small"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commit();
+                if (e.key === "Escape") setEditing(false);
+              }}
+              className="flex-1"
+            />
+          ) : (
+            <Text variant="small" className="font-medium truncate" title={rule.value}>
+              {rule.value}
+            </Text>
+          )}
+        </div>
+        {editing ? (
+          <Button size="small" variant="accent" onClick={commit}>
+            <Check className="size-3.5" />
+          </Button>
+        ) : (
+          <Button size="small" variant="transparent" iconOnly onClick={() => setEditing(true)} title="Edit value">
+            <Pencil className="size-3.5" />
+          </Button>
+        )}
+        <Button size="small" variant="transparent" iconOnly onClick={onDelete} title="Delete rule">
+          <Trash2 className="size-3.5" />
+        </Button>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge color="secondary" className="tabular-nums">
+          Confidence {rule.confidence}
+        </Badge>
+        <button
+          type="button"
+          onClick={() => onToggleAuto(!rule.autoApply)}
+          className={cn(
+            "px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors",
+            rule.autoApply
+              ? "bg-accent text-accent-contrast border-transparent"
+              : "bg-control-subtle text-secondary border-panel hover:bg-control",
+          )}
+          title={rule.autoApply ? "Applied automatically — click to require asking" : "Click to auto-apply"}
+        >
+          {rule.autoApply ? "Auto-applies" : "Ask first"}
+        </button>
+        <Text variant="small" color="tertiary">
+          {rule.source === "manual" ? "Added manually" : "Confirmed by you"}
+        </Text>
+        {evidenceFiles.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setShowEvidence((v) => !v)}
+            className="flex items-center gap-0.5 text-secondary hover:text-primary transition-colors"
+          >
+            <ChevronRight className={cn("size-3.5 transition-transform", showEvidence && "rotate-90")} />
+            <Text variant="small" color="secondary">
+              {evidenceFiles.length} source{evidenceFiles.length === 1 ? "" : "s"}
+            </Text>
+          </button>
+        ) : null}
+      </div>
+      {showEvidence && evidenceFiles.length > 0 ? (
+        <div className="flex flex-col gap-0.5 pl-1 border-l border-panel">
+          {evidenceFiles.map((f) => (
+            <Text key={f} variant="small" color="tertiary" className="truncate pl-2" title={f}>
+              {f}
+            </Text>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TrainingSection() {
+  const queryClient = useQueryClient();
+  const [addType, setAddType] = useState<RuleType>("vendor_category");
+  const [addKey, setAddKey] = useState("");
+  const [addValue, setAddValue] = useState("");
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  const statsQuery = useQuery({
+    queryKey: ["trainingStats"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<TrainingStats>("training:getStats"),
+  });
+  const rulesQuery = useQuery({
+    queryKey: ["trainingRules"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<LearnedRule[]>("training:listRules"),
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["trainingStats"] });
+    queryClient.invalidateQueries({ queryKey: ["trainingRules"] });
+  };
+
+  const setMode = useMutation({
+    mutationFn: (on: boolean) => window.glazeAPI.glaze.ipc.invoke("training:setMode", on),
+    onSuccess: invalidate,
+    onError: (error) => toast.error(`Couldn't change Training Mode: ${error}`),
+  });
+  const addRule = useMutation({
+    mutationFn: (vars: { ruleType: RuleType; matchKey: string; value: string }) =>
+      window.glazeAPI.glaze.ipc.invoke("training:addRule", vars.ruleType, vars.matchKey, vars.value),
+    onSuccess: () => {
+      setAddKey("");
+      setAddValue("");
+      invalidate();
+    },
+    onError: (error) => toast.error(`Couldn't add rule: ${error}`),
+  });
+  const updateRule = useMutation({
+    mutationFn: (vars: { id: number; patch: { value?: string; autoApply?: boolean } }) =>
+      window.glazeAPI.glaze.ipc.invoke("training:updateRule", vars.id, vars.patch),
+    onSuccess: invalidate,
+    onError: (error) => toast.error(`Couldn't update rule: ${error}`),
+  });
+  const deleteRule = useMutation({
+    mutationFn: (id: number) => window.glazeAPI.glaze.ipc.invoke("training:deleteRule", id),
+    onSuccess: invalidate,
+    onError: (error) => toast.error(`Couldn't delete rule: ${error}`),
+  });
+  const reset = useMutation({
+    mutationFn: () => window.glazeAPI.glaze.ipc.invoke("training:reset"),
+    onSuccess: () => {
+      setConfirmReset(false);
+      invalidate();
+    },
+    onError: (error) => toast.error(`Couldn't reset training: ${error}`),
+  });
+
+  const stats = statsQuery.data;
+  const rules = rulesQuery.data ?? [];
+  const modeOn = stats?.mode ?? false;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <GraduationCap className="size-4 text-secondary" />
+        <Text variant="strong" className="flex-1">
+          Training Mode
+        </Text>
+        <div className="flex gap-1">
+          {[
+            { label: "Off", on: false },
+            { label: "On", on: true },
+          ].map((opt) => (
+            <button
+              key={opt.label}
+              type="button"
+              onClick={() => setMode.mutate(opt.on)}
+              className={cn(
+                "px-3 py-1 rounded-full text-xs font-medium border transition-colors",
+                modeOn === opt.on
+                  ? "bg-accent text-accent-contrast border-transparent"
+                  : "bg-control-subtle text-secondary border-panel hover:bg-control",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <Text variant="small" color="tertiary">
+        When on, the orb asks a few quick questions about each new document and learns reusable rules. Confirmed
+        rules are applied automatically and won't be asked again. A readable summary is saved to RULES.md in your
+        vault.
+      </Text>
+
+      {/* Progress */}
+      <div className="flex gap-2">
+        <div className="flex-1 rounded-lg border border-panel bg-control-subtle px-3 py-2">
+          <Text variant="small" color="tertiary">
+            Documents reviewed
+          </Text>
+          <Text variant="strong" className="tabular-nums">
+            {stats?.reviewed ?? 0}
+          </Text>
+        </div>
+        <div className="flex-1 rounded-lg border border-panel bg-control-subtle px-3 py-2">
+          <Text variant="small" color="tertiary">
+            Rules learned
+          </Text>
+          <Text variant="strong" className="tabular-nums">
+            {stats?.ruleCount ?? 0}
+          </Text>
+        </div>
+      </div>
+
+      {/* Learned rules */}
+      {rules.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          {rules.map((rule) => (
+            <RuleRow
+              key={rule.id}
+              rule={rule}
+              onEdit={(value) => updateRule.mutate({ id: rule.id, patch: { value } })}
+              onDelete={() => deleteRule.mutate(rule.id)}
+              onToggleAuto={(autoApply) => updateRule.mutate({ id: rule.id, patch: { autoApply } })}
+            />
+          ))}
+        </div>
+      ) : (
+        <Text variant="small" color="secondary">
+          No rules learned yet. Turn on Training Mode and drop a document to start teaching the app.
+        </Text>
+      )}
+
+      {/* Add a rule manually */}
+      <div className="flex flex-col gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-2.5">
+        <Text variant="small" color="secondary">
+          Add a rule manually
+        </Text>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <Select value={addType} onValueChange={(v) => setAddType(v as RuleType)}>
+            <SelectTrigger size="small" variant="filled" className="w-[170px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RULE_TYPES.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {RULE_TYPE_LABEL[t]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input
+            size="small"
+            value={addKey}
+            onChange={(e) => setAddKey(e.target.value)}
+            placeholder="Match (e.g. vendor)"
+            className="flex-1 min-w-[120px]"
+          />
+          <Input
+            size="small"
+            value={addValue}
+            onChange={(e) => setAddValue(e.target.value)}
+            placeholder="Result (e.g. category)"
+            className="flex-1 min-w-[120px]"
+          />
+          <Button
+            size="small"
+            variant="accent"
+            disabled={!addKey.trim() || !addValue.trim() || addRule.isPending}
+            onClick={() => addRule.mutate({ ruleType: addType, matchKey: addKey, value: addValue })}
+          >
+            <Plus className="size-3.5" />
+            Add
+          </Button>
+        </div>
+      </div>
+
+      {/* Reset */}
+      <div className="flex items-center gap-2">
+        {confirmReset ? (
+          <>
+            <Text variant="small" color="secondary" className="flex-1">
+              Delete all learned rules and review history?
+            </Text>
+            <Button size="small" variant="accent" onClick={() => reset.mutate()} disabled={reset.isPending}>
+              Confirm reset
+            </Button>
+            <Button size="small" variant="transparent" onClick={() => setConfirmReset(false)}>
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <Button size="small" variant="transparent" onClick={() => setConfirmReset(true)}>
+            <RotateCcw className="size-3.5" />
+            Reset Training progress
+          </Button>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -407,6 +767,11 @@ export function SettingsView() {
             </Table>
           )}
         </section>
+
+        <Separator />
+
+        {/* Training Mode */}
+        <TrainingSection />
 
         <Separator />
 

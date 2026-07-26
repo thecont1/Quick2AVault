@@ -10,6 +10,7 @@ interface IngestResult {
   markdownSuccess?: boolean;
   aiBlocked?: string;
   error?: string;
+  docId?: number;
 }
 
 // Pointer travel (screen px) below which a press+release counts as a click.
@@ -20,12 +21,20 @@ export function HomeView() {
   const [dragActive, setDragActive] = useState(false);
   // Batch progress: how many files are done out of the whole drop (0 total = idle).
   const [progress, setProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  // How many Training Mode reviews are waiting (drives the "training pending" glow).
+  const [trainingPending, setTrainingPending] = useState(0);
 
   // Latest status, readable from imperative pointer handlers.
   const statusRef = useRef<OrbStatus>("idle");
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  // Latest pending-review count, readable from the click handler.
+  const trainingPendingRef = useRef(0);
+  useEffect(() => {
+    trainingPendingRef.current = trainingPending;
+  }, [trainingPending]);
 
   // Custom drag: track the press so we can tell a click from a window drag.
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
@@ -66,6 +75,16 @@ export function HomeView() {
       const hadHardFailure = results.some((r) => r.status === "error" || r.status === "unsupported");
       const anyIngested = results.some((r) => r.status === "ingested" || r.status === "duplicate");
       setStatus(anyIngested && !hadHardFailure ? "success" : hadHardFailure ? "error" : "success");
+
+      // When Training Mode is on, prepare per-document questions for the freshly
+      // ingested files. The backend no-ops when the mode is off and opens the
+      // training popup itself if anything needs asking.
+      const newDocIds = results
+        .filter((r) => r.status === "ingested" && typeof r.docId === "number")
+        .map((r) => r.docId as number);
+      if (newDocIds.length > 0) {
+        void window.glazeAPI.glaze.ipc.invoke("training:prepareBatch", newDocIds);
+      }
     } catch {
       setStatus("error");
     } finally {
@@ -113,6 +132,26 @@ export function HomeView() {
     };
   }, []);
 
+  // Track how many training reviews are pending so the orb can glow when the
+  // app has follow-up questions ready.
+  useEffect(() => {
+    let active = true;
+    void window.glazeAPI.glaze.ipc
+      .invoke<number>("training:getPendingCount")
+      .then((count) => {
+        if (active) setTrainingPending(count);
+      })
+      .catch(() => {});
+    const unsubscribe = window.glazeAPI.glaze.ipc.on("training:changed", (_event, payload: unknown) => {
+      const count = (payload as { pendingCount?: number } | undefined)?.pendingCount;
+      if (typeof count === "number") setTrainingPending(count);
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
   const flushMove = useCallback(() => {
     rafRef.current = null;
     const move = pendingRef.current;
@@ -150,9 +189,11 @@ export function HomeView() {
     }
     if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
     window.glazeAPI.glaze.ipc.send("orb:dragEnd");
-    // A press with no meaningful travel, while idle, opens the snapshot popup.
+    // A press with no meaningful travel, while idle, opens a popup: the pending
+    // training questions take priority over the financial snapshot.
     if (!drag.moved && statusRef.current === "idle") {
-      void window.glazeAPI.glaze.ipc.invoke("snapshot:open");
+      const channel = trainingPendingRef.current > 0 ? "training:open" : "snapshot:open";
+      void window.glazeAPI.glaze.ipc.invoke(channel);
     }
   }, []);
 
@@ -168,6 +209,8 @@ export function HomeView() {
             : Vault;
 
   const showBatch = status === "processing" && progress.total > 1;
+  // Glow only when idle and not mid-drop, so it doesn't fight the other states.
+  const trainingGlow = trainingPending > 0 && status === "idle" && !dragActive;
 
   return (
     <div className="h-full w-full flex items-center justify-center select-none">
@@ -185,6 +228,7 @@ export function HomeView() {
             "dark:ring-white/20 dark:shadow-xl dark:shadow-black/50",
             dragActive && "scale-110 shadow-xl",
             status === "processing" && "orb-pulse",
+            trainingGlow && "orb-training ring-white/60 dark:ring-white/70",
           )}
         >
           <Icon className={cn("size-7", status === "processing" && "animate-spin")} strokeWidth={2} />

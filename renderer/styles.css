@@ -24,3 +24,22 @@
 .orb-pulse {
   animation: orb-pulse 1.15s ease-in-out infinite;
 }
+
+/* Bright pulsing halo when Training Mode has questions waiting for this orb. */
+@keyframes orb-training-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 8px 2px rgb(10 132 255 / 0.55),
+      0 4px 12px rgb(0 0 0 / 0.28);
+  }
+  50% {
+    box-shadow:
+      0 0 22px 8px rgb(10 132 255 / 0.9),
+      0 4px 12px rgb(0 0 0 / 0.28);
+  }
+}
+
+.orb-training {
+  animation: orb-training-glow 1.5s ease-in-out infinite;
+}

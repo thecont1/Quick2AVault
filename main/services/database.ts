@@ -37,6 +37,47 @@ export interface DocumentRecord extends CurrencyFields {
   markdownPath: string;
 }
 
+/** The four kinds of rule Training Mode can learn. */
+export type RuleType = "vendor_category" | "person_variant" | "keyword_doctype" | "source_scope";
+
+/** A piece of evidence explaining why a rule exists. */
+export interface RuleEvidence {
+  filename: string;
+  phrase?: string;
+  docId?: number;
+}
+
+export interface LearnedRule {
+  id: number;
+  ruleType: RuleType;
+  /** The thing matched in a document (vendor / name variant / keyword / source), lower-cased. */
+  matchKey: string;
+  /** What the rule concludes (category / canonical person / doc type / "business"|"personal"). */
+  value: string;
+  /** Rises by one each time the same rule is confirmed. */
+  confidence: number;
+  /** "confirmed" = learned from a Training answer; "manual" = added by hand in Settings. */
+  source: "confirmed" | "manual";
+  /** When true the rule is applied automatically without asking again. */
+  autoApply: boolean;
+  evidence: RuleEvidence[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TrainingReviewStatus = "pending" | "answered" | "skipped" | "auto";
+
+export interface TrainingReviewRecord {
+  docId: number;
+  status: TrainingReviewStatus;
+  /** JSON-encoded question set generated for this document. */
+  questions: string;
+  /** JSON-encoded answers once the user responds, else null. */
+  answers: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface NewDocument {
   hash: string;
   originalFilename: string;
@@ -107,6 +148,43 @@ function getDb(): DatabaseSync {
       is_nearest INTEGER NOT NULL,
       fetched_at TEXT NOT NULL,
       PRIMARY KEY (currency, req_date)
+    );
+  `);
+  // Generic key/value app settings (e.g. Training Mode on/off).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+  // Rules the app has learned from Training Mode answers. One row per
+  // (rule_type, match_key); confidence rises each time the same rule is
+  // confirmed, and evidence records why the rule exists.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS learned_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      rule_type TEXT NOT NULL,
+      match_key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      confidence INTEGER NOT NULL DEFAULT 1,
+      source TEXT NOT NULL,
+      auto_apply INTEGER NOT NULL DEFAULT 0,
+      evidence TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (rule_type, match_key)
+    );
+  `);
+  // One row per document that passed through Training Mode, holding its
+  // generated questions and (once answered) the user's answers.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS training_reviews (
+      doc_id INTEGER PRIMARY KEY,
+      status TEXT NOT NULL,
+      questions TEXT NOT NULL DEFAULT '[]',
+      answers TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
     );
   `);
   // Add the foreign-currency columns to older document tables (idempotent).
@@ -336,4 +414,230 @@ export function saveCachedRate(currency: string, reqDate: string, entry: RateCac
          is_nearest = excluded.is_nearest, fetched_at = excluded.fetched_at`,
     )
     .run(currency, reqDate, entry.rate, entry.rateDate, entry.isNearest ? 1 : 0, new Date().toISOString());
+}
+
+// ── App settings (key/value) ────────────────────────────────────────────
+
+export function getSetting(key: string): string | null {
+  const row = getDb().prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as Row | undefined;
+  return row ? String(row.value) : null;
+}
+
+export function setSetting(key: string, value: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO app_settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    )
+    .run(key, value);
+}
+
+// ── Learned rules (Training Mode) ───────────────────────────────────────
+
+/** How many consistent confirmations before a rule is auto-applied silently. */
+export const AUTO_APPLY_THRESHOLD = 2;
+
+function parseEvidence(raw: unknown): RuleEvidence[] {
+  try {
+    const parsed = JSON.parse(String(raw ?? "[]"));
+    return Array.isArray(parsed) ? (parsed as RuleEvidence[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function mapRule(row: Row): LearnedRule {
+  return {
+    id: Number(row.id),
+    ruleType: String(row.rule_type) as RuleType,
+    matchKey: String(row.match_key),
+    value: String(row.value),
+    confidence: Number(row.confidence),
+    source: String(row.source) === "manual" ? "manual" : "confirmed",
+    autoApply: Number(row.auto_apply) === 1,
+    evidence: parseEvidence(row.evidence),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+export function listLearnedRules(): LearnedRule[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM learned_rules ORDER BY rule_type ASC, confidence DESC, match_key ASC")
+    .all() as Row[];
+  return rows.map(mapRule);
+}
+
+export function findLearnedRule(ruleType: RuleType, matchKey: string): LearnedRule | null {
+  const row = getDb()
+    .prepare("SELECT * FROM learned_rules WHERE rule_type = ? AND match_key = ?")
+    .get(ruleType, matchKey.toLowerCase()) as Row | undefined;
+  return row ? mapRule(row) : null;
+}
+
+/**
+ * Insert a new confirmed rule or reinforce an existing one (confidence + 1),
+ * merging evidence. Returns the resulting rule and whether it was newly created.
+ */
+export function upsertConfirmedRule(input: {
+  ruleType: RuleType;
+  matchKey: string;
+  value: string;
+  evidence?: RuleEvidence[];
+}): { rule: LearnedRule; isNew: boolean } {
+  const matchKey = input.matchKey.trim().toLowerCase();
+  const now = new Date().toISOString();
+  const existing = findLearnedRule(input.ruleType, matchKey);
+
+  if (existing) {
+    const confidence = existing.confidence + 1;
+    // Dedup evidence by filename + phrase.
+    const merged = [...existing.evidence];
+    for (const e of input.evidence ?? []) {
+      if (!merged.some((m) => m.filename === e.filename && m.phrase === e.phrase)) merged.push(e);
+    }
+    const autoApply = existing.source === "manual" || confidence >= AUTO_APPLY_THRESHOLD;
+    getDb()
+      .prepare(
+        `UPDATE learned_rules SET value = ?, confidence = ?, auto_apply = ?, evidence = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(input.value.trim(), confidence, autoApply ? 1 : 0, JSON.stringify(merged), now, existing.id);
+    return { rule: findLearnedRule(input.ruleType, matchKey)!, isNew: false };
+  }
+
+  getDb()
+    .prepare(
+      `INSERT INTO learned_rules (rule_type, match_key, value, confidence, source, auto_apply, evidence, created_at, updated_at)
+       VALUES (?, ?, ?, 1, 'confirmed', ?, ?, ?, ?)`,
+    )
+    .run(
+      input.ruleType,
+      matchKey,
+      input.value.trim(),
+      AUTO_APPLY_THRESHOLD <= 1 ? 1 : 0,
+      JSON.stringify(input.evidence ?? []),
+      now,
+      now,
+    );
+  return { rule: findLearnedRule(input.ruleType, matchKey)!, isNew: true };
+}
+
+/** Add a rule by hand from Settings — explicit, so it auto-applies immediately. */
+export function addManualRule(input: {
+  ruleType: RuleType;
+  matchKey: string;
+  value: string;
+}): LearnedRule {
+  const matchKey = input.matchKey.trim().toLowerCase();
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO learned_rules (rule_type, match_key, value, confidence, source, auto_apply, evidence, created_at, updated_at)
+       VALUES (?, ?, ?, 1, 'manual', 1, '[]', ?, ?)
+       ON CONFLICT(rule_type, match_key) DO UPDATE SET
+         value = excluded.value, source = 'manual', auto_apply = 1, updated_at = excluded.updated_at`,
+    )
+    .run(input.ruleType, matchKey, input.value.trim(), now, now);
+  return findLearnedRule(input.ruleType, matchKey)!;
+}
+
+/** Patch a rule's value and/or auto-apply flag (from Settings editing). */
+export function updateLearnedRule(id: number, patch: { value?: string; autoApply?: boolean }): void {
+  const sets: string[] = [];
+  const args: unknown[] = [];
+  if (patch.value != null) {
+    sets.push("value = ?");
+    args.push(patch.value.trim());
+  }
+  if (patch.autoApply != null) {
+    sets.push("auto_apply = ?");
+    args.push(patch.autoApply ? 1 : 0);
+  }
+  if (sets.length === 0) return;
+  sets.push("updated_at = ?");
+  args.push(new Date().toISOString());
+  args.push(id);
+  getDb().prepare(`UPDATE learned_rules SET ${sets.join(", ")} WHERE id = ?`).run(...(args as never[]));
+}
+
+export function deleteLearnedRule(id: number): void {
+  getDb().prepare("DELETE FROM learned_rules WHERE id = ?").run(id);
+}
+
+// ── Training reviews (per-document) ──────────────────────────────────────
+
+function mapReview(row: Row): TrainingReviewRecord {
+  return {
+    docId: Number(row.doc_id),
+    status: String(row.status) as TrainingReviewStatus,
+    questions: String(row.questions ?? "[]"),
+    answers: row.answers == null ? null : String(row.answers),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+export function getTrainingReview(docId: number): TrainingReviewRecord | null {
+  const row = getDb().prepare("SELECT * FROM training_reviews WHERE doc_id = ?").get(docId) as Row | undefined;
+  return row ? mapReview(row) : null;
+}
+
+/** Insert or replace a document's training review. */
+export function saveTrainingReview(input: {
+  docId: number;
+  status: TrainingReviewStatus;
+  questions: string;
+  answers?: string | null;
+}): void {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO training_reviews (doc_id, status, questions, answers, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(doc_id) DO UPDATE SET
+         status = excluded.status, questions = excluded.questions,
+         answers = excluded.answers, updated_at = excluded.updated_at`,
+    )
+    .run(input.docId, input.status, input.questions, input.answers ?? null, now, now);
+}
+
+export function updateTrainingReviewStatus(
+  docId: number,
+  status: TrainingReviewStatus,
+  answers?: string | null,
+): void {
+  getDb()
+    .prepare("UPDATE training_reviews SET status = ?, answers = ?, updated_at = ? WHERE doc_id = ?")
+    .run(status, answers ?? null, new Date().toISOString(), docId);
+}
+
+/** The oldest still-pending review, or null. */
+export function getNextPendingReview(): TrainingReviewRecord | null {
+  const row = getDb()
+    .prepare("SELECT * FROM training_reviews WHERE status = 'pending' ORDER BY doc_id ASC LIMIT 1")
+    .get() as Row | undefined;
+  return row ? mapReview(row) : null;
+}
+
+export function getPendingReviewCount(): number {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) AS n FROM training_reviews WHERE status = 'pending'")
+    .get() as Row;
+  return Number(row.n);
+}
+
+export function getTrainingStats(): { reviewed: number; ruleCount: number } {
+  const reviewed = Number(
+    (getDb().prepare("SELECT COUNT(*) AS n FROM training_reviews WHERE status != 'pending'").get() as Row).n,
+  );
+  const ruleCount = Number((getDb().prepare("SELECT COUNT(*) AS n FROM learned_rules").get() as Row).n);
+  return { reviewed, ruleCount };
+}
+
+/** Wipe all learned rules and training reviews (start over). */
+export function resetTraining(): void {
+  const database = getDb();
+  database.exec("DELETE FROM learned_rules");
+  database.exec("DELETE FROM training_reviews");
 }

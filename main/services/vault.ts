@@ -72,6 +72,8 @@ export interface IngestResult {
   markdownSuccess?: boolean;
   aiBlocked?: string;
   error?: string;
+  /** Database id of the newly-ingested document (only on a fresh "ingested"). */
+  docId?: number;
 }
 
 /** Ingest a single dropped file. Ensures the vault exists first. Never throws. */
@@ -115,7 +117,7 @@ async function ingestOne(sourcePath: string): Promise<IngestResult> {
     // date's FBIL rate (best-effort — never blocks or fails the ingest).
     const currency = await analyzeCurrency(markdown, filename);
 
-    insertDocument({
+    const record = insertDocument({
       hash,
       originalFilename: filename,
       fileType: type,
@@ -128,7 +130,7 @@ async function ingestOne(sourcePath: string): Promise<IngestResult> {
     });
 
     logger.info("vault", "Ingested file", { filename, markdownSuccess: success });
-    return { filename, status: "ingested", markdownSuccess: success, aiBlocked };
+    return { filename, status: "ingested", markdownSuccess: success, aiBlocked, docId: record.id };
   } catch (error) {
     logger.error("vault", "Failed to ingest file", { filename, error: String(error) });
     return { filename, status: "error", error: String(error) };
