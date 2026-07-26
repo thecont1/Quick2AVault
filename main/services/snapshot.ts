@@ -26,23 +26,53 @@ export interface DocRef {
   filename: string;
 }
 
+/** A confidently-converted foreign-currency invoice. */
+export interface ForeignInvoice {
+  docId: number;
+  filename: string;
+  amount: number;
+  currency: string;
+  inrValue: number;
+  rateUsed: number;
+  rateDate: string;
+  rateIsNearest: boolean;
+}
+
 export interface PersonSummary {
   name: string;
   documentCount: number;
   dateRange: { start: string; end: string } | null;
   categories: string[];
   documents: DocRef[];
+  foreignInvoices: ForeignInvoice[];
+  foreignTotalInr: number;
 }
 
 export interface UnidentifiedSummary {
   documentCount: number;
   categories: string[];
   documents: DocRef[];
+  foreignInvoices: ForeignInvoice[];
+  foreignTotalInr: number;
+}
+
+/** A document with a detected foreign amount that couldn't be converted confidently. */
+export interface NeedsReviewDoc {
+  docId: number;
+  filename: string;
+  currency: string | null;
+  amount: number | null;
+}
+
+export interface NeedsReviewSummary {
+  documentCount: number;
+  documents: NeedsReviewDoc[];
 }
 
 export interface SnapshotData {
   people: PersonSummary[];
   unidentified: UnidentifiedSummary | null;
+  needsReview: NeedsReviewSummary | null;
 }
 
 export interface FallbackStats {
@@ -150,12 +180,22 @@ function resolveName(name: string, map: Map<string, string>): string {
 function aggregate(attributions: Attribution[]): SnapshotData {
   const nameMap = new Map(listNameOverrides().map((o) => [o.from, o.to]));
   const docMap = new Map(listDocumentOverrides().map((o) => [o.docId, o.person]));
+  // Currency data lives on the document record (computed at ingestion), so join
+  // it in at read time rather than caching it in the attribution blob.
+  const docMeta = new Map(listDocuments(500).map((d) => [d.id, d]));
 
+  type ForeignBucket = { foreignInvoices: ForeignInvoice[]; foreignTotalInr: number };
   const people = new Map<
     string,
-    { categories: Set<string>; documents: DocRef[]; starts: string[]; ends: string[] }
+    { categories: Set<string>; documents: DocRef[]; starts: string[]; ends: string[] } & ForeignBucket
   >();
-  const unidentified = { categories: new Set<string>(), documents: [] as DocRef[] };
+  const unidentified: { categories: Set<string>; documents: DocRef[] } & ForeignBucket = {
+    categories: new Set<string>(),
+    documents: [],
+    foreignInvoices: [],
+    foreignTotalInr: 0,
+  };
+  const needsReview: NeedsReviewDoc[] = [];
 
   for (const attr of attributions) {
     // A manual per-document pin wins over the AI's attribution.
@@ -170,21 +210,48 @@ function aggregate(attributions: Attribution[]): SnapshotData {
     const ref: DocRef = { docId: attr.docId, filename: attr.filename };
     const category = attr.category?.trim();
 
+    let foreign: ForeignBucket;
     if (effective == null) {
       if (category) unidentified.categories.add(category);
       unidentified.documents.push(ref);
-      continue;
+      foreign = unidentified;
+    } else {
+      let bucket = people.get(effective);
+      if (!bucket) {
+        bucket = { categories: new Set(), documents: [], starts: [], ends: [], foreignInvoices: [], foreignTotalInr: 0 };
+        people.set(effective, bucket);
+      }
+      if (category) bucket.categories.add(category);
+      bucket.documents.push(ref);
+      if (attr.periodStart) bucket.starts.push(attr.periodStart);
+      if (attr.periodEnd) bucket.ends.push(attr.periodEnd);
+      foreign = bucket;
     }
 
-    let bucket = people.get(effective);
-    if (!bucket) {
-      bucket = { categories: new Set(), documents: [], starts: [], ends: [] };
-      people.set(effective, bucket);
+    // Attach foreign-currency conversion (or flag for review) to the same bucket.
+    const meta = docMeta.get(attr.docId);
+    if (meta?.currencyStatus === "needs_review") {
+      needsReview.push({ docId: attr.docId, filename: attr.filename, currency: meta.foreignCurrency, amount: meta.foreignAmount });
+    } else if (
+      meta?.currencyStatus === "converted" &&
+      meta.inrValue != null &&
+      meta.foreignAmount != null &&
+      meta.foreignCurrency &&
+      meta.rateUsed != null &&
+      meta.rateDate != null
+    ) {
+      foreign.foreignInvoices.push({
+        docId: attr.docId,
+        filename: attr.filename,
+        amount: meta.foreignAmount,
+        currency: meta.foreignCurrency,
+        inrValue: meta.inrValue,
+        rateUsed: meta.rateUsed,
+        rateDate: meta.rateDate,
+        rateIsNearest: meta.rateIsNearest,
+      });
+      foreign.foreignTotalInr += meta.inrValue;
     }
-    if (category) bucket.categories.add(category);
-    bucket.documents.push(ref);
-    if (attr.periodStart) bucket.starts.push(attr.periodStart);
-    if (attr.periodEnd) bucket.ends.push(attr.periodEnd);
   }
 
   const peopleList: PersonSummary[] = Array.from(people.entries())
@@ -197,6 +264,8 @@ function aggregate(attributions: Attribution[]): SnapshotData {
         dateRange: start || end ? { start: start ?? end!, end: end ?? start! } : null,
         categories: Array.from(b.categories),
         documents: b.documents,
+        foreignInvoices: b.foreignInvoices,
+        foreignTotalInr: Math.round(b.foreignTotalInr * 100) / 100,
       };
     })
     .sort((a, b) => b.documentCount - a.documentCount || a.name.localeCompare(b.name));
@@ -209,8 +278,11 @@ function aggregate(attributions: Attribution[]): SnapshotData {
             documentCount: unidentified.documents.length,
             categories: Array.from(unidentified.categories),
             documents: unidentified.documents,
+            foreignInvoices: unidentified.foreignInvoices,
+            foreignTotalInr: Math.round(unidentified.foreignTotalInr * 100) / 100,
           }
         : null,
+    needsReview: needsReview.length > 0 ? { documentCount: needsReview.length, documents: needsReview } : null,
   };
 }
 
@@ -276,7 +348,7 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
   if (fallback.totalDocuments === 0) {
     const now = new Date().toISOString();
     saveSnapshotCache(JSON.stringify({ version: 2, attributions: [] } satisfies CachedAttributions), now);
-    return { snapshot: { people: [], unidentified: null }, generatedAt: now, fallback };
+    return { snapshot: { people: [], unidentified: null, needsReview: null }, generatedAt: now, fallback };
   }
 
   const { text: documentsText, docs } = await buildAiInput();

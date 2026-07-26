@@ -10,7 +10,22 @@ import { DatabaseSync } from "node:sqlite";
 
 import { app, logger } from "@glaze/core/backend";
 
-export interface DocumentRecord {
+/** Outcome of foreign-currency detection for a document. */
+export type CurrencyStatus = "none" | "converted" | "needs_review";
+
+/** Foreign-currency conversion fields stored alongside a document record. */
+export interface CurrencyFields {
+  foreignAmount: number | null;
+  foreignCurrency: string | null;
+  invoiceDate: string | null;
+  inrValue: number | null;
+  rateUsed: number | null;
+  rateDate: string | null;
+  rateIsNearest: boolean;
+  currencyStatus: CurrencyStatus;
+}
+
+export interface DocumentRecord extends CurrencyFields {
   id: number;
   hash: string;
   originalFilename: string;
@@ -31,6 +46,8 @@ export interface NewDocument {
   markdownSuccess: boolean;
   rawPath: string;
   markdownPath: string;
+  /** Foreign-currency conversion computed at ingestion, if any. */
+  currency?: CurrencyFields;
 }
 
 let db: DatabaseSync | null = null;
@@ -79,8 +96,43 @@ function getDb(): DatabaseSync {
       person TEXT
     );
   `);
+  // Local cache of fetched historical exchange rates, keyed by currency + the
+  // requested (invoice) date, so the same combination is never fetched twice.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS rate_cache (
+      currency TEXT NOT NULL,
+      req_date TEXT NOT NULL,
+      rate REAL NOT NULL,
+      rate_date TEXT NOT NULL,
+      is_nearest INTEGER NOT NULL,
+      fetched_at TEXT NOT NULL,
+      PRIMARY KEY (currency, req_date)
+    );
+  `);
+  // Add the foreign-currency columns to older document tables (idempotent).
+  ensureCurrencyColumns(db);
   logger.info("database", "Document database ready", { dbPath });
   return db;
+}
+
+/** Add the currency conversion columns to `documents` if they don't exist yet. */
+function ensureCurrencyColumns(database: DatabaseSync): void {
+  const existing = new Set(
+    (database.prepare("PRAGMA table_info(documents)").all() as Row[]).map((r) => String(r.name)),
+  );
+  const columns: [string, string][] = [
+    ["foreign_amount", "REAL"],
+    ["foreign_currency", "TEXT"],
+    ["invoice_date", "TEXT"],
+    ["inr_value", "REAL"],
+    ["rate_used", "REAL"],
+    ["rate_date", "TEXT"],
+    ["rate_is_nearest", "INTEGER"],
+    ["currency_status", "TEXT"],
+  ];
+  for (const [name, type] of columns) {
+    if (!existing.has(name)) database.exec(`ALTER TABLE documents ADD COLUMN ${name} ${type}`);
+  }
 }
 
 type Row = Record<string, unknown>;
@@ -96,6 +148,14 @@ function mapRow(row: Row): DocumentRecord {
     markdownSuccess: Number(row.markdown_success) === 1,
     rawPath: String(row.raw_path),
     markdownPath: String(row.markdown_path),
+    foreignAmount: row.foreign_amount == null ? null : Number(row.foreign_amount),
+    foreignCurrency: row.foreign_currency == null ? null : String(row.foreign_currency),
+    invoiceDate: row.invoice_date == null ? null : String(row.invoice_date),
+    inrValue: row.inr_value == null ? null : Number(row.inr_value),
+    rateUsed: row.rate_used == null ? null : Number(row.rate_used),
+    rateDate: row.rate_date == null ? null : String(row.rate_date),
+    rateIsNearest: Number(row.rate_is_nearest) === 1,
+    currencyStatus: row.currency_status == null ? "none" : (String(row.currency_status) as CurrencyStatus),
   };
 }
 
@@ -106,10 +166,21 @@ export function findByHash(hash: string): DocumentRecord | null {
 }
 
 export function insertDocument(doc: NewDocument): DocumentRecord {
+  const c: CurrencyFields = doc.currency ?? {
+    foreignAmount: null,
+    foreignCurrency: null,
+    invoiceDate: null,
+    inrValue: null,
+    rateUsed: null,
+    rateDate: null,
+    rateIsNearest: false,
+    currencyStatus: "none",
+  };
   const stmt = getDb().prepare(`
     INSERT INTO documents
-      (hash, original_filename, file_type, date_ingested, date_folder, markdown_success, raw_path, markdown_path)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (hash, original_filename, file_type, date_ingested, date_folder, markdown_success, raw_path, markdown_path,
+       foreign_amount, foreign_currency, invoice_date, inr_value, rate_used, rate_date, rate_is_nearest, currency_status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const info = stmt.run(
     doc.hash,
@@ -120,8 +191,27 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
     doc.markdownSuccess ? 1 : 0,
     doc.rawPath,
     doc.markdownPath,
+    c.foreignAmount,
+    c.foreignCurrency,
+    c.invoiceDate,
+    c.inrValue,
+    c.rateUsed,
+    c.rateDate,
+    c.rateIsNearest ? 1 : 0,
+    c.currencyStatus,
   );
-  return { id: Number(info.lastInsertRowid), ...doc };
+  return {
+    id: Number(info.lastInsertRowid),
+    hash: doc.hash,
+    originalFilename: doc.originalFilename,
+    fileType: doc.fileType,
+    dateIngested: doc.dateIngested,
+    dateFolder: doc.dateFolder,
+    markdownSuccess: doc.markdownSuccess,
+    rawPath: doc.rawPath,
+    markdownPath: doc.markdownPath,
+    ...c,
+  };
 }
 
 export function listDocuments(limit = 200): DocumentRecord[] {
@@ -213,4 +303,37 @@ export function setDocumentOverride(docId: number, person: string | null): void 
 /** Clear a document's manual pin so it follows the AI attribution again. */
 export function removeDocumentOverride(docId: number): void {
   getDb().prepare("DELETE FROM document_overrides WHERE doc_id = ?").run(docId);
+}
+
+// ── Exchange-rate cache ─────────────────────────────────────────────────
+
+export interface RateCacheEntry {
+  /** Units of INR per one unit of the foreign currency. */
+  rate: number;
+  /** The business day the rate actually corresponds to (YYYY-MM-DD). */
+  rateDate: string;
+  /** True when the requested date had no rate and a prior day's was used. */
+  isNearest: boolean;
+}
+
+/** Look up a previously fetched rate for a currency + requested date, or null. */
+export function getCachedRate(currency: string, reqDate: string): RateCacheEntry | null {
+  const row = getDb()
+    .prepare("SELECT rate, rate_date, is_nearest FROM rate_cache WHERE currency = ? AND req_date = ?")
+    .get(currency, reqDate) as Row | undefined;
+  if (!row) return null;
+  return { rate: Number(row.rate), rateDate: String(row.rate_date), isNearest: Number(row.is_nearest) === 1 };
+}
+
+/** Store a fetched rate so the same currency + date isn't fetched again. */
+export function saveCachedRate(currency: string, reqDate: string, entry: RateCacheEntry): void {
+  getDb()
+    .prepare(
+      `INSERT INTO rate_cache (currency, req_date, rate, rate_date, is_nearest, fetched_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(currency, req_date) DO UPDATE SET
+         rate = excluded.rate, rate_date = excluded.rate_date,
+         is_nearest = excluded.is_nearest, fetched_at = excluded.fetched_at`,
+    )
+    .run(currency, reqDate, entry.rate, entry.rateDate, entry.isNearest ? 1 : 0, new Date().toISOString());
 }

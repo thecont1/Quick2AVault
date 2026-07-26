@@ -10,6 +10,7 @@ import * as path from "node:path";
 import { app, logger } from "@glaze/core/backend";
 
 import { convertToMarkdown, getFileType } from "./converter.js";
+import { analyzeCurrency } from "./currency.js";
 import { findByHash, insertDocument } from "./database.js";
 
 export function getVaultRoot(): string {
@@ -110,6 +111,10 @@ async function ingestOne(sourcePath: string): Promise<IngestResult> {
     const mdDest = path.join(mdDir, mdName);
     await fs.writeFile(mdDest, markdown, "utf-8");
 
+    // Detect any foreign-currency amount and convert it to INR at the invoice
+    // date's FBIL rate (best-effort — never blocks or fails the ingest).
+    const currency = await analyzeCurrency(markdown, filename);
+
     insertDocument({
       hash,
       originalFilename: filename,
@@ -119,6 +124,7 @@ async function ingestOne(sourcePath: string): Promise<IngestResult> {
       markdownSuccess: success,
       rawPath: rawDest,
       markdownPath: mdDest,
+      currency,
     });
 
     logger.info("vault", "Ingested file", { filename, markdownSuccess: success });

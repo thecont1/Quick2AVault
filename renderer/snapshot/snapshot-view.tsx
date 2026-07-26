@@ -5,8 +5,11 @@ import { useTheme } from "@glaze/core/hooks";
 import { cn } from "@glaze/core/utils";
 import {
   AlertCircle,
+  AlertTriangle,
+  ArrowRight,
   CalendarRange,
   ChevronRight,
+  Coins,
   FileText,
   HelpCircle,
   Loader2,
@@ -21,23 +24,51 @@ interface DocRef {
   filename: string;
 }
 
+interface ForeignInvoice {
+  docId: number;
+  filename: string;
+  amount: number;
+  currency: string;
+  inrValue: number;
+  rateUsed: number;
+  rateDate: string;
+  rateIsNearest: boolean;
+}
+
 interface PersonSummary {
   name: string;
   documentCount: number;
   dateRange: { start: string; end: string } | null;
   categories: string[];
   documents: DocRef[];
+  foreignInvoices: ForeignInvoice[];
+  foreignTotalInr: number;
 }
 
 interface UnidentifiedSummary {
   documentCount: number;
   categories: string[];
   documents: DocRef[];
+  foreignInvoices: ForeignInvoice[];
+  foreignTotalInr: number;
+}
+
+interface NeedsReviewDoc {
+  docId: number;
+  filename: string;
+  currency: string | null;
+  amount: number | null;
+}
+
+interface NeedsReviewSummary {
+  documentCount: number;
+  documents: NeedsReviewDoc[];
 }
 
 interface SnapshotData {
   people: PersonSummary[];
   unidentified: UnidentifiedSummary | null;
+  needsReview: NeedsReviewSummary | null;
 }
 
 interface FallbackStats {
@@ -91,6 +122,131 @@ function formatRange(range: { start: string; end: string } | null): string | nul
   if (!start) return end ?? null;
   if (!end || start === end) return start;
   return `${start} – ${end}`;
+}
+
+function formatInr(amount: number): string {
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: "INR",
+      maximumFractionDigits: 0,
+    }).format(amount);
+  } catch {
+    return `₹${Math.round(amount).toLocaleString()}`;
+  }
+}
+
+function formatForeign(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
+  } catch {
+    return `${amount.toLocaleString()} ${currency}`;
+  }
+}
+
+/** A collapsible "Foreign invoices" line: total INR, expandable to a per-invoice breakdown. */
+function ForeignInvoices({ invoices, totalInr }: { invoices: ForeignInvoice[]; totalInr: number }) {
+  const [expanded, setExpanded] = useState(false);
+  if (invoices.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5 pt-0.5">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 text-secondary hover:text-primary transition-colors"
+      >
+        <Coins className="size-3.5 shrink-0" />
+        <Text variant="small" color="secondary" className="flex-1 text-left">
+          Foreign invoices
+        </Text>
+        <Text variant="small" className="tabular-nums font-medium shrink-0">
+          {formatInr(totalInr)}
+        </Text>
+        <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-90")} />
+      </button>
+      {expanded ? (
+        <div className="flex flex-col gap-2 pl-1 border-l border-panel">
+          {invoices.map((inv) => (
+            <div key={inv.docId} className="flex flex-col gap-0.5 pl-2">
+              <div className="flex items-center gap-1.5">
+                <Text variant="small" className="tabular-nums">
+                  {formatForeign(inv.amount, inv.currency)}
+                </Text>
+                <ArrowRight className="size-3 text-tertiary shrink-0" />
+                <Text variant="small" className="tabular-nums font-medium">
+                  {formatInr(inv.inrValue)}
+                </Text>
+              </div>
+              <Text variant="small" color="tertiary" className="truncate" title={inv.filename}>
+                {inv.filename}
+              </Text>
+              <Text variant="small" color="tertiary" className="tabular-nums">
+                Rate {inv.rateUsed.toFixed(4)} · {inv.rateDate}
+                {inv.rateIsNearest ? " (nearest available)" : ""}
+              </Text>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Documents where a foreign amount was detected but couldn't be converted confidently. */
+function NeedsReviewCard({ needsReview }: { needsReview: NeedsReviewSummary }) {
+  const [expanded, setExpanded] = useState(false);
+  const { documentCount, documents } = needsReview;
+  return (
+    <div className="rounded-xl border border-panel bg-control-subtle p-3 flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <span className="flex items-center justify-center size-6 rounded-full bg-orange-9 text-white shrink-0">
+          <AlertTriangle className="size-3.5" strokeWidth={2.2} />
+        </span>
+        <Text variant="strong" className="flex-1">
+          Needs review
+        </Text>
+        <Badge color="secondary" className="tabular-nums shrink-0">
+          {documentCount} doc{documentCount === 1 ? "" : "s"}
+        </Badge>
+      </div>
+      <Text variant="small" color="secondary">
+        A foreign amount was detected but couldn&apos;t be converted confidently — check {documentCount === 1 ? "it" : "these"} before trusting a rupee value.
+      </Text>
+      {documents.length > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="flex items-center gap-1 text-secondary hover:text-primary transition-colors self-start"
+          >
+            <ChevronRight className={cn("size-3.5 transition-transform", expanded && "rotate-90")} />
+            <Text variant="small" color="secondary">
+              {expanded ? "Hide files" : "View files"}
+            </Text>
+          </button>
+          {expanded ? (
+            <div className="flex flex-col gap-1.5 pl-1 border-l border-panel">
+              {documents.map((doc) => (
+                <div key={doc.docId} className="flex flex-col gap-0.5 pl-2">
+                  <div className="flex items-center gap-1.5">
+                    <FileText className="size-3.5 text-tertiary shrink-0" />
+                    <Text variant="small" color="tertiary" className="truncate" title={doc.filename}>
+                      {doc.filename}
+                    </Text>
+                  </div>
+                  {doc.currency || doc.amount != null ? (
+                    <Text variant="small" color="tertiary" className="pl-5 tabular-nums">
+                      Detected: {doc.amount != null && doc.currency ? formatForeign(doc.amount, doc.currency) : (doc.currency ?? "amount unclear")}
+                    </Text>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 function UnidentifiedCard({ unidentified }: { unidentified: UnidentifiedSummary }) {
@@ -150,11 +306,20 @@ function UnidentifiedCard({ unidentified }: { unidentified: UnidentifiedSummary 
           ) : null}
         </>
       ) : null}
+      <ForeignInvoices invoices={unidentified.foreignInvoices} totalInr={unidentified.foreignTotalInr} />
     </div>
   );
 }
 
-function PersonCard({ name, documentCount, dateRange, categories, icon }: PersonSummary & { icon: "user" | "users" }) {
+function PersonCard({
+  name,
+  documentCount,
+  dateRange,
+  categories,
+  foreignInvoices,
+  foreignTotalInr,
+  icon,
+}: PersonSummary & { icon: "user" | "users" }) {
   const range = formatRange(dateRange);
   const Icon = icon === "users" ? Users : User;
   return (
@@ -187,6 +352,7 @@ function PersonCard({ name, documentCount, dateRange, categories, icon }: Person
           ))}
         </div>
       ) : null}
+      <ForeignInvoices invoices={foreignInvoices} totalInr={foreignTotalInr} />
     </div>
   );
 }
@@ -232,8 +398,10 @@ export function SnapshotView() {
   const snapshot = response?.snapshot ?? null;
   const fallback = response?.fallback;
   const blockedMessage = response?.aiBlocked ? (BLOCKED_MESSAGE[response.aiBlocked] ?? BLOCKED_MESSAGE.disabled) : null;
-  const hasPeople = !!snapshot && (snapshot.people.length > 0 || !!snapshot.unidentified);
+  const hasPeople =
+    !!snapshot && (snapshot.people.length > 0 || !!snapshot.unidentified || !!snapshot.needsReview);
   const unidentifiedCount = snapshot?.unidentified?.documentCount ?? 0;
+  const needsReviewCount = snapshot?.needsReview?.documentCount ?? 0;
 
   return (
     <div className="h-full w-full p-2.5">
@@ -242,6 +410,15 @@ export function SnapshotView() {
         <div className="flex items-center gap-2 px-4 py-3 bg-accent text-accent-contrast shrink-0">
           <Vault className="size-4 shrink-0" strokeWidth={2.2} />
           <span className="font-semibold text-sm flex-1">Financial Snapshot</span>
+          {needsReviewCount > 0 ? (
+            <span
+              className="flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-medium tabular-nums"
+              title={`${needsReviewCount} foreign-currency document${needsReviewCount === 1 ? "" : "s"} need${needsReviewCount === 1 ? "s" : ""} review`}
+            >
+              <AlertTriangle className="size-3" strokeWidth={2.4} />
+              {needsReviewCount}
+            </span>
+          ) : null}
           {unidentifiedCount > 0 ? (
             <span
               className="flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-medium tabular-nums"
@@ -303,6 +480,9 @@ export function SnapshotView() {
                 ))}
                 {snapshot!.unidentified && snapshot!.unidentified.documentCount > 0 ? (
                   <UnidentifiedCard unidentified={snapshot!.unidentified} />
+                ) : null}
+                {snapshot!.needsReview && snapshot!.needsReview.documentCount > 0 ? (
+                  <NeedsReviewCard needsReview={snapshot!.needsReview} />
                 ) : null}
               </>
             ) : null}
