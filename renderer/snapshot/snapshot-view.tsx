@@ -265,12 +265,17 @@ function NeedsReviewCard({ needsReview }: { needsReview: NeedsReviewSummary }) {
             <div className="flex flex-col gap-1.5 pl-1 border-l border-panel">
               {documents.map((doc) => (
                 <div key={doc.docId} className="flex flex-col gap-0.5 pl-2">
-                  <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments", doc.docId)}
+                    className="flex items-center gap-1.5 text-left hover:text-primary transition-colors"
+                    title={`Inspect ${doc.filename}`}
+                  >
                     <FileText className="size-3.5 text-tertiary shrink-0" />
-                    <Text variant="small" color="tertiary" className="truncate" title={doc.filename}>
+                    <Text variant="small" color="tertiary" className="truncate">
                       {doc.filename}
                     </Text>
-                  </div>
+                  </button>
                   {doc.currency || doc.amount != null ? (
                     <Text variant="small" color="tertiary" className="pl-5 tabular-nums">
                       Detected: {doc.amount != null && doc.currency ? formatForeign(doc.amount, doc.currency) : (doc.currency ?? "amount unclear")}
@@ -329,15 +334,21 @@ function UnidentifiedCard({ unidentified }: { unidentified: UnidentifiedSummary 
           {expanded ? (
             <div className="flex flex-col gap-1 pl-1 border-l border-panel">
               {documents.map((doc) => (
-                <div key={doc.docId} className="flex items-center gap-1.5 pl-2">
+                <button
+                  key={doc.docId}
+                  type="button"
+                  onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments", doc.docId)}
+                  className="flex items-center gap-1.5 pl-2 text-left hover:text-primary transition-colors"
+                  title={`Inspect ${doc.filename}`}
+                >
                   <FileText className="size-3.5 text-tertiary shrink-0" />
-                  <Text variant="small" color="tertiary" className="truncate" title={doc.filename}>
+                  <Text variant="small" color="tertiary" className="truncate">
                     {doc.filename}
                   </Text>
-                </div>
+                </button>
               ))}
               <Text variant="small" color="tertiary" className="pl-2 pt-1 italic">
-                Tip: rename or reassign people in Settings.
+                Tip: click a file to inspect it, or reassign people in Settings.
               </Text>
             </div>
           ) : null}

@@ -10,6 +10,7 @@ import { fileURLToPath } from "url";
 import { ipcMain, shell, logger } from "@glaze/core/backend";
 
 import { getSettingsWindow, openSettingsWindow } from "../windows/settings-window.js";
+import { openDocumentsWindow, takeInitialFocusDocId } from "../windows/documents-window.js";
 import { showOrbMenu } from "../windows/orb-menu.js";
 import { beginOrbDrag, endOrbDrag, moveOrbBy } from "../windows/orb-window.js";
 import { closeSnapshotWindow, openSnapshotWindow, setSnapshotBusy } from "../windows/snapshot-window.js";
@@ -38,6 +39,12 @@ import {
   resolveField,
   reviewCount,
 } from "../services/reviews.js";
+import {
+  getDocumentDetail,
+  listDocumentBrowser,
+  openDocumentFile,
+  openDocumentMarkdown,
+} from "../services/document-detail.js";
 import {
   addPersonAlias,
   confirmNameForPerson,
@@ -150,6 +157,38 @@ export function registerHandlers(): void {
 
   ipcMain.handle("window:closeSettings", async () => {
     getSettingsWindow()?.close();
+  });
+
+  // ── Document Browser / evidence card ────────────────────────────────
+  ipcMain.handle("window:openDocuments", async (_event, focusDocId?: unknown) => {
+    const id = Number(focusDocId);
+    await openDocumentsWindow(Number.isFinite(id) ? id : null);
+  });
+
+  // Consumed once by the browser on mount to select an initially-focused doc.
+  ipcMain.handle("documents:takeInitialFocus", async () => {
+    return takeInitialFocusDocId();
+  });
+
+  ipcMain.handle("documents:list", async () => {
+    return listDocumentBrowser();
+  });
+
+  ipcMain.handle("documents:detail", async (_event, docId: unknown) => {
+    const id = Number(docId);
+    return Number.isFinite(id) ? await getDocumentDetail(id) : null;
+  });
+
+  ipcMain.handle("documents:open", async (_event, docId: unknown) => {
+    const id = Number(docId);
+    if (!Number.isFinite(id)) return "Invalid document.";
+    return await openDocumentFile(id);
+  });
+
+  ipcMain.handle("documents:openMarkdown", async (_event, docId: unknown) => {
+    const id = Number(docId);
+    if (!Number.isFinite(id)) return "Invalid document.";
+    return await openDocumentMarkdown(id);
   });
 
   // ── Vault handlers ──────────────────────────────────────────────────

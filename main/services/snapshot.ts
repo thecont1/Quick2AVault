@@ -326,6 +326,36 @@ function parseCache(json: string): Attribution[] | null {
   }
 }
 
+/** One document's AI attribution (person/category/period) from the snapshot cache. */
+export interface DocAttribution {
+  person: string | null;
+  category: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+}
+
+/**
+ * Per-document AI attribution from the snapshot cache, keyed by docId. Used by
+ * the Document Browser / evidence card to show who/what the AI thinks each file
+ * is without re-running AI. Empty when no snapshot has been generated yet.
+ */
+export function getAttributionMap(): Map<number, DocAttribution> {
+  const cache = getSnapshotCache();
+  const attributions = cache ? parseCache(cache.json) : null;
+  const map = new Map<number, DocAttribution>();
+  if (attributions) {
+    for (const a of attributions) {
+      map.set(a.docId, {
+        person: a.person,
+        category: a.category?.trim() || null,
+        periodStart: a.periodStart,
+        periodEnd: a.periodEnd,
+      });
+    }
+  }
+  return map;
+}
+
 /** Read Markdown excerpts for the vault's documents, bounded for the AI. */
 async function buildAiInput(): Promise<{ text: string; docs: ReturnType<typeof listDocuments> }> {
   const docs = listDocuments(MAX_DOCS);

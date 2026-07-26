@@ -41,6 +41,8 @@ import {
   ChevronRight,
   ClipboardList,
   Clock,
+  ExternalLink,
+  FileSearch,
   FolderOpen,
   GraduationCap,
   Info,
@@ -1221,26 +1223,36 @@ function ReviewQueueSection() {
               const open = openDocId === item.docId;
               return (
                 <div key={item.docId} className="rounded-lg border border-panel overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setOpenDocId(open ? null : item.docId)}
-                    className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-control-subtle transition-colors text-left"
-                  >
-                    <ClipboardList className="size-4 text-secondary shrink-0" />
-                    <div className="flex flex-col min-w-0 flex-1 gap-1">
-                      <Text variant="small" className="font-medium truncate" title={item.filename}>
-                        {item.filename}
-                      </Text>
-                      <div className="flex flex-wrap gap-1">
-                        {item.pendingFields.map((f) => (
-                          <Badge key={f.field} color={STATUS_META[f.status].color}>
-                            {FIELD_LABEL[f.field]}
-                          </Badge>
-                        ))}
+                  <div className="flex items-stretch">
+                    <button
+                      type="button"
+                      onClick={() => setOpenDocId(open ? null : item.docId)}
+                      className="flex-1 min-w-0 flex items-center gap-2 px-3 py-2.5 hover:bg-control-subtle transition-colors text-left"
+                    >
+                      <ClipboardList className="size-4 text-secondary shrink-0" />
+                      <div className="flex flex-col min-w-0 flex-1 gap-1">
+                        <Text variant="small" className="font-medium truncate" title={item.filename}>
+                          {item.filename}
+                        </Text>
+                        <div className="flex flex-wrap gap-1">
+                          {item.pendingFields.map((f) => (
+                            <Badge key={f.field} color={STATUS_META[f.status].color}>
+                              {FIELD_LABEL[f.field]}
+                            </Badge>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                    <ChevronRight className={cn("size-4 text-tertiary shrink-0 transition-transform", open && "rotate-90")} />
-                  </button>
+                      <ChevronRight className={cn("size-4 text-tertiary shrink-0 transition-transform", open && "rotate-90")} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments", item.docId)}
+                      title="Open in Document Browser"
+                      className="flex items-center px-3 border-l border-panel text-tertiary hover:text-primary hover:bg-control-subtle transition-colors"
+                    >
+                      <ExternalLink className="size-4" />
+                    </button>
+                  </div>
                   {open ? <DocumentReviewCard docId={item.docId} /> : null}
                 </div>
               );
@@ -1385,7 +1397,18 @@ export function SettingsView() {
 
         {/* Ingested documents */}
         <section className="flex flex-col gap-3">
-          <Text variant="strong">Documents</Text>
+          <div className="flex items-center gap-2">
+            <Text variant="strong" className="flex-1">
+              Documents
+            </Text>
+            <Button
+              variant="transparent"
+              onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
+            >
+              <FileSearch className="size-4" />
+              Browse documents
+            </Button>
+          </div>
           {documents.length === 0 ? (
             <EmptyState>
               <EmptyStateTitle>No documents yet</EmptyStateTitle>
@@ -1400,6 +1423,7 @@ export function SettingsView() {
                   <TableHead>Person</TableHead>
                   <TableHead>Added</TableHead>
                   <TableHead>Markdown</TableHead>
+                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1452,6 +1476,17 @@ export function SettingsView() {
                         <Text variant="small" color={doc.markdownSuccess ? "green" : "tertiary"}>
                           {doc.markdownSuccess ? "Converted" : "Raw only"}
                         </Text>
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          variant="transparent"
+                          iconOnly
+                          aria-label="Inspect document"
+                          title="Open in Document Browser"
+                          onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments", doc.id)}
+                        >
+                          <FileSearch className="size-4" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   );

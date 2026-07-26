@@ -6,6 +6,7 @@ import { Menu, app, shell, logger } from "@glaze/core/backend";
 import { ensureVaultDirs, getVaultRoot } from "../services/vault.js";
 import { reviewCount } from "../services/reviews.js";
 import { openSettingsWindow } from "./settings-window.js";
+import { openDocumentsWindow } from "./documents-window.js";
 import { openSnapshotWindow } from "./snapshot-window.js";
 
 export async function showOrbMenu(): Promise<void> {
@@ -21,6 +22,12 @@ export async function showOrbMenu(): Promise<void> {
       label: pendingReviews > 0 ? `Review Queue (${pendingReviews})…` : "Review Queue…",
       click: () => {
         void openSettingsWindow();
+      },
+    },
+    {
+      label: "Browse Documents…",
+      click: () => {
+        void openDocumentsWindow();
       },
     },
     { type: "separator" },
