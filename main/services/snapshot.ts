@@ -17,9 +17,17 @@ import {
   getSnapshotCache,
   listDocumentOverrides,
   listDocuments,
-  listNameOverrides,
+  listPersons,
   saveSnapshotCache,
+  type PersonRole,
 } from "./database.js";
+import {
+  buildAliasIndex,
+  consolidateCandidateDuplicates,
+  resolveNameToPersonId,
+  resolvePersonForName,
+  seedPeopleFromExisting,
+} from "./people.js";
 
 export interface DocRef {
   docId: number;
@@ -40,6 +48,10 @@ export interface ForeignInvoice {
 
 export interface PersonSummary {
   name: string;
+  /** Canonical person id when this group resolved to a stored person, else null. */
+  personId: number | null;
+  roles: PersonRole[];
+  isSelf: boolean;
   documentCount: number;
   dateRange: { start: string; end: string } | null;
   categories: string[];
@@ -165,31 +177,32 @@ function buildFallback(): FallbackStats {
 
 // ── Override resolution + aggregation ───────────────────────────────────
 
-/** Follow name remappings (rename / merge) to a canonical name, guarding cycles. */
-function resolveName(name: string, map: Map<string, string>): string {
-  let current = name;
-  const seen = new Set<string>();
-  while (map.has(current) && !seen.has(current)) {
-    seen.add(current);
-    current = map.get(current)!;
-  }
-  return current;
-}
-
 /** Turn per-document attributions + manual overrides into a per-person summary. */
 function aggregate(attributions: Attribution[]): SnapshotData {
-  const nameMap = new Map(listNameOverrides().map((o) => [o.from, o.to]));
   const docMap = new Map(listDocumentOverrides().map((o) => [o.docId, o.person]));
   // Currency data lives on the document record (computed at ingestion), so join
   // it in at read time rather than caching it in the attribution blob.
   const docMeta = new Map(listDocuments(500).map((d) => [d.id, d]));
+  // Canonical person resolution: every raw name resolves to a stored person via
+  // its alias index, so reorders/variants and user merges collapse instantly.
+  const aliasIndex = buildAliasIndex();
+  const personById = new Map(listPersons().map((p) => [p.id, p]));
 
-  type ForeignBucket = { foreignInvoices: ForeignInvoice[]; foreignTotalInr: number };
-  const people = new Map<
-    string,
-    { categories: Set<string>; documents: DocRef[]; starts: string[]; ends: string[] } & ForeignBucket
-  >();
-  const unidentified: { categories: Set<string>; documents: DocRef[] } & ForeignBucket = {
+  type Bucket = {
+    key: string;
+    name: string;
+    personId: number | null;
+    roles: PersonRole[];
+    isSelf: boolean;
+    categories: Set<string>;
+    documents: DocRef[];
+    starts: string[];
+    ends: string[];
+    foreignInvoices: ForeignInvoice[];
+    foreignTotalInr: number;
+  };
+  const people = new Map<string, Bucket>();
+  const unidentified: { categories: Set<string>; documents: DocRef[]; foreignInvoices: ForeignInvoice[]; foreignTotalInr: number } = {
     categories: new Set<string>(),
     documents: [],
     foreignInvoices: [],
@@ -199,27 +212,38 @@ function aggregate(attributions: Attribution[]): SnapshotData {
 
   for (const attr of attributions) {
     // A manual per-document pin wins over the AI's attribution.
-    let effective: string | null;
-    if (docMap.has(attr.docId)) {
-      const pinned = docMap.get(attr.docId)!;
-      effective = pinned == null ? null : resolveName(pinned, nameMap);
-    } else {
-      effective = attr.person == null ? null : resolveName(attr.person, nameMap);
-    }
+    const rawName = docMap.has(attr.docId) ? docMap.get(attr.docId)! : attr.person;
+    const personId = resolveNameToPersonId(rawName, aliasIndex);
+    const person = personId != null ? personById.get(personId) : undefined;
+    // Display: canonical person name when resolved; else the raw name (transient).
+    const effective = person ? person.displayName : rawName;
 
     const ref: DocRef = { docId: attr.docId, filename: attr.filename };
     const category = attr.category?.trim();
 
-    let foreign: ForeignBucket;
+    let foreign: { foreignInvoices: ForeignInvoice[]; foreignTotalInr: number };
     if (effective == null) {
       if (category) unidentified.categories.add(category);
       unidentified.documents.push(ref);
       foreign = unidentified;
     } else {
-      let bucket = people.get(effective);
+      const key = personId != null ? `p${personId}` : `raw:${effective}`;
+      let bucket = people.get(key);
       if (!bucket) {
-        bucket = { categories: new Set(), documents: [], starts: [], ends: [], foreignInvoices: [], foreignTotalInr: 0 };
-        people.set(effective, bucket);
+        bucket = {
+          key,
+          name: effective,
+          personId: personId ?? null,
+          roles: person?.roles ?? [],
+          isSelf: person?.isSelf ?? false,
+          categories: new Set(),
+          documents: [],
+          starts: [],
+          ends: [],
+          foreignInvoices: [],
+          foreignTotalInr: 0,
+        };
+        people.set(key, bucket);
       }
       if (category) bucket.categories.add(category);
       bucket.documents.push(ref);
@@ -254,12 +278,15 @@ function aggregate(attributions: Attribution[]): SnapshotData {
     }
   }
 
-  const peopleList: PersonSummary[] = Array.from(people.entries())
-    .map(([name, b]) => {
+  const peopleList: PersonSummary[] = Array.from(people.values())
+    .map((b) => {
       const start = b.starts.length ? b.starts.slice().sort()[0] : null;
       const end = b.ends.length ? b.ends.slice().sort()[b.ends.length - 1] : null;
       return {
-        name,
+        name: b.name,
+        personId: b.personId,
+        roles: b.roles,
+        isSelf: b.isSelf,
         documentCount: b.documents.length,
         dateRange: start || end ? { start: start ?? end!, end: end ?? start! } : null,
         categories: Array.from(b.categories),
@@ -268,7 +295,7 @@ function aggregate(attributions: Attribution[]): SnapshotData {
         foreignTotalInr: Math.round(b.foreignTotalInr * 100) / 100,
       };
     })
-    .sort((a, b) => b.documentCount - a.documentCount || a.name.localeCompare(b.name));
+    .sort((a, b) => Number(b.isSelf) - Number(a.isSelf) || b.documentCount - a.documentCount || a.name.localeCompare(b.name));
 
   return {
     people: peopleList,
@@ -329,6 +356,8 @@ async function buildAiInput(): Promise<{ text: string; docs: ReturnType<typeof l
 
 /** Return the cached snapshot (if any) plus current fallback stats. No AI. */
 export function getCachedSnapshot(): SnapshotResponse {
+  seedPeopleFromExisting();
+  consolidateCandidateDuplicates();
   const cache = getSnapshotCache();
   const attributions = cache ? parseCache(cache.json) : null;
   return {
@@ -388,6 +417,14 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
         periodEnd: a?.periodEnd?.trim() || null,
       };
     });
+
+    // Entity resolution: fold each detected name into the canonical Person
+    // ontology (create/link + evidence) before caching and aggregating.
+    seedPeopleFromExisting();
+    for (const a of attributions) {
+      if (a.person) resolvePersonForName(a.person, { docId: a.docId, filename: a.filename });
+    }
+    consolidateCandidateDuplicates();
 
     const now = new Date().toISOString();
     saveSnapshotCache(JSON.stringify({ version: 2, attributions } satisfies CachedAttributions), now);

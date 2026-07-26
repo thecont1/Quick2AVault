@@ -30,22 +30,38 @@ import {
   resetTraining,
   saveTrainingReview,
   setDocumentOverride,
-  setNameOverride,
   setSetting,
   updateLearnedRule,
   updateTrainingReviewStatus,
   upsertConfirmedRule,
+  PERSON_ROLES,
   type LearnedRule,
+  type PersonRole,
   type RuleEvidence,
   type RuleType,
 } from "./database.js";
-import { getCachedSnapshot } from "./snapshot.js";
+import {
+  confirmNameForPerson,
+  ensurePerson,
+  listPeople,
+  resolveNameToPersonId,
+  setPersonRoles,
+} from "./people.js";
 import { getVaultRoot } from "./vault.js";
 
 const TRAINING_MODE_KEY = "training_mode";
 
-/** A rule type a question can map to, plus a doc-specific attribution target. */
-export type QuestionTarget = RuleType | "person_attribution" | "none";
+/**
+ * What answering a question teaches. Beyond the reusable rule types, questions
+ * can attribute THIS document to a person, confirm a person's identity (a name
+ * variant → canonical person), or assign a person's semantic role.
+ */
+export type QuestionTarget =
+  | RuleType
+  | "person_attribution"
+  | "person_identity"
+  | "person_role"
+  | "none";
 
 export interface TrainingQuestion {
   id: string;
@@ -106,19 +122,32 @@ const questionSchema = z.object({
           .array(z.string())
           .describe("2-5 concise choices for 'single' or 'chips'; empty array for 'yesno' and 'text'"),
         target: z
-          .enum(["vendor_category", "person_variant", "keyword_doctype", "source_scope", "person_attribution", "none"])
+          .enum([
+            "vendor_category",
+            "person_variant",
+            "keyword_doctype",
+            "source_scope",
+            "person_attribution",
+            "person_identity",
+            "person_role",
+            "none",
+          ])
           .describe(
             "What answering this teaches: vendor_category = future docs from a vendor get a category; " +
               "person_variant = a name variant maps to a canonical person; keyword_doctype = a keyword/layout " +
               "implies a document type; source_scope = an account/source is business vs personal; " +
-              "person_attribution = who THIS document belongs to; none = general confirmation with no reusable rule",
+              "person_attribution = who THIS document belongs to; person_identity = whether a detected name is " +
+              "the same real person as an existing one (offer the existing names as options); person_role = the " +
+              "role a person plays (self, spouse, client, supplier, tax_officer, owner, tenant, landlord, insurer, " +
+              "employee, consultant, bank_rm, accountant, other); none = general confirmation with no reusable rule",
           ),
         matchKey: z
           .string()
           .nullable()
           .describe(
-            "The exact vendor name / name variant / keyword / account identifier this question is about, so a " +
-              "reusable rule can be built from the answer. null for person_attribution and none.",
+            "For vendor_category/person_variant/keyword_doctype/source_scope: the exact vendor/name variant/" +
+              "keyword/account this is about. For person_identity: the detected name in THIS document. For " +
+              "person_role: the person's name this role applies to. null for person_attribution and none.",
           ),
         theme: z.string().describe("Very short label, e.g. 'Owner', 'Category', 'Expense type', 'Vendor rule'"),
       }),
@@ -172,15 +201,26 @@ export async function prepareTraining(docId: number): Promise<{ shouldAsk: boole
   const autoApplied = matched.filter((r) => r.autoApply);
   for (const rule of autoApplied) {
     if (rule.ruleType === "person_variant") {
-      // Canonicalise the name variant so the snapshot reflects it immediately.
-      setNameOverride(rule.matchKey, rule.value);
+      // Canonicalise the name variant onto its person so the snapshot reflects it.
+      confirmNameForPerson(rule.matchKey, ensurePerson(rule.value, "learned_rule"), "learned_rule", { docId });
     }
     // vendor_category / keyword_doctype / source_scope act as known facts that
     // keep us from re-asking; they need no per-document write here.
   }
 
-  // Known people offered as attribution options.
-  const knownPeople = getCachedSnapshot().snapshot?.people.map((p) => p.name) ?? [];
+  // Known canonical people (with roles + aliases) offered as options and used to
+  // suppress redundant identity/role questions.
+  const people = listPeople();
+  const peopleContext =
+    people.length === 0
+      ? "(none yet)"
+      : people
+          .map((p) => {
+            const roles = p.roles.length ? ` [roles: ${p.roles.join(", ")}${p.isSelf ? ", SELF" : ""}]` : p.isSelf ? " [SELF]" : "";
+            const aliases = p.aliases.length > 1 ? ` (aka ${p.aliases.map((a) => a.alias).filter((a) => a !== p.displayName).join(", ")})` : "";
+            return `- ${p.displayName}${aliases}${roles}`;
+          })
+          .join("\n");
 
   let result: z.infer<typeof questionSchema>;
   try {
@@ -190,15 +230,24 @@ export async function prepareTraining(docId: number): Promise<{ shouldAsk: boole
       system:
         "You help a personal-finance app learn about the user's documents by preparing a SHORT set of " +
         "questions about one specific document. Ask only questions that would materially improve future " +
-        "classification, attribution, categorisation, or automation. Never ask something already answered by " +
-        "the known facts. If the document is already clear and well covered, set shouldAsk to false and return " +
-        "no questions. Prefer multiple-choice (single), yes/no, or chips; use free text only as a last resort. " +
-        "Keep questions concrete and about THIS document. Never invent people or facts.",
+        "classification, attribution, categorisation, automation, or PERSON IDENTITY. Never ask something " +
+        "already answered by the known facts or known people. If the document is already clear and well covered, " +
+        "set shouldAsk to false and return no questions. Prefer multiple-choice (single), yes/no, or chips; use " +
+        "free text only as a last resort. Keep questions concrete and about THIS document. Never invent people " +
+        "or facts.\n\n" +
+        "PERSON INTELLIGENCE — prioritise these when identity is ambiguous:\n" +
+        "• If a person named in this document looks like it MIGHT be the same real person as an existing known " +
+        "person (e.g. reordered first/last name, or initials), ask a person_identity question with matchKey = the " +
+        "detected name and options = the candidate existing name(s) plus 'No, a different person'.\n" +
+        "• If a person clearly involved in this document has no role yet, ask a person_role question with " +
+        "matchKey = that person's name and options drawn from: self, spouse, client, supplier, tax_officer, owner, " +
+        "tenant, landlord, insurer, employee, consultant, bank_rm, accountant, other.\n" +
+        "Do NOT ask identity/role questions about people whose identity and role are already known.",
       prompt:
         `Document filename: ${doc.originalFilename}\n` +
         `Detected foreign currency: ${doc.foreignCurrency ?? "none"} (status: ${doc.currencyStatus})\n\n` +
         `Facts already known from confident rules:\n${knownFactsText(matched)}\n\n` +
-        `Known people you can offer as attribution options: ${knownPeople.length ? knownPeople.join(", ") : "(none yet)"}\n\n` +
+        `Known canonical people (offer these as identity/attribution options; don't re-ask their known roles):\n${peopleContext}\n\n` +
         "Prepare 3-5 questions (or fewer, or none) about the document below. For any question whose answer " +
         "should become a reusable rule, set target and matchKey accordingly (e.g. the vendor name).\n\n" +
         `Document content:\n${excerpt || "(no extractable content)"}`,
@@ -245,6 +294,42 @@ function answerToString(value: string | string[]): string {
   return Array.isArray(value) ? value.filter(Boolean).join(", ") : String(value ?? "").trim();
 }
 
+/** Human labels for roles, and their reverse lookup for parsing answers. */
+export const ROLE_LABEL: Record<PersonRole, string> = {
+  self: "Self",
+  spouse: "Spouse",
+  client: "Client",
+  supplier: "Supplier",
+  tax_officer: "Tax officer",
+  owner: "Owner",
+  tenant: "Tenant",
+  landlord: "Landlord",
+  insurer: "Insurer",
+  employee: "Employee",
+  consultant: "Consultant",
+  bank_rm: "Bank relationship manager",
+  accountant: "Accountant",
+  other: "Other",
+};
+
+const ROLE_BY_LABEL = new Map<string, PersonRole>(
+  PERSON_ROLES.flatMap((r) => [
+    [r, r] as [string, PersonRole],
+    [ROLE_LABEL[r].toLowerCase(), r] as [string, PersonRole],
+  ]),
+);
+
+/** Convert answer value(s) into recognised PersonRole keys. */
+function parseRoles(value: string | string[]): PersonRole[] {
+  const raw = Array.isArray(value) ? value : String(value).split(",");
+  const out = new Set<PersonRole>();
+  for (const item of raw) {
+    const key = ROLE_BY_LABEL.get(item.trim().toLowerCase());
+    if (key) out.add(key);
+  }
+  return Array.from(out);
+}
+
 /**
  * Turn a document's answers into learned rules and apply their effects, then
  * refresh RULES.md. Returns how many rules were newly learned vs reinforced.
@@ -269,13 +354,60 @@ export async function saveAnswers(
     const value = answerToString(ans.value);
     if (!value) continue;
 
+    const lowered = value.toLowerCase();
+    const isNegative =
+      lowered === "unidentified" ||
+      lowered === "not sure" ||
+      lowered === "unknown" ||
+      lowered === "none" ||
+      lowered.startsWith("no,") ||
+      lowered === "no";
+
     if (q.target === "person_attribution") {
       // Attribute THIS document. Empty / "unidentified" / "not sure" → unpinned to unidentified.
-      const lowered = value.toLowerCase();
-      if (lowered === "unidentified" || lowered === "not sure" || lowered === "unknown") {
+      if (isNegative && lowered !== "no") {
         setDocumentOverride(docId, null);
       } else {
+        ensurePerson(value); // ensure a canonical person exists so it resolves
         setDocumentOverride(docId, value);
+      }
+      continue;
+    }
+
+    if (q.target === "person_identity") {
+      // "Is <matchKey> the same person as X?" — matchKey = the detected name.
+      const detected = q.matchKey?.trim();
+      if (!detected) continue;
+      if (isNegative) {
+        // Different person → give the detected name its own canonical identity.
+        const pid = ensurePerson(detected);
+        setDocumentOverride(docId, detected);
+        void pid;
+      } else {
+        // Same as the chosen existing person → link + learn the mapping.
+        const personId = ensurePerson(value);
+        confirmNameForPerson(detected, personId, "user_confirmed", { docId });
+        setDocumentOverride(docId, value);
+        const res = upsertConfirmedRule({
+          ruleType: "person_variant",
+          matchKey: detected,
+          value,
+          evidence: [{ filename, docId, phrase: detected }],
+        });
+        if (res.isNew) learned += 1;
+        else reinforced += 1;
+      }
+      continue;
+    }
+
+    if (q.target === "person_role") {
+      // Assign role(s) to the named person. value may be a comma-joined chip list.
+      const targetName = q.matchKey?.trim() || value;
+      const personId = resolveNameToPersonId(targetName) ?? ensurePerson(targetName);
+      const roles = parseRoles(Array.isArray(ans.value) ? ans.value : value);
+      if (roles.length > 0) {
+        setPersonRoles(personId, roles);
+        learned += 1;
       }
       continue;
     }
@@ -292,9 +424,9 @@ export async function saveAnswers(
     if (isNew) learned += 1;
     else reinforced += 1;
 
-    // A name-variant rule also canonicalises the name in the snapshot.
+    // A name-variant rule also links the variant onto its canonical person.
     if (q.target === "person_variant") {
-      setNameOverride(q.matchKey.toLowerCase(), value);
+      confirmNameForPerson(q.matchKey, ensurePerson(value), "user_confirmed", { docId });
     }
   }
 
@@ -402,7 +534,9 @@ export function listRules(): LearnedRule[] {
 
 export async function addRule(input: { ruleType: RuleType; matchKey: string; value: string }): Promise<LearnedRule> {
   const rule = addManualRule(input);
-  if (rule.ruleType === "person_variant") setNameOverride(rule.matchKey, rule.value);
+  if (rule.ruleType === "person_variant") {
+    confirmNameForPerson(rule.matchKey, ensurePerson(rule.value, "manual"), "manual");
+  }
   await writeRulesMarkdown();
   return rule;
 }

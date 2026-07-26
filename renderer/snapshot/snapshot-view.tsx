@@ -35,8 +35,44 @@ interface ForeignInvoice {
   rateIsNearest: boolean;
 }
 
+type PersonRole =
+  | "self"
+  | "spouse"
+  | "client"
+  | "supplier"
+  | "tax_officer"
+  | "owner"
+  | "tenant"
+  | "landlord"
+  | "insurer"
+  | "employee"
+  | "consultant"
+  | "bank_rm"
+  | "accountant"
+  | "other";
+
+const ROLE_LABEL: Record<PersonRole, string> = {
+  self: "Self",
+  spouse: "Spouse",
+  client: "Client",
+  supplier: "Supplier",
+  tax_officer: "Tax officer",
+  owner: "Owner",
+  tenant: "Tenant",
+  landlord: "Landlord",
+  insurer: "Insurer",
+  employee: "Employee",
+  consultant: "Consultant",
+  bank_rm: "Bank RM",
+  accountant: "Accountant",
+  other: "Other",
+};
+
 interface PersonSummary {
   name: string;
+  personId: number | null;
+  roles: PersonRole[];
+  isSelf: boolean;
   documentCount: number;
   dateRange: { start: string; end: string } | null;
   categories: string[];
@@ -313,6 +349,8 @@ function UnidentifiedCard({ unidentified }: { unidentified: UnidentifiedSummary 
 
 function PersonCard({
   name,
+  roles,
+  isSelf,
   documentCount,
   dateRange,
   categories,
@@ -322,6 +360,7 @@ function PersonCard({
 }: PersonSummary & { icon: "user" | "users" }) {
   const range = formatRange(dateRange);
   const Icon = icon === "users" ? Users : User;
+  const roleBadges = (roles ?? []).filter((r) => r !== "self");
   return (
     <div className="rounded-xl border border-panel bg-control-subtle p-3 flex flex-col gap-2">
       <div className="flex items-center gap-2">
@@ -331,10 +370,20 @@ function PersonCard({
         <Text variant="strong" className="truncate flex-1" title={name}>
           {name}
         </Text>
+        {isSelf ? <Badge color="blue">Self</Badge> : null}
         <Text variant="small" color="secondary" className="tabular-nums shrink-0">
           {documentCount} doc{documentCount === 1 ? "" : "s"}
         </Text>
       </div>
+      {roleBadges.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {roleBadges.map((r) => (
+            <Badge key={r} color="secondary">
+              {ROLE_LABEL[r]}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
       {range ? (
         <div className="flex items-center gap-1.5 text-secondary">
           <CalendarRange className="size-3.5 shrink-0" />

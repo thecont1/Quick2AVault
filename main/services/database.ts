@@ -65,6 +65,109 @@ export interface LearnedRule {
   updatedAt: string;
 }
 
+// ── Canonical person ontology ────────────────────────────────────────────
+
+/** The semantic role a person plays in the user's financial world. */
+export type PersonRole =
+  | "self"
+  | "spouse"
+  | "client"
+  | "supplier"
+  | "tax_officer"
+  | "owner"
+  | "tenant"
+  | "landlord"
+  | "insurer"
+  | "employee"
+  | "consultant"
+  | "bank_rm"
+  | "accountant"
+  | "other";
+
+export const PERSON_ROLES: PersonRole[] = [
+  "self",
+  "spouse",
+  "client",
+  "supplier",
+  "tax_officer",
+  "owner",
+  "tenant",
+  "landlord",
+  "insurer",
+  "employee",
+  "consultant",
+  "bank_rm",
+  "accountant",
+  "other",
+];
+
+/**
+ * Where a given field's value came from, in ascending authority. AI guesses may
+ * only overwrite `ai_inferred` fields — never a `learned_rule`, `user_confirmed`,
+ * or `manual` value.
+ */
+export type FieldSource = "ai_inferred" | "learned_rule" | "user_confirmed" | "manual";
+
+const SOURCE_RANK: Record<FieldSource, number> = {
+  ai_inferred: 0,
+  learned_rule: 1,
+  user_confirmed: 2,
+  manual: 3,
+};
+
+/** True when a value from `next` is allowed to overwrite one currently held at `current`. */
+export function canOverwrite(current: FieldSource, next: FieldSource): boolean {
+  return SOURCE_RANK[next] >= SOURCE_RANK[current];
+}
+
+/** How a document/name came to be linked to a person (for explainability). */
+export type PersonEvidenceKind =
+  | "matched_alias"
+  | "reordered_name"
+  | "initials"
+  | "learned_rule"
+  | "training_answer"
+  | "recurring_vendor"
+  | "manual"
+  | "ai_inferred"
+  | "merge"
+  | "split";
+
+export interface PersonAlias {
+  id: number;
+  personId: number;
+  /** Display form of the alias (as first seen). */
+  alias: string;
+  /** Normalized key used for matching (lower-cased, punctuation-stripped). */
+  normalized: string;
+  source: FieldSource;
+}
+
+export interface PersonEvidence {
+  id: number;
+  personId: number;
+  kind: PersonEvidenceKind;
+  /** Human-readable explanation of why this link exists. */
+  detail: string;
+  docId: number | null;
+  createdAt: string;
+}
+
+export interface PersonRecord {
+  id: number;
+  displayName: string;
+  roles: PersonRole[];
+  isSelf: boolean;
+  /** 0..1 confidence that this canonical person is a real, correctly-resolved identity. */
+  confidence: number;
+  nameSource: FieldSource;
+  rolesSource: FieldSource;
+  /** "candidate" until the user confirms it; "confirmed" once user-touched. */
+  status: "candidate" | "confirmed";
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type TrainingReviewStatus = "pending" | "answered" | "skipped" | "auto";
 
 export interface TrainingReviewRecord {
@@ -185,6 +288,42 @@ function getDb(): DatabaseSync {
       answers TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+  `);
+  // Canonical Person ontology: one row per real person, with their known
+  // aliases (name variants) and the evidence explaining every link.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS persons (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      display_name TEXT NOT NULL,
+      roles TEXT NOT NULL DEFAULT '[]',
+      is_self INTEGER NOT NULL DEFAULT 0,
+      confidence REAL NOT NULL DEFAULT 0.6,
+      name_source TEXT NOT NULL DEFAULT 'ai_inferred',
+      roles_source TEXT NOT NULL DEFAULT 'ai_inferred',
+      status TEXT NOT NULL DEFAULT 'candidate',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS person_aliases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL,
+      alias TEXT NOT NULL,
+      normalized TEXT NOT NULL UNIQUE,
+      source TEXT NOT NULL DEFAULT 'ai_inferred',
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS person_evidence (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      person_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      doc_id INTEGER,
+      created_at TEXT NOT NULL
     );
   `);
   // Add the foreign-currency columns to older document tables (idempotent).
@@ -640,4 +779,241 @@ export function resetTraining(): void {
   const database = getDb();
   database.exec("DELETE FROM learned_rules");
   database.exec("DELETE FROM training_reviews");
+}
+
+// ── Canonical persons ────────────────────────────────────────────────────
+
+function parseRoles(raw: unknown): PersonRole[] {
+  try {
+    const parsed = JSON.parse(String(raw ?? "[]"));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((r): r is PersonRole => (PERSON_ROLES as string[]).includes(String(r)));
+  } catch {
+    return [];
+  }
+}
+
+function mapPerson(row: Row): PersonRecord {
+  return {
+    id: Number(row.id),
+    displayName: String(row.display_name),
+    roles: parseRoles(row.roles),
+    isSelf: Number(row.is_self) === 1,
+    confidence: Number(row.confidence),
+    nameSource: String(row.name_source) as FieldSource,
+    rolesSource: String(row.roles_source) as FieldSource,
+    status: String(row.status) === "confirmed" ? "confirmed" : "candidate",
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+export function listPersons(): PersonRecord[] {
+  const rows = getDb().prepare("SELECT * FROM persons ORDER BY is_self DESC, display_name ASC").all() as Row[];
+  return rows.map(mapPerson);
+}
+
+export function findPerson(id: number): PersonRecord | null {
+  const row = getDb().prepare("SELECT * FROM persons WHERE id = ?").get(id) as Row | undefined;
+  return row ? mapPerson(row) : null;
+}
+
+export function countPersons(): number {
+  return Number((getDb().prepare("SELECT COUNT(*) AS n FROM persons").get() as Row).n);
+}
+
+export function insertPerson(input: {
+  displayName: string;
+  roles?: PersonRole[];
+  confidence?: number;
+  nameSource?: FieldSource;
+  rolesSource?: FieldSource;
+  status?: "candidate" | "confirmed";
+}): PersonRecord {
+  const now = new Date().toISOString();
+  const info = getDb()
+    .prepare(
+      `INSERT INTO persons (display_name, roles, is_self, confidence, name_source, roles_source, status, created_at, updated_at)
+       VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.displayName.trim(),
+      JSON.stringify(input.roles ?? []),
+      input.confidence ?? 0.6,
+      input.nameSource ?? "ai_inferred",
+      input.rolesSource ?? "ai_inferred",
+      input.status ?? "candidate",
+      now,
+      now,
+    );
+  return findPerson(Number(info.lastInsertRowid))!;
+}
+
+/** Patch mutable person fields. Only the provided fields are touched. */
+export function updatePerson(
+  id: number,
+  patch: {
+    displayName?: string;
+    roles?: PersonRole[];
+    confidence?: number;
+    nameSource?: FieldSource;
+    rolesSource?: FieldSource;
+    status?: "candidate" | "confirmed";
+  },
+): void {
+  const sets: string[] = [];
+  const args: unknown[] = [];
+  if (patch.displayName != null) {
+    sets.push("display_name = ?");
+    args.push(patch.displayName.trim());
+  }
+  if (patch.roles != null) {
+    sets.push("roles = ?");
+    args.push(JSON.stringify(patch.roles));
+  }
+  if (patch.confidence != null) {
+    sets.push("confidence = ?");
+    args.push(patch.confidence);
+  }
+  if (patch.nameSource != null) {
+    sets.push("name_source = ?");
+    args.push(patch.nameSource);
+  }
+  if (patch.rolesSource != null) {
+    sets.push("roles_source = ?");
+    args.push(patch.rolesSource);
+  }
+  if (patch.status != null) {
+    sets.push("status = ?");
+    args.push(patch.status);
+  }
+  if (sets.length === 0) return;
+  sets.push("updated_at = ?");
+  args.push(new Date().toISOString());
+  args.push(id);
+  getDb().prepare(`UPDATE persons SET ${sets.join(", ")} WHERE id = ?`).run(...(args as never[]));
+}
+
+/** Mark one person as "Self", clearing the flag on everyone else. */
+export function setSelfPerson(id: number): void {
+  const database = getDb();
+  const now = new Date().toISOString();
+  database.prepare("UPDATE persons SET is_self = 0, updated_at = ? WHERE is_self = 1").run(now);
+  database.prepare("UPDATE persons SET is_self = 1, status = 'confirmed', updated_at = ? WHERE id = ?").run(now, id);
+}
+
+export function deletePerson(id: number): void {
+  const database = getDb();
+  database.prepare("DELETE FROM person_aliases WHERE person_id = ?").run(id);
+  database.prepare("DELETE FROM person_evidence WHERE person_id = ?").run(id);
+  database.prepare("DELETE FROM persons WHERE id = ?").run(id);
+}
+
+// ── Person aliases ───────────────────────────────────────────────────────
+
+function mapAlias(row: Row): PersonAlias {
+  return {
+    id: Number(row.id),
+    personId: Number(row.person_id),
+    alias: String(row.alias),
+    normalized: String(row.normalized),
+    source: String(row.source) as FieldSource,
+  };
+}
+
+export function listAliases(personId?: number): PersonAlias[] {
+  const db_ = getDb();
+  const rows = (
+    personId == null
+      ? db_.prepare("SELECT * FROM person_aliases ORDER BY id ASC").all()
+      : db_.prepare("SELECT * FROM person_aliases WHERE person_id = ? ORDER BY id ASC").all(personId)
+  ) as Row[];
+  return rows.map(mapAlias);
+}
+
+export function findAliasByNormalized(normalized: string): PersonAlias | null {
+  const row = getDb()
+    .prepare("SELECT * FROM person_aliases WHERE normalized = ?")
+    .get(normalized) as Row | undefined;
+  return row ? mapAlias(row) : null;
+}
+
+/**
+ * Attach an alias to a person. If the normalized form already exists it is moved
+ * to `personId` and its source upgraded (never downgraded). Returns the alias.
+ */
+export function upsertAlias(input: {
+  personId: number;
+  alias: string;
+  normalized: string;
+  source: FieldSource;
+}): PersonAlias {
+  const existing = findAliasByNormalized(input.normalized);
+  const now = new Date().toISOString();
+  if (existing) {
+    const source = canOverwrite(existing.source, input.source) ? input.source : existing.source;
+    getDb()
+      .prepare("UPDATE person_aliases SET person_id = ?, alias = ?, source = ? WHERE id = ?")
+      .run(input.personId, input.alias.trim(), source, existing.id);
+    return findAliasByNormalized(input.normalized)!;
+  }
+  getDb()
+    .prepare(
+      `INSERT INTO person_aliases (person_id, alias, normalized, source, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(input.personId, input.alias.trim(), input.normalized, input.source, now);
+  return findAliasByNormalized(input.normalized)!;
+}
+
+export function deleteAlias(id: number): void {
+  getDb().prepare("DELETE FROM person_aliases WHERE id = ?").run(id);
+}
+
+/** Repoint every alias of `fromId` onto `toId` (used when merging people). */
+export function reassignAliases(fromId: number, toId: number): void {
+  getDb().prepare("UPDATE person_aliases SET person_id = ? WHERE person_id = ?").run(toId, fromId);
+}
+
+// ── Person evidence ──────────────────────────────────────────────────────
+
+function mapEvidence(row: Row): PersonEvidence {
+  return {
+    id: Number(row.id),
+    personId: Number(row.person_id),
+    kind: String(row.kind) as PersonEvidenceKind,
+    detail: String(row.detail),
+    docId: row.doc_id == null ? null : Number(row.doc_id),
+    createdAt: String(row.created_at),
+  };
+}
+
+export function listEvidence(personId: number): PersonEvidence[] {
+  const rows = getDb()
+    .prepare("SELECT * FROM person_evidence WHERE person_id = ? ORDER BY id DESC")
+    .all(personId) as Row[];
+  return rows.map(mapEvidence);
+}
+
+export function addEvidence(input: {
+  personId: number;
+  kind: PersonEvidenceKind;
+  detail: string;
+  docId?: number | null;
+}): void {
+  // Avoid piling up identical evidence rows for the same person + detail.
+  const dupe = getDb()
+    .prepare("SELECT id FROM person_evidence WHERE person_id = ? AND kind = ? AND detail = ?")
+    .get(input.personId, input.kind, input.detail) as Row | undefined;
+  if (dupe) return;
+  getDb()
+    .prepare(
+      `INSERT INTO person_evidence (person_id, kind, detail, doc_id, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(input.personId, input.kind, input.detail, input.docId ?? null, new Date().toISOString());
+}
+
+export function reassignEvidence(fromId: number, toId: number): void {
+  getDb().prepare("UPDATE person_evidence SET person_id = ? WHERE person_id = ?").run(toId, fromId);
 }

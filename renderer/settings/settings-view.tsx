@@ -39,10 +39,14 @@ import {
   ChevronRight,
   FolderOpen,
   GraduationCap,
+  Info,
   Pencil,
   Plus,
   RotateCcw,
+  Scissors,
+  Star,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 
@@ -465,11 +469,423 @@ function TrainingSection() {
   );
 }
 
+// ── Canonical People ───────────────────────────────────────────────────────
+
+type PersonRole =
+  | "self"
+  | "spouse"
+  | "client"
+  | "supplier"
+  | "tax_officer"
+  | "owner"
+  | "tenant"
+  | "landlord"
+  | "insurer"
+  | "employee"
+  | "consultant"
+  | "bank_rm"
+  | "accountant"
+  | "other";
+
+type FieldSource = "ai_inferred" | "learned_rule" | "user_confirmed" | "manual";
+
+const ROLE_LABEL: Record<PersonRole, string> = {
+  self: "Self",
+  spouse: "Spouse",
+  client: "Client",
+  supplier: "Supplier",
+  tax_officer: "Tax officer",
+  owner: "Owner",
+  tenant: "Tenant",
+  landlord: "Landlord",
+  insurer: "Insurer",
+  employee: "Employee",
+  consultant: "Consultant",
+  bank_rm: "Bank RM",
+  accountant: "Accountant",
+  other: "Other",
+};
+const ALL_ROLES = Object.keys(ROLE_LABEL) as PersonRole[];
+
+const SOURCE_LABEL: Record<FieldSource, string> = {
+  ai_inferred: "AI inferred",
+  learned_rule: "Learned rule",
+  user_confirmed: "Confirmed by you",
+  manual: "Set manually",
+};
+
+interface PersonEntity {
+  id: number;
+  displayName: string;
+  roles: PersonRole[];
+  isSelf: boolean;
+  confidence: number;
+  nameSource: FieldSource;
+  rolesSource: FieldSource;
+  status: "candidate" | "confirmed";
+  aliases: { id: number; alias: string; source: FieldSource }[];
+  evidence: { kind: string; detail: string; docId: number | null }[];
+  linkedDocumentCount: number;
+}
+
+/** A single canonical person: name, roles, aliases, evidence, and controls. */
+function PersonCard({
+  person,
+  others,
+  onRename,
+  onSetRoles,
+  onMarkSelf,
+  onAddAlias,
+  onRemoveAlias,
+  onSplitAlias,
+  onMerge,
+  onDelete,
+}: {
+  person: PersonEntity;
+  others: PersonEntity[];
+  onRename: (name: string) => void;
+  onSetRoles: (roles: PersonRole[]) => void;
+  onMarkSelf: () => void;
+  onAddAlias: (alias: string) => void;
+  onRemoveAlias: (aliasId: number) => void;
+  onSplitAlias: (aliasId: number) => void;
+  onMerge: (targetId: number) => void;
+  onDelete: () => void;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(person.displayName);
+  const [newAlias, setNewAlias] = useState("");
+  const [showRoles, setShowRoles] = useState(false);
+  const [showEvidence, setShowEvidence] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const commitRename = () => {
+    const next = renameValue.trim();
+    if (next && next !== person.displayName) onRename(next);
+    setRenaming(false);
+  };
+  const toggleRole = (role: PersonRole) => {
+    const next = person.roles.includes(role)
+      ? person.roles.filter((r) => r !== role)
+      : [...person.roles, role];
+    onSetRoles(next);
+  };
+  const commitAlias = () => {
+    const next = newAlias.trim();
+    if (next) onAddAlias(next);
+    setNewAlias("");
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-2.5">
+      {/* Header: name + primary badges */}
+      <div className="flex items-center gap-2">
+        {person.isSelf ? <Star className="size-3.5 text-accent shrink-0" fill="currentColor" /> : null}
+        {renaming ? (
+          <>
+            <Input
+              autoFocus
+              size="small"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") setRenaming(false);
+              }}
+              className="flex-1"
+            />
+            <Button size="small" variant="accent" onClick={commitRename}>
+              <Check className="size-3.5" />
+            </Button>
+            <Button size="small" variant="transparent" iconOnly onClick={() => setRenaming(false)}>
+              <X className="size-3.5" />
+            </Button>
+          </>
+        ) : (
+          <>
+            <Text className="flex-1 truncate font-medium" title={person.displayName}>
+              {person.displayName}
+            </Text>
+            <Badge color="secondary" className="tabular-nums shrink-0">
+              {person.linkedDocumentCount} doc{person.linkedDocumentCount === 1 ? "" : "s"}
+            </Badge>
+            <Button size="small" variant="transparent" iconOnly onClick={() => setRenaming(true)} title="Rename">
+              <Pencil className="size-3.5" />
+            </Button>
+          </>
+        )}
+      </div>
+
+      {/* Roles */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {person.roles.length > 0 ? (
+          person.roles.map((r) => (
+            <Badge key={r} color={r === "self" ? "blue" : "secondary"}>
+              {ROLE_LABEL[r]}
+            </Badge>
+          ))
+        ) : (
+          <Text variant="small" color="tertiary">
+            No role assigned
+          </Text>
+        )}
+        <button
+          type="button"
+          onClick={() => setShowRoles((v) => !v)}
+          className="flex items-center gap-0.5 text-secondary hover:text-primary transition-colors ml-auto"
+        >
+          <ChevronRight className={cn("size-3.5 transition-transform", showRoles && "rotate-90")} />
+          <Text variant="small" color="secondary">
+            Edit roles
+          </Text>
+        </button>
+      </div>
+      {showRoles ? (
+        <div className="flex flex-wrap gap-1 rounded-lg border border-panel bg-control px-2 py-2">
+          {ALL_ROLES.map((role) => {
+            const active = person.roles.includes(role);
+            return (
+              <button
+                key={role}
+                type="button"
+                onClick={() => toggleRole(role)}
+                className={cn(
+                  "px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors",
+                  active
+                    ? "bg-accent text-accent-contrast border-transparent"
+                    : "bg-control-subtle text-secondary border-panel hover:bg-control",
+                )}
+              >
+                {ROLE_LABEL[role]}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {/* Aliases */}
+      <div className="flex flex-col gap-1">
+        <Text variant="small" color="tertiary">
+          Name variants
+        </Text>
+        <div className="flex flex-wrap gap-1">
+          {person.aliases.map((a) => (
+            <span
+              key={a.id}
+              className="group flex items-center gap-1 rounded-full border border-panel bg-control px-2 py-0.5"
+              title={SOURCE_LABEL[a.source]}
+            >
+              <Text variant="small" className="truncate max-w-[140px]">
+                {a.alias}
+              </Text>
+              {person.aliases.length > 1 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onSplitAlias(a.id)}
+                    className="text-tertiary hover:text-primary transition-colors"
+                    title="Split into a separate person"
+                  >
+                    <Scissors className="size-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveAlias(a.id)}
+                    className="text-tertiary hover:text-primary transition-colors"
+                    title="Remove variant"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </>
+              ) : null}
+            </span>
+          ))}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Input
+            size="small"
+            value={newAlias}
+            onChange={(e) => setNewAlias(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitAlias();
+            }}
+            placeholder="Add a name variant"
+            className="flex-1"
+          />
+          <Button size="small" variant="transparent" iconOnly onClick={commitAlias} disabled={!newAlias.trim()} title="Add variant">
+            <Plus className="size-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Footer: confidence + source + actions */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge color="secondary" className="tabular-nums">
+          {Math.round(person.confidence * 100)}% confident
+        </Badge>
+        <Text variant="small" color="tertiary">
+          {SOURCE_LABEL[person.nameSource]}
+        </Text>
+        {person.evidence.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setShowEvidence((v) => !v)}
+            className="flex items-center gap-0.5 text-secondary hover:text-primary transition-colors"
+          >
+            <Info className="size-3.5" />
+            <Text variant="small" color="secondary">
+              Why
+            </Text>
+          </button>
+        ) : null}
+        <div className="ml-auto flex items-center gap-1.5">
+          {!person.isSelf ? (
+            <Button size="small" variant="transparent" onClick={onMarkSelf} title="Mark this person as yourself">
+              <Star className="size-3.5" />
+              Self
+            </Button>
+          ) : null}
+          {others.length > 0 ? (
+            <Select value="" onValueChange={(v) => onMerge(Number(v))}>
+              <SelectTrigger size="small" variant="filled" className="w-[130px]">
+                <SelectValue placeholder="Merge into…" />
+              </SelectTrigger>
+              <SelectContent>
+                {others.map((o) => (
+                  <SelectItem key={o.id} value={String(o.id)}>
+                    {o.displayName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+          {confirmDelete ? (
+            <>
+              <Button size="small" variant="accent" onClick={onDelete}>
+                Delete
+              </Button>
+              <Button size="small" variant="transparent" iconOnly onClick={() => setConfirmDelete(false)}>
+                <X className="size-3.5" />
+              </Button>
+            </>
+          ) : (
+            <Button size="small" variant="transparent" iconOnly onClick={() => setConfirmDelete(true)} title="Delete person">
+              <Trash2 className="size-3.5" />
+            </Button>
+          )}
+        </div>
+      </div>
+      {showEvidence && person.evidence.length > 0 ? (
+        <div className="flex flex-col gap-0.5 pl-1 border-l border-panel">
+          {person.evidence.map((e, i) => (
+            <Text key={i} variant="small" color="tertiary" className="pl-2">
+              {e.detail}
+            </Text>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PeopleSection() {
+  const queryClient = useQueryClient();
+  const peopleQuery = useQuery({
+    queryKey: ["people"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<PersonEntity[]>("people:list"),
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["people"] });
+    queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+  };
+
+  const rename = useMutation({
+    mutationFn: (v: { id: number; name: string }) => window.glazeAPI.glaze.ipc.invoke("people:rename", v.id, v.name),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't rename: ${e}`),
+  });
+  const setRoles = useMutation({
+    mutationFn: (v: { id: number; roles: PersonRole[] }) => window.glazeAPI.glaze.ipc.invoke("people:setRoles", v.id, v.roles),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't set roles: ${e}`),
+  });
+  const markSelf = useMutation({
+    mutationFn: (id: number) => window.glazeAPI.glaze.ipc.invoke("people:markSelf", id),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't mark Self: ${e}`),
+  });
+  const addAlias = useMutation({
+    mutationFn: (v: { id: number; alias: string }) => window.glazeAPI.glaze.ipc.invoke("people:addAlias", v.id, v.alias),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't add variant: ${e}`),
+  });
+  const removeAlias = useMutation({
+    mutationFn: (aliasId: number) => window.glazeAPI.glaze.ipc.invoke("people:removeAlias", aliasId),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't remove variant: ${e}`),
+  });
+  const splitAlias = useMutation({
+    mutationFn: (v: { id: number; aliasId: number }) => window.glazeAPI.glaze.ipc.invoke("people:split", v.id, [v.aliasId]),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't split: ${e}`),
+  });
+  const merge = useMutation({
+    mutationFn: (v: { fromId: number; toId: number }) => window.glazeAPI.glaze.ipc.invoke("people:merge", v.fromId, v.toId),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't merge: ${e}`),
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => window.glazeAPI.glaze.ipc.invoke("people:delete", id),
+    onSuccess: invalidate,
+    onError: (e) => toast.error(`Couldn't delete: ${e}`),
+  });
+
+  const people = peopleQuery.data ?? [];
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Users className="size-4 text-secondary" />
+        <Text variant="strong" className="flex-1">
+          People
+        </Text>
+      </div>
+      <Text variant="small" color="tertiary">
+        Canonical people the app has discovered. Merge duplicates, split a mistaken merge, add name variants, assign
+        roles, and mark yourself as Self — used to resolve future documents. Changes apply to the Financial Snapshot
+        instantly.
+      </Text>
+      {people.length === 0 ? (
+        <Text variant="small" color="secondary">
+          No people identified yet. Open the Financial Snapshot from the orb and tap Refresh to analyze your documents.
+        </Text>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {people.map((person) => (
+            <PersonCard
+              key={person.id}
+              person={person}
+              others={people.filter((p) => p.id !== person.id)}
+              onRename={(name) => rename.mutate({ id: person.id, name })}
+              onSetRoles={(roles) => setRoles.mutate({ id: person.id, roles })}
+              onMarkSelf={() => markSelf.mutate(person.id)}
+              onAddAlias={(alias) => addAlias.mutate({ id: person.id, alias })}
+              onRemoveAlias={(aliasId) => removeAlias.mutate(aliasId)}
+              onSplitAlias={(aliasId) => splitAlias.mutate({ id: person.id, aliasId })}
+              onMerge={(toId) => merge.mutate({ fromId: person.id, toId })}
+              onDelete={() => remove.mutate(person.id)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function SettingsView() {
   useTheme();
   const queryClient = useQueryClient();
-  const [renaming, setRenaming] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
 
   // Close the window on Escape (unless typing in a control).
   useEffect(() => {
@@ -516,13 +932,6 @@ export function SettingsView() {
     queryFn: () => window.glazeAPI.nativeTheme.getInfo(),
   });
 
-  const remap = useMutation({
-    mutationFn: (vars: { from: string; to: string }) =>
-      window.glazeAPI.glaze.ipc.invoke("people:remap", vars.from, vars.to),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["snapshot"] }),
-    onError: (error) => toast.error(`Couldn't update person: ${error}`),
-  });
-
   const reassign = useMutation({
     mutationFn: (vars: { docId: number; target: string }) =>
       window.glazeAPI.glaze.ipc.invoke("people:reassignDoc", vars.docId, vars.target),
@@ -560,16 +969,6 @@ export function SettingsView() {
   }
   for (const d of snapshot?.unidentified?.documents ?? []) docPerson.set(d.docId, null);
 
-  const startRename = (name: string) => {
-    setRenaming(name);
-    setRenameValue(name);
-  };
-  const commitRename = (from: string) => {
-    const to = renameValue.trim();
-    if (to && to !== from) remap.mutate({ from, to });
-    setRenaming(null);
-  };
-
   return (
     <ScrollArea
       toolbar={
@@ -606,87 +1005,7 @@ export function SettingsView() {
         <Separator />
 
         {/* People */}
-        <section className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1">
-            <Text variant="strong">People</Text>
-            <Text variant="small" color="tertiary">
-              Rename a person or merge duplicate name variants the AI created. Changes apply to the Financial
-              Snapshot instantly.
-            </Text>
-          </div>
-          {people.length === 0 ? (
-            <Text variant="small" color="secondary">
-              No people identified yet. Open the Financial Snapshot from the orb and tap Refresh to analyze your
-              documents.
-            </Text>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {people.map((person) => (
-                <div
-                  key={person.name}
-                  className="flex items-center gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-2"
-                >
-                  {renaming === person.name ? (
-                    <>
-                      <Input
-                        autoFocus
-                        size="small"
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") commitRename(person.name);
-                          if (e.key === "Escape") setRenaming(null);
-                        }}
-                        className="flex-1"
-                      />
-                      <Button size="small" variant="accent" onClick={() => commitRename(person.name)}>
-                        <Check className="size-3.5" />
-                        Save
-                      </Button>
-                      <Button size="small" variant="transparent" iconOnly onClick={() => setRenaming(null)}>
-                        <X className="size-3.5" />
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <Text className="flex-1 truncate" title={person.name}>
-                        {person.name}
-                      </Text>
-                      <Badge color="secondary" className="tabular-nums shrink-0">
-                        {person.documentCount} doc{person.documentCount === 1 ? "" : "s"}
-                      </Badge>
-                      <Button
-                        size="small"
-                        variant="transparent"
-                        iconOnly
-                        onClick={() => startRename(person.name)}
-                        title="Rename"
-                      >
-                        <Pencil className="size-3.5" />
-                      </Button>
-                      {peopleNames.length > 1 ? (
-                        <Select value="" onValueChange={(to) => remap.mutate({ from: person.name, to })}>
-                          <SelectTrigger size="small" variant="filled" className="w-[130px] shrink-0">
-                            <SelectValue placeholder="Merge into…" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {peopleNames
-                              .filter((n) => n !== person.name)
-                              .map((n) => (
-                                <SelectItem key={n} value={n}>
-                                  {n}
-                                </SelectItem>
-                              ))}
-                          </SelectContent>
-                        </Select>
-                      ) : null}
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+        <PeopleSection />
 
         <Separator />
 

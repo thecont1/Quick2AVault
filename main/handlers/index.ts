@@ -24,10 +24,24 @@ import {
   listDocuments,
   removeDocumentOverride,
   setDocumentOverride,
-  setNameOverride,
+  PERSON_ROLES,
+  type PersonRole,
   type RuleType,
 } from "../services/database.js";
 import { getCachedSnapshot, refreshSnapshot } from "../services/snapshot.js";
+import {
+  addPersonAlias,
+  confirmNameForPerson,
+  deletePersonEntity,
+  ensurePerson,
+  listPeople,
+  markSelf,
+  mergePersons,
+  removePersonAlias,
+  renamePerson,
+  setPersonRoles,
+  splitPerson,
+} from "../services/people.js";
 import {
   addRule,
   editRule,
@@ -65,6 +79,16 @@ const VALID_RULE_TYPES: RuleType[] = ["vendor_category", "person_variant", "keyw
 
 function isRuleType(value: unknown): value is RuleType {
   return typeof value === "string" && (VALID_RULE_TYPES as string[]).includes(value);
+}
+
+/** Coerce a loosely-typed IPC value into a list of valid person roles. */
+function toPersonRoles(value: unknown): PersonRole[] {
+  if (!Array.isArray(value)) return [];
+  const out: PersonRole[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && (PERSON_ROLES as string[]).includes(item)) out.push(item as PersonRole);
+  }
+  return out;
 }
 
 /** Coerce loosely-typed IPC answers into the training answer shape. */
@@ -186,12 +210,61 @@ export function registerHandlers(): void {
   });
 
   // ── Manual attribution corrections ──────────────────────────────────
-  // Rename or merge a person: both remap one name onto another. The change is
-  // applied when the cached snapshot is re-aggregated (no AI re-run needed).
+  // Rename or merge a person by name: fold `from` onto the canonical person for
+  // `to`. Re-aggregated instantly (no AI re-run needed).
   ipcMain.handle("people:remap", async (_event, from: string, to: string) => {
-    if (typeof from === "string" && typeof to === "string") {
-      setNameOverride(from.trim(), to.trim());
+    if (typeof from === "string" && typeof to === "string" && from.trim() && to.trim()) {
+      confirmNameForPerson(from.trim(), ensurePerson(to.trim()), "user_confirmed");
     }
+  });
+
+  // ── Canonical People management ─────────────────────────────────────
+  ipcMain.handle("people:list", async () => {
+    return listPeople();
+  });
+
+  ipcMain.handle("people:rename", async (_event, id: number, name: unknown) => {
+    const pid = Number(id);
+    if (Number.isFinite(pid) && typeof name === "string" && name.trim()) renamePerson(pid, name);
+  });
+
+  ipcMain.handle("people:setRoles", async (_event, id: number, roles: unknown) => {
+    const pid = Number(id);
+    if (Number.isFinite(pid)) setPersonRoles(pid, toPersonRoles(roles));
+  });
+
+  ipcMain.handle("people:markSelf", async (_event, id: number) => {
+    const pid = Number(id);
+    if (Number.isFinite(pid)) markSelf(pid);
+  });
+
+  ipcMain.handle("people:addAlias", async (_event, id: number, alias: unknown) => {
+    const pid = Number(id);
+    if (Number.isFinite(pid) && typeof alias === "string" && alias.trim()) addPersonAlias(pid, alias);
+  });
+
+  ipcMain.handle("people:removeAlias", async (_event, aliasId: number) => {
+    const aid = Number(aliasId);
+    if (Number.isFinite(aid)) removePersonAlias(aid);
+  });
+
+  ipcMain.handle("people:merge", async (_event, fromId: number, toId: number) => {
+    const from = Number(fromId);
+    const to = Number(toId);
+    if (Number.isFinite(from) && Number.isFinite(to) && from !== to) mergePersons(from, to);
+  });
+
+  ipcMain.handle("people:split", async (_event, id: number, aliasIds: unknown) => {
+    const pid = Number(id);
+    if (!Number.isFinite(pid) || !Array.isArray(aliasIds)) return null;
+    const ids = aliasIds.map((a) => Number(a)).filter((a) => Number.isFinite(a));
+    if (ids.length === 0) return null;
+    return splitPerson(pid, ids);
+  });
+
+  ipcMain.handle("people:delete", async (_event, id: number) => {
+    const pid = Number(id);
+    if (Number.isFinite(pid)) deletePersonEntity(pid);
   });
 
   // Reassign a single document to a person, to "unidentified", or back to the
