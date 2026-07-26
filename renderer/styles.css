@@ -8,3 +8,19 @@
 @source "./**/*.{ts,tsx}";
 @source not "./preload.ts";
 @source not "./dev/**/*";
+
+/* Subtle pulse while the orb is processing a dropped file. */
+@keyframes orb-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: var(--tw-shadow, 0 4px 12px rgb(0 0 0 / 0.25));
+  }
+  50% {
+    transform: scale(1.09);
+  }
+}
+
+.orb-pulse {
+  animation: orb-pulse 1.15s ease-in-out infinite;
+}

@@ -1,16 +1,19 @@
 /**
  * Handler Registration
  *
- * Register all your IPC handlers here
+ * Registers all IPC handlers for the Quick2Afvault orb.
  */
 
 import * as path from "path";
 import { fileURLToPath } from "url";
 
-import { appHandlers } from "./app.js";
-import { getSettingsWindow, openSettingsWindow } from "../windows/settings-window.js";
+import { ipcMain, shell, logger } from "@glaze/core/backend";
 
-import { ipcMain, logger } from "@glaze/core/backend";
+import { getSettingsWindow, openSettingsWindow } from "../windows/settings-window.js";
+import { showOrbMenu } from "../windows/orb-menu.js";
+import { ensureVaultDirs, getVaultRoot, ingestFiles } from "../services/vault.js";
+import { notifyIngestOutcome } from "../services/notify.js";
+import { getStats, listDocuments } from "../services/database.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,32 +21,50 @@ const __dirname = path.dirname(__filename);
 export function registerHandlers(): void {
   logger.info("handlers", "Registering IPC handlers...");
 
-  // Register app handlers using ipcMain API
-  ipcMain.handle("app:getInfo", async (_event) => {
-    return await appHandlers.getInfo();
-  });
-
   // Return the .glaze project path (used for deep links back to the host)
-  // __dirname = build/main, so two levels up is the app root
   ipcMain.handle("app:getProjectPath", async () => {
     return path.join(__dirname, "..", "..");
   });
 
   // Settings window handlers
-  ipcMain.handle("window:openSettings", async (_event) => {
+  ipcMain.handle("window:openSettings", async () => {
     await openSettingsWindow();
   });
 
-  ipcMain.handle("window:closeSettings", async (_event) => {
+  ipcMain.handle("window:closeSettings", async () => {
     getSettingsWindow()?.close();
   });
 
-  logger.info("handlers", "✓ IPC handlers registered");
+  // ── Vault handlers ──────────────────────────────────────────────────
+  ipcMain.handle("vault:ingestFiles", async (_event, filePaths: string[]) => {
+    if (!Array.isArray(filePaths)) return [];
+    const valid = filePaths.filter((p) => typeof p === "string" && p.length > 0);
+    const results = await ingestFiles(valid);
+    notifyIngestOutcome(results);
+    return results;
+  });
 
-  // TODO: Add more handlers here using ipcMain.handle()
-  // Example:
-  // ipcMain.handle('file:read', async (event, path) => {
-  //   const fs = await import('fs/promises');
-  //   return await fs.readFile(path, 'utf-8');
-  // });
+  ipcMain.handle("vault:openFolder", async () => {
+    await ensureVaultDirs();
+    return await shell.openPath(getVaultRoot());
+  });
+
+  ipcMain.handle("vault:getVaultPath", async () => {
+    return getVaultRoot();
+  });
+
+  ipcMain.handle("vault:listDocuments", async () => {
+    return listDocuments();
+  });
+
+  ipcMain.handle("vault:getStats", async () => {
+    return getStats();
+  });
+
+  // ── Orb context menu ────────────────────────────────────────────────
+  ipcMain.handle("orb:showContextMenu", async () => {
+    await showOrbMenu();
+  });
+
+  logger.info("handlers", "✓ IPC handlers registered");
 }

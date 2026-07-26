@@ -23,10 +23,12 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "lucide-react": "^0.542.0",
+    "pdf-parse": "^1.1.1",
     "radix-ui": "^1.4.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "tailwind-merge": "^3.3.1"
+    "tailwind-merge": "^3.3.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
@@ -53,13 +55,27 @@
     "node": ">=24"
   },
   "packageManager": "npm@11.11.0+sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
+  "appConfig": {
+    "macOS": {
+      "activationPolicy": "accessory"
+    }
+  },
   "glaze": {
-    "capabilities": {},
+    "capabilities": {
+      "ai": {
+        "grades": [
+          "fast"
+        ],
+        "purpose": "Converts your dropped financial documents into clean Markdown text.",
+        "mode": "optional"
+      }
+    },
     "sdkVersion": "0.11.1.0",
     "createdAt": "2026-07-26T13:23:35.192Z",
     "lastMigration": "ai-tsconfig-paths",
     "host": {
       "minVersion": "0.11.1.0"
-    }
+    },
+    "updatedAt": 1785073395014
   }
 }
