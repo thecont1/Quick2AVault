@@ -11,9 +11,12 @@ import { ipcMain, shell, logger } from "@glaze/core/backend";
 
 import { getSettingsWindow, openSettingsWindow } from "../windows/settings-window.js";
 import { showOrbMenu } from "../windows/orb-menu.js";
+import { beginOrbDrag, endOrbDrag, moveOrbBy } from "../windows/orb-window.js";
+import { closeSnapshotWindow, openSnapshotWindow, setSnapshotBusy } from "../windows/snapshot-window.js";
 import { ensureVaultDirs, getVaultRoot, ingestFiles } from "../services/vault.js";
 import { notifyIngestOutcome } from "../services/notify.js";
 import { getStats, listDocuments } from "../services/database.js";
+import { getCachedSnapshot, refreshSnapshot } from "../services/snapshot.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -64,6 +67,34 @@ export function registerHandlers(): void {
   // ── Orb context menu ────────────────────────────────────────────────
   ipcMain.handle("orb:showContextMenu", async () => {
     await showOrbMenu();
+  });
+
+  // ── Orb custom drag (fire-and-forget) ───────────────────────────────
+  ipcMain.on("orb:dragStart", () => beginOrbDrag());
+  ipcMain.on("orb:dragMove", (_event, dx: number, dy: number) => {
+    moveOrbBy(Number(dx) || 0, Number(dy) || 0);
+  });
+  ipcMain.on("orb:dragEnd", () => endOrbDrag());
+
+  // ── Financial snapshot ──────────────────────────────────────────────
+  ipcMain.handle("snapshot:open", async () => {
+    await openSnapshotWindow();
+  });
+
+  ipcMain.handle("snapshot:close", async () => {
+    closeSnapshotWindow();
+  });
+
+  ipcMain.handle("snapshot:getCached", async () => {
+    return getCachedSnapshot();
+  });
+
+  ipcMain.handle("snapshot:refresh", async () => {
+    return await refreshSnapshot();
+  });
+
+  ipcMain.handle("snapshot:setBusy", async (_event, value: boolean) => {
+    setSnapshotBusy(Boolean(value));
   });
 
   logger.info("handlers", "✓ IPC handlers registered");

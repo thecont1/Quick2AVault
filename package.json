@@ -66,7 +66,7 @@
         "grades": [
           "fast"
         ],
-        "purpose": "Converts your dropped financial documents into clean Markdown text.",
+        "purpose": "Converts your dropped financial documents into clean Markdown and summarizes them by person.",
         "mode": "optional"
       }
     },
@@ -76,6 +76,6 @@
     "host": {
       "minVersion": "0.11.1.0"
     },
-    "updatedAt": 1785073395014
+    "updatedAt": 1785074894649
   }
 }

@@ -14,6 +14,11 @@ const ORB_WINDOW_SIZE = 104;
 
 let orbWindow: BrowserWindow | null = null;
 
+// Custom drag state: the orb is dragged from the renderer (so plain clicks can
+// be distinguished from drags), applied here via setPosition.
+let dragOrigin: [number, number] | null = null;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
 interface OrbState {
   x?: number;
   y?: number;
@@ -42,6 +47,36 @@ function saveState(state: OrbState): void {
 
 export function getOrbWindow(): BrowserWindow | null {
   return orbWindow;
+}
+
+/** Persist the orb position shortly after movement settles (avoids per-frame writes). */
+function schedulePositionSave(): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    if (!orbWindow || orbWindow.isDestroyed()) return;
+    const [x, y] = orbWindow.getPosition();
+    saveState({ x, y });
+  }, 400);
+}
+
+/** Record the orb's starting position at the beginning of a renderer drag. */
+export function beginOrbDrag(): void {
+  if (!orbWindow || orbWindow.isDestroyed()) return;
+  const [x, y] = orbWindow.getPosition();
+  dragOrigin = [x, y];
+}
+
+/** Move the orb by a delta (in screen pixels) from the drag's start position. */
+export function moveOrbBy(dx: number, dy: number): void {
+  if (!orbWindow || orbWindow.isDestroyed() || !dragOrigin) return;
+  orbWindow.setPosition(Math.round(dragOrigin[0] + dx), Math.round(dragOrigin[1] + dy));
+}
+
+/** End a renderer drag and persist the final position. */
+export function endOrbDrag(): void {
+  dragOrigin = null;
+  schedulePositionSave();
 }
 
 export async function createOrbWindow(): Promise<void> {
@@ -79,9 +114,7 @@ export async function createOrbWindow(): Promise<void> {
   orbWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   orbWindow.on("moved", () => {
-    if (!orbWindow || orbWindow.isDestroyed()) return;
-    const [x, y] = orbWindow.getPosition();
-    saveState({ x, y });
+    schedulePositionSave();
   });
 
   orbWindow.on("closed", () => {

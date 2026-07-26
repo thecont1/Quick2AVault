@@ -5,9 +5,17 @@ import { Menu, app, shell, logger } from "@glaze/core/backend";
 
 import { ensureVaultDirs, getVaultRoot } from "../services/vault.js";
 import { openSettingsWindow } from "./settings-window.js";
+import { openSnapshotWindow } from "./snapshot-window.js";
 
 export async function showOrbMenu(): Promise<void> {
   const menu = Menu.buildFromTemplate([
+    {
+      label: "Financial Snapshot…",
+      click: () => {
+        void openSnapshotWindow();
+      },
+    },
+    { type: "separator" },
     {
       label: "Open Vault Folder",
       click: async () => {

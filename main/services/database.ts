@@ -56,6 +56,14 @@ function getDb(): DatabaseSync {
       markdown_path TEXT NOT NULL
     );
   `);
+  // Single-row cache of the most recent AI financial snapshot.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS snapshot_cache (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      json TEXT NOT NULL,
+      generated_at TEXT NOT NULL
+    );
+  `);
   logger.info("database", "Document database ready", { dbPath });
   return db;
 }
@@ -115,4 +123,30 @@ export function getStats(): { total: number; converted: number } {
     )
     .get() as Row;
   return { total: Number(row.total), converted: Number(row.converted) };
+}
+
+// ── Snapshot cache ──────────────────────────────────────────────────────
+
+export interface SnapshotCacheRow {
+  json: string;
+  generatedAt: string;
+}
+
+/** Return the cached financial snapshot (raw JSON + timestamp), or null. */
+export function getSnapshotCache(): SnapshotCacheRow | null {
+  const row = getDb()
+    .prepare("SELECT json, generated_at FROM snapshot_cache WHERE id = 1")
+    .get() as Row | undefined;
+  return row ? { json: String(row.json), generatedAt: String(row.generated_at) } : null;
+}
+
+/** Insert or replace the single cached snapshot row. */
+export function saveSnapshotCache(json: string, generatedAt: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO snapshot_cache (id, json, generated_at)
+       VALUES (1, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET json = excluded.json, generated_at = excluded.generated_at`,
+    )
+    .run(json, generatedAt);
 }
