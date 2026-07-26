@@ -18,6 +18,8 @@ const CLICK_THRESHOLD = 4;
 export function HomeView() {
   const [status, setStatus] = useState<OrbStatus>("idle");
   const [dragActive, setDragActive] = useState(false);
+  // Batch progress: how many files are done out of the whole drop (0 total = idle).
+  const [progress, setProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
 
   // Latest status, readable from imperative pointer handlers.
   const statusRef = useRef<OrbStatus>("idle");
@@ -50,13 +52,24 @@ export function HomeView() {
     }
 
     setStatus("processing");
+    setProgress({ done: 0, total: paths.length });
+    const results: IngestResult[] = [];
     try {
-      const results = await window.glazeAPI.glaze.ipc.invoke<IngestResult[]>("vault:ingestFiles", paths);
+      // Process one file at a time so we can show "how many left" in the batch.
+      for (const path of paths) {
+        const result = await window.glazeAPI.glaze.ipc.invoke<IngestResult>("vault:ingestFile", path);
+        results.push(result);
+        setProgress((p) => ({ ...p, done: p.done + 1 }));
+      }
+      // Report the whole batch once (native notification + near-orb failure toast).
+      await window.glazeAPI.glaze.ipc.invoke("vault:notifyBatch", results);
       const hadHardFailure = results.some((r) => r.status === "error" || r.status === "unsupported");
       const anyIngested = results.some((r) => r.status === "ingested" || r.status === "duplicate");
       setStatus(anyIngested && !hadHardFailure ? "success" : hadHardFailure ? "error" : "success");
     } catch {
       setStatus("error");
+    } finally {
+      setProgress({ done: 0, total: 0 });
     }
   }, []);
 
@@ -154,21 +167,41 @@ export function HomeView() {
             ? AlertCircle
             : Vault;
 
+  const showBatch = status === "processing" && progress.total > 1;
+
   return (
     <div className="h-full w-full flex items-center justify-center select-none">
-      <div
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        className={cn(
-          "flex items-center justify-center rounded-full size-16 cursor-pointer",
-          "bg-accent text-accent-contrast shadow-lg transition-all duration-200 ease-out",
-          dragActive && "scale-110 shadow-xl",
-          status === "processing" && "orb-pulse",
-        )}
-      >
-        <Icon className={cn("size-7", status === "processing" && "animate-spin")} strokeWidth={2} />
+      <div className="relative flex items-center justify-center">
+        <div
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          className={cn(
+            "flex items-center justify-center rounded-full size-16 cursor-pointer",
+            "bg-accent text-accent-contrast transition-all duration-200 ease-out",
+            // Theme-aware edge/shadow so the orb reads cleanly on light and dark desktops.
+            "ring-1 ring-black/10 shadow-lg shadow-black/20",
+            "dark:ring-white/20 dark:shadow-xl dark:shadow-black/50",
+            dragActive && "scale-110 shadow-xl",
+            status === "processing" && "orb-pulse",
+          )}
+        >
+          <Icon className={cn("size-7", status === "processing" && "animate-spin")} strokeWidth={2} />
+        </div>
+
+        {/* Batch progress: how many files are left in a multi-file drop. */}
+        {showBatch ? (
+          <div
+            className={cn(
+              "absolute -bottom-1 left-1/2 -translate-x-1/2 px-2 py-px rounded-full",
+              "bg-panel text-primary text-[10px] font-semibold tabular-nums leading-tight",
+              "ring-1 ring-black/10 dark:ring-white/15 shadow-sm whitespace-nowrap",
+            )}
+          >
+            {progress.done}/{progress.total}
+          </div>
+        ) : null}
       </div>
     </div>
   );

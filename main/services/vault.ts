@@ -73,6 +73,12 @@ export interface IngestResult {
   error?: string;
 }
 
+/** Ingest a single dropped file. Ensures the vault exists first. Never throws. */
+export async function ingestFile(sourcePath: string): Promise<IngestResult> {
+  await ensureVaultDirs();
+  return ingestOne(sourcePath);
+}
+
 async function ingestOne(sourcePath: string): Promise<IngestResult> {
   const filename = path.basename(sourcePath);
   const type = getFileType(filename);

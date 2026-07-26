@@ -1,20 +1,43 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Badge, Button, ScrollArea, Separator, Text } from "@glaze/core/components";
 import { useTheme } from "@glaze/core/hooks";
 import { cn } from "@glaze/core/utils";
-import { AlertCircle, CalendarRange, FileText, Loader2, RefreshCw, User, Users, Vault } from "lucide-react";
+import {
+  AlertCircle,
+  CalendarRange,
+  ChevronRight,
+  FileText,
+  HelpCircle,
+  Loader2,
+  RefreshCw,
+  User,
+  Users,
+  Vault,
+} from "lucide-react";
+
+interface DocRef {
+  docId: number;
+  filename: string;
+}
 
 interface PersonSummary {
   name: string;
   documentCount: number;
   dateRange: { start: string; end: string } | null;
   categories: string[];
+  documents: DocRef[];
+}
+
+interface UnidentifiedSummary {
+  documentCount: number;
+  categories: string[];
+  documents: DocRef[];
 }
 
 interface SnapshotData {
   people: PersonSummary[];
-  unidentified: { documentCount: number; categories: string[] } | null;
+  unidentified: UnidentifiedSummary | null;
 }
 
 interface FallbackStats {
@@ -68,6 +91,67 @@ function formatRange(range: { start: string; end: string } | null): string | nul
   if (!start) return end ?? null;
   if (!end || start === end) return start;
   return `${start} – ${end}`;
+}
+
+function UnidentifiedCard({ unidentified }: { unidentified: UnidentifiedSummary }) {
+  const [expanded, setExpanded] = useState(false);
+  const { documentCount, categories, documents } = unidentified;
+  return (
+    <div className="rounded-xl border border-panel bg-control-subtle p-3 flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <span className="flex items-center justify-center size-6 rounded-full bg-orange-9 text-white shrink-0">
+          <HelpCircle className="size-3.5" strokeWidth={2.2} />
+        </span>
+        <Text variant="strong" className="flex-1">
+          Unidentified
+        </Text>
+        <Badge color="secondary" className="tabular-nums shrink-0">
+          {documentCount} doc{documentCount === 1 ? "" : "s"}
+        </Badge>
+      </div>
+      <Text variant="small" color="secondary">
+        {documentCount === 1 ? "This document" : "These documents"} couldn&apos;t be confidently linked to a person.
+      </Text>
+      {categories.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {categories.map((c) => (
+            <Badge key={c} color="secondary">
+              {c}
+            </Badge>
+          ))}
+        </div>
+      ) : null}
+      {documents.length > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="flex items-center gap-1 text-secondary hover:text-primary transition-colors self-start"
+          >
+            <ChevronRight className={cn("size-3.5 transition-transform", expanded && "rotate-90")} />
+            <Text variant="small" color="secondary">
+              {expanded ? "Hide files" : "View files"}
+            </Text>
+          </button>
+          {expanded ? (
+            <div className="flex flex-col gap-1 pl-1 border-l border-panel">
+              {documents.map((doc) => (
+                <div key={doc.docId} className="flex items-center gap-1.5 pl-2">
+                  <FileText className="size-3.5 text-tertiary shrink-0" />
+                  <Text variant="small" color="tertiary" className="truncate" title={doc.filename}>
+                    {doc.filename}
+                  </Text>
+                </div>
+              ))}
+              <Text variant="small" color="tertiary" className="pl-2 pt-1 italic">
+                Tip: rename or reassign people in Settings.
+              </Text>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 function PersonCard({ name, documentCount, dateRange, categories, icon }: PersonSummary & { icon: "user" | "users" }) {
@@ -149,6 +233,7 @@ export function SnapshotView() {
   const fallback = response?.fallback;
   const blockedMessage = response?.aiBlocked ? (BLOCKED_MESSAGE[response.aiBlocked] ?? BLOCKED_MESSAGE.disabled) : null;
   const hasPeople = !!snapshot && (snapshot.people.length > 0 || !!snapshot.unidentified);
+  const unidentifiedCount = snapshot?.unidentified?.documentCount ?? 0;
 
   return (
     <div className="h-full w-full p-2.5">
@@ -157,6 +242,15 @@ export function SnapshotView() {
         <div className="flex items-center gap-2 px-4 py-3 bg-accent text-accent-contrast shrink-0">
           <Vault className="size-4 shrink-0" strokeWidth={2.2} />
           <span className="font-semibold text-sm flex-1">Financial Snapshot</span>
+          {unidentifiedCount > 0 ? (
+            <span
+              className="flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-medium tabular-nums"
+              title={`${unidentifiedCount} document${unidentifiedCount === 1 ? "" : "s"} not attributed to a person`}
+            >
+              <HelpCircle className="size-3" strokeWidth={2.4} />
+              {unidentifiedCount}
+            </span>
+          ) : null}
           <button
             type="button"
             onClick={() => refresh.mutate()}
@@ -208,13 +302,7 @@ export function SnapshotView() {
                   <PersonCard key={person.name} {...person} icon="user" />
                 ))}
                 {snapshot!.unidentified && snapshot!.unidentified.documentCount > 0 ? (
-                  <PersonCard
-                    name="Unidentified"
-                    documentCount={snapshot!.unidentified.documentCount}
-                    dateRange={null}
-                    categories={snapshot!.unidentified.categories}
-                    icon="users"
-                  />
+                  <UnidentifiedCard unidentified={snapshot!.unidentified} />
                 ) : null}
               </>
             ) : null}

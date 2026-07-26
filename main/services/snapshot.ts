@@ -1,8 +1,9 @@
 /**
  * Financial snapshot: read the vault's Markdown files and use Glaze AI to
- * produce a high-level, per-person summary (who appears in the documents, how
- * many belong to each person, the date range they span, and which categories of
- * document were found). The result is cached so the popup can open instantly.
+ * attribute each document to a person, then aggregate a high-level, per-person
+ * summary (who appears, how many documents, the date range they span, and which
+ * categories were found). The raw per-document attribution is cached, so manual
+ * corrections (rename / merge / reassign) re-aggregate instantly without AI.
  *
  * Never throws for AI/consent problems — blocked states are returned so the
  * renderer can show a friendly message alongside the raw ingestion stats.
@@ -12,18 +13,36 @@ import * as fs from "node:fs/promises";
 import { generateObject, glaze, z, GlazeAIError } from "@glaze/core/ai";
 import { logger } from "@glaze/core/backend";
 
-import { getSnapshotCache, listDocuments, saveSnapshotCache } from "./database.js";
+import {
+  getSnapshotCache,
+  listDocumentOverrides,
+  listDocuments,
+  listNameOverrides,
+  saveSnapshotCache,
+} from "./database.js";
+
+export interface DocRef {
+  docId: number;
+  filename: string;
+}
 
 export interface PersonSummary {
   name: string;
   documentCount: number;
   dateRange: { start: string; end: string } | null;
   categories: string[];
+  documents: DocRef[];
+}
+
+export interface UnidentifiedSummary {
+  documentCount: number;
+  categories: string[];
+  documents: DocRef[];
 }
 
 export interface SnapshotData {
   people: PersonSummary[];
-  unidentified: { documentCount: number; categories: string[] } | null;
+  unidentified: UnidentifiedSummary | null;
 }
 
 export interface FallbackStats {
@@ -33,9 +52,9 @@ export interface FallbackStats {
 }
 
 export interface SnapshotResponse {
-  /** The AI summary (fresh, or the last cached one when a refresh is blocked). */
+  /** The aggregated summary (fresh, or the last cached one when a refresh is blocked). */
   snapshot: SnapshotData | null;
-  /** ISO timestamp of when `snapshot` was generated. */
+  /** ISO timestamp of when the underlying attribution was generated. */
   generatedAt: string | null;
   /** GlazeAIError.state when the AI step was blocked. */
   aiBlocked?: string;
@@ -45,49 +64,59 @@ export interface SnapshotResponse {
   fallback: FallbackStats;
 }
 
+/** One document's AI attribution, resolved to a concrete database record. */
+interface Attribution {
+  docId: number;
+  filename: string;
+  fileType: string;
+  /** Raw person name from the AI, or null when the AI couldn't attribute it. */
+  person: string | null;
+  category: string;
+  /** ISO-ish period the document covers (YYYY / YYYY-MM / YYYY-MM-DD), or null. */
+  periodStart: string | null;
+  periodEnd: string | null;
+}
+
+interface CachedAttributions {
+  version: 2;
+  attributions: Attribution[];
+}
+
 // Bound AI input so a large vault doesn't burn excess credits.
 const MAX_TOTAL_CHARS = 24000;
 const MAX_PER_DOC = 1800;
 const MAX_DOCS = 60;
 
 const snapshotSchema = z.object({
-  people: z
+  attributions: z
     .array(
       z.object({
-        name: z.string().describe("The person's name exactly as it appears in the document content"),
-        documentCount: z
+        documentIndex: z
           .number()
           .int()
-          .describe("How many of the provided documents clearly belong to this person"),
-        dateRange: z
-          .object({
-            start: z.string().describe("Earliest period the person's documents cover, e.g. 'Jan 2024'"),
-            end: z.string().describe("Latest period the person's documents cover, e.g. 'Jun 2024'"),
-          })
+          .describe("The 'Document N' number from the input this attribution refers to"),
+        person: z
+          .string()
           .nullable()
-          .describe("Date range inferred from document content, or null if unclear"),
-        categories: z
-          .array(z.string())
-          .describe("Distinct document categories, e.g. 'bank statement', 'tax document', 'insurance'"),
+          .describe(
+            "The account holder / signatory's name exactly as it appears in the document content, " +
+              "or null if the document can't be confidently attributed to a named person",
+          ),
+        category: z
+          .string()
+          .describe("Document category, e.g. 'bank statement', 'tax document', 'insurance', 'credit card'"),
+        periodStart: z
+          .string()
+          .nullable()
+          .describe("Earliest date the document covers, as YYYY, YYYY-MM, or YYYY-MM-DD; null if unclear"),
+        periodEnd: z
+          .string()
+          .nullable()
+          .describe("Latest date the document covers, as YYYY, YYYY-MM, or YYYY-MM-DD; null if unclear"),
       }),
     )
-    .describe("One entry per distinct person identified from document content"),
-  unidentified: z
-    .object({
-      documentCount: z.number().int(),
-      categories: z.array(z.string()),
-    })
-    .nullable()
-    .describe("Documents that could not be confidently attributed to a person, or null if there are none"),
+    .describe("Exactly one entry per provided document"),
 });
-
-function safeParse(json: string): SnapshotData | null {
-  try {
-    return JSON.parse(json) as SnapshotData;
-  } catch {
-    return null;
-  }
-}
 
 function buildFallback(): FallbackStats {
   const docs = listDocuments(500);
@@ -104,12 +133,105 @@ function buildFallback(): FallbackStats {
   return { totalDocuments: docs.length, documents, dateRange };
 }
 
+// ── Override resolution + aggregation ───────────────────────────────────
+
+/** Follow name remappings (rename / merge) to a canonical name, guarding cycles. */
+function resolveName(name: string, map: Map<string, string>): string {
+  let current = name;
+  const seen = new Set<string>();
+  while (map.has(current) && !seen.has(current)) {
+    seen.add(current);
+    current = map.get(current)!;
+  }
+  return current;
+}
+
+/** Turn per-document attributions + manual overrides into a per-person summary. */
+function aggregate(attributions: Attribution[]): SnapshotData {
+  const nameMap = new Map(listNameOverrides().map((o) => [o.from, o.to]));
+  const docMap = new Map(listDocumentOverrides().map((o) => [o.docId, o.person]));
+
+  const people = new Map<
+    string,
+    { categories: Set<string>; documents: DocRef[]; starts: string[]; ends: string[] }
+  >();
+  const unidentified = { categories: new Set<string>(), documents: [] as DocRef[] };
+
+  for (const attr of attributions) {
+    // A manual per-document pin wins over the AI's attribution.
+    let effective: string | null;
+    if (docMap.has(attr.docId)) {
+      const pinned = docMap.get(attr.docId)!;
+      effective = pinned == null ? null : resolveName(pinned, nameMap);
+    } else {
+      effective = attr.person == null ? null : resolveName(attr.person, nameMap);
+    }
+
+    const ref: DocRef = { docId: attr.docId, filename: attr.filename };
+    const category = attr.category?.trim();
+
+    if (effective == null) {
+      if (category) unidentified.categories.add(category);
+      unidentified.documents.push(ref);
+      continue;
+    }
+
+    let bucket = people.get(effective);
+    if (!bucket) {
+      bucket = { categories: new Set(), documents: [], starts: [], ends: [] };
+      people.set(effective, bucket);
+    }
+    if (category) bucket.categories.add(category);
+    bucket.documents.push(ref);
+    if (attr.periodStart) bucket.starts.push(attr.periodStart);
+    if (attr.periodEnd) bucket.ends.push(attr.periodEnd);
+  }
+
+  const peopleList: PersonSummary[] = Array.from(people.entries())
+    .map(([name, b]) => {
+      const start = b.starts.length ? b.starts.slice().sort()[0] : null;
+      const end = b.ends.length ? b.ends.slice().sort()[b.ends.length - 1] : null;
+      return {
+        name,
+        documentCount: b.documents.length,
+        dateRange: start || end ? { start: start ?? end!, end: end ?? start! } : null,
+        categories: Array.from(b.categories),
+        documents: b.documents,
+      };
+    })
+    .sort((a, b) => b.documentCount - a.documentCount || a.name.localeCompare(b.name));
+
+  return {
+    people: peopleList,
+    unidentified:
+      unidentified.documents.length > 0
+        ? {
+            documentCount: unidentified.documents.length,
+            categories: Array.from(unidentified.categories),
+            documents: unidentified.documents,
+          }
+        : null,
+  };
+}
+
+function parseCache(json: string): Attribution[] | null {
+  try {
+    const parsed = JSON.parse(json) as Partial<CachedAttributions>;
+    if (parsed && parsed.version === 2 && Array.isArray(parsed.attributions)) {
+      return parsed.attributions;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** Read Markdown excerpts for the vault's documents, bounded for the AI. */
-async function buildAiInput(): Promise<string> {
+async function buildAiInput(): Promise<{ text: string; docs: ReturnType<typeof listDocuments> }> {
   const docs = listDocuments(MAX_DOCS);
+  const used: typeof docs = [];
   const blocks: string[] = [];
   let total = 0;
-  let index = 0;
   for (const doc of docs) {
     let content = "";
     try {
@@ -118,7 +240,7 @@ async function buildAiInput(): Promise<string> {
       content = "";
     }
     const excerpt = content.slice(0, MAX_PER_DOC).trim();
-    index += 1;
+    const index = used.length + 1;
     const block =
       `### Document ${index}\n` +
       `Filename: ${doc.originalFilename}\n` +
@@ -128,70 +250,93 @@ async function buildAiInput(): Promise<string> {
     if (total + block.length > MAX_TOTAL_CHARS) break;
     blocks.push(block);
     total += block.length;
+    used.push(doc);
   }
-  return blocks.join("\n");
+  return { text: blocks.join("\n"), docs: used };
 }
 
 /** Return the cached snapshot (if any) plus current fallback stats. No AI. */
 export function getCachedSnapshot(): SnapshotResponse {
   const cache = getSnapshotCache();
+  const attributions = cache ? parseCache(cache.json) : null;
   return {
-    snapshot: cache ? safeParse(cache.json) : null,
-    generatedAt: cache?.generatedAt ?? null,
+    snapshot: attributions ? aggregate(attributions) : null,
+    generatedAt: attributions ? (cache?.generatedAt ?? null) : null,
     fallback: buildFallback(),
   };
 }
 
-/** Re-run the AI summary, update the cache, and return the fresh result. */
+/** Re-run the AI attribution, update the cache, and return the fresh summary. */
 export async function refreshSnapshot(): Promise<SnapshotResponse> {
   const fallback = buildFallback();
   const cache = getSnapshotCache();
-  const previous = cache ? safeParse(cache.json) : null;
+  const previous = cache ? parseCache(cache.json) : null;
 
   // Empty vault: nothing to summarize — don't spend AI credits.
   if (fallback.totalDocuments === 0) {
-    const empty: SnapshotData = { people: [], unidentified: null };
     const now = new Date().toISOString();
-    saveSnapshotCache(JSON.stringify(empty), now);
-    return { snapshot: empty, generatedAt: now, fallback };
+    saveSnapshotCache(JSON.stringify({ version: 2, attributions: [] } satisfies CachedAttributions), now);
+    return { snapshot: { people: [], unidentified: null }, generatedAt: now, fallback };
   }
 
-  const documentsText = await buildAiInput();
+  const { text: documentsText, docs } = await buildAiInput();
 
   try {
     const { object } = await generateObject({
       model: glaze("fast"),
       schema: snapshotSchema,
       system:
-        "You analyze a collection of personal financial documents and produce a high-level, " +
-        "factual snapshot grouped by person. Identify each distinct person by their name as it " +
-        "appears in the document content (account holders, signatories, addressees) — never infer " +
-        "a person from a filename. Only attribute a document to a person when the content clearly " +
-        "names them; otherwise count it under 'unidentified'. Stay high-level: do not compute " +
-        "balances or transaction-level detail. Never invent people, counts, dates, or categories.",
+        "You analyze a collection of personal financial documents and attribute each one to a person. " +
+        "Identify the person by their name as it appears in the document content (account holders, " +
+        "signatories, addressees) — never infer a person from a filename. Only attribute a document to a " +
+        "person when the content clearly names them; otherwise set person to null. Stay high-level: do not " +
+        "compute balances or transaction-level detail. Never invent people, dates, or categories.",
       prompt:
-        `Below are ${fallback.totalDocuments} documents from a personal financial vault. ` +
-        "For each identified person, report their name, how many of these documents belong to them, " +
-        "the date range their documents span (from dates found in the content, or null if unclear), " +
-        "and the categories of document found (e.g. bank statement, tax document, investment " +
-        "statement, insurance, credit card). Group any documents you cannot confidently attribute " +
-        `to a named person under 'unidentified'.\n\n${documentsText}`,
+        `Below are ${docs.length} documents from a personal financial vault. Return exactly one attribution ` +
+        "per document (matched by its 'Document N' number), each with the person it belongs to (or null if " +
+        "unattributable), a category (e.g. bank statement, tax document, investment statement, insurance, " +
+        `credit card), and the period the document covers.\n\n${documentsText}`,
     });
 
-    const snapshot = object as SnapshotData;
+    const raw = (object as z.infer<typeof snapshotSchema>).attributions;
+    const byIndex = new Map<number, (typeof raw)[number]>();
+    for (const a of raw) byIndex.set(a.documentIndex, a);
+
+    // Resolve every input document to an attribution; anything the AI omitted
+    // is kept as unidentified so per-person counts always cover the whole vault.
+    const attributions: Attribution[] = docs.map((doc, i) => {
+      const a = byIndex.get(i + 1);
+      return {
+        docId: doc.id,
+        filename: doc.originalFilename,
+        fileType: doc.fileType,
+        person: a?.person?.trim() ? a.person.trim() : null,
+        category: a?.category?.trim() ? a.category.trim() : "document",
+        periodStart: a?.periodStart?.trim() || null,
+        periodEnd: a?.periodEnd?.trim() || null,
+      };
+    });
+
     const now = new Date().toISOString();
-    saveSnapshotCache(JSON.stringify(snapshot), now);
+    saveSnapshotCache(JSON.stringify({ version: 2, attributions } satisfies CachedAttributions), now);
+    const snapshot = aggregate(attributions);
     logger.info("snapshot", "Generated financial snapshot", {
       people: snapshot.people.length,
       unidentified: snapshot.unidentified?.documentCount ?? 0,
     });
     return { snapshot, generatedAt: now, fallback };
   } catch (error) {
+    const previousSnapshot = previous ? aggregate(previous) : null;
     if (error instanceof GlazeAIError) {
       logger.info("snapshot", "AI snapshot blocked", { state: error.state });
-      return { snapshot: previous, generatedAt: cache?.generatedAt ?? null, aiBlocked: error.state, fallback };
+      return {
+        snapshot: previousSnapshot,
+        generatedAt: cache?.generatedAt ?? null,
+        aiBlocked: error.state,
+        fallback,
+      };
     }
     logger.warn("snapshot", "AI snapshot failed", { error: String(error) });
-    return { snapshot: previous, generatedAt: cache?.generatedAt ?? null, error: String(error), fallback };
+    return { snapshot: previousSnapshot, generatedAt: cache?.generatedAt ?? null, error: String(error), fallback };
   }
 }

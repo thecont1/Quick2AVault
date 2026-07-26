@@ -64,6 +64,21 @@ function getDb(): DatabaseSync {
       generated_at TEXT NOT NULL
     );
   `);
+  // Manual corrections the user makes to the AI's attribution:
+  //  - person_name_overrides maps one person name onto another (rename / merge).
+  //  - document_overrides pins a single document to a person (NULL = unidentified).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS person_name_overrides (
+      from_name TEXT PRIMARY KEY,
+      to_name TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS document_overrides (
+      doc_id INTEGER PRIMARY KEY,
+      person TEXT
+    );
+  `);
   logger.info("database", "Document database ready", { dbPath });
   return db;
 }
@@ -116,6 +131,11 @@ export function listDocuments(limit = 200): DocumentRecord[] {
   return rows.map(mapRow);
 }
 
+export function findDocumentById(id: number): DocumentRecord | null {
+  const row = getDb().prepare("SELECT * FROM documents WHERE id = ?").get(id) as Row | undefined;
+  return row ? mapRow(row) : null;
+}
+
 export function getStats(): { total: number; converted: number } {
   const row = getDb()
     .prepare(
@@ -149,4 +169,48 @@ export function saveSnapshotCache(json: string, generatedAt: string): void {
        ON CONFLICT(id) DO UPDATE SET json = excluded.json, generated_at = excluded.generated_at`,
     )
     .run(json, generatedAt);
+}
+
+// ── Manual attribution corrections ──────────────────────────────────────
+
+/** All person-name remappings (rename / merge), as { from → to } pairs. */
+export function listNameOverrides(): { from: string; to: string }[] {
+  const rows = getDb().prepare("SELECT from_name, to_name FROM person_name_overrides").all() as Row[];
+  return rows.map((r) => ({ from: String(r.from_name), to: String(r.to_name) }));
+}
+
+/** Remap one person name onto another (used for both rename and merge). */
+export function setNameOverride(from: string, to: string): void {
+  if (!from || !to || from === to) return;
+  getDb()
+    .prepare(
+      `INSERT INTO person_name_overrides (from_name, to_name)
+       VALUES (?, ?)
+       ON CONFLICT(from_name) DO UPDATE SET to_name = excluded.to_name`,
+    )
+    .run(from, to);
+  // If the target already pointed elsewhere, keep chains from looping back.
+  getDb().prepare("DELETE FROM person_name_overrides WHERE from_name = ? AND to_name = ?").run(to, from);
+}
+
+/** Per-document attribution pins. `person === null` forces "unidentified". */
+export function listDocumentOverrides(): { docId: number; person: string | null }[] {
+  const rows = getDb().prepare("SELECT doc_id, person FROM document_overrides").all() as Row[];
+  return rows.map((r) => ({ docId: Number(r.doc_id), person: r.person == null ? null : String(r.person) }));
+}
+
+/** Pin a document to a person, or to "unidentified" when person is null. */
+export function setDocumentOverride(docId: number, person: string | null): void {
+  getDb()
+    .prepare(
+      `INSERT INTO document_overrides (doc_id, person)
+       VALUES (?, ?)
+       ON CONFLICT(doc_id) DO UPDATE SET person = excluded.person`,
+    )
+    .run(docId, person);
+}
+
+/** Clear a document's manual pin so it follows the AI attribution again. */
+export function removeDocumentOverride(docId: number): void {
+  getDb().prepare("DELETE FROM document_overrides WHERE doc_id = ?").run(docId);
 }
