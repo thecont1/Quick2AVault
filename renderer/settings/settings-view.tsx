@@ -36,7 +36,11 @@ import type { NativeThemeInfo } from "@glaze/core/ipc";
 import {
   ArrowRight,
   Check,
+  CheckCheck,
+  CheckCircle2,
   ChevronRight,
+  ClipboardList,
+  Clock,
   FolderOpen,
   GraduationCap,
   Info,
@@ -883,6 +887,371 @@ function PeopleSection() {
   );
 }
 
+// ── Review Queue ────────────────────────────────────────────────────────────
+
+type ReviewField = "person" | "doc_type" | "vendor" | "doc_date" | "amount" | "fx";
+type ReviewStatus = "low_confidence" | "conflict" | "missing" | "confirmed" | "corrected";
+
+interface QueueFieldRef {
+  field: ReviewField;
+  status: ReviewStatus;
+}
+
+interface ReviewQueueItem {
+  docId: number;
+  filename: string;
+  fileType: string;
+  dateIngested: string;
+  pendingFields: QueueFieldRef[];
+}
+
+interface FieldReview {
+  field: ReviewField;
+  extractedValue: string | null;
+  confidence: number;
+  source: string;
+  reason: string;
+  suggestedValue: string | null;
+  finalValue: string | null;
+  status: ReviewStatus;
+}
+
+interface ReviewAuditEntry {
+  field: ReviewField;
+  action: string;
+  oldValue: string | null;
+  newValue: string | null;
+  at: string;
+}
+
+interface ReviewDetail {
+  docId: number;
+  filename: string;
+  fields: FieldReview[];
+  audit: ReviewAuditEntry[];
+}
+
+interface ResolveResult {
+  ok: boolean;
+  message?: string;
+}
+
+const FIELD_LABEL: Record<ReviewField, string> = {
+  person: "Person",
+  doc_type: "Document type",
+  vendor: "Vendor / institution",
+  doc_date: "Document date",
+  amount: "Primary amount",
+  fx: "Currency conversion",
+};
+
+const STATUS_META: Record<ReviewStatus, { label: string; color: "yellow" | "red" | "orange" | "green" | "blue" }> = {
+  low_confidence: { label: "Low confidence", color: "yellow" },
+  conflict: { label: "Conflict", color: "red" },
+  missing: { label: "Missing", color: "orange" },
+  confirmed: { label: "Confirmed", color: "green" },
+  corrected: { label: "Corrected", color: "blue" },
+};
+
+const REVIEW_SOURCE_LABEL: Record<string, string> = {
+  ai_inferred: "AI inferred",
+  learned_rule: "Learned rule",
+  user_confirmed: "You confirmed",
+  manual: "You set",
+};
+
+const PENDING = new Set<ReviewStatus>(["low_confidence", "conflict", "missing"]);
+
+/** One field within a document's review detail, with confirm / correct / defer. */
+function FieldReviewRow({
+  review,
+  onResolve,
+}: {
+  review: FieldReview;
+  onResolve: (action: "confirm" | "correct" | "defer", value?: string) => void;
+}) {
+  const [correcting, setCorrecting] = useState(false);
+  const [draft, setDraft] = useState(review.suggestedValue ?? review.extractedValue ?? "");
+  const meta = STATUS_META[review.status];
+  const pending = PENDING.has(review.status);
+
+  const commit = () => {
+    const next = draft.trim();
+    if (next) onResolve("correct", next);
+    setCorrecting(false);
+  };
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-2.5">
+      <div className="flex items-center gap-2">
+        <Text variant="small" className="font-medium flex-1">
+          {FIELD_LABEL[review.field]}
+        </Text>
+        <Badge color={meta.color}>{meta.label}</Badge>
+      </div>
+
+      <div className="flex flex-col gap-0.5">
+        <div className="flex items-baseline gap-2">
+          <Text variant="small" color="tertiary" className="w-20 shrink-0">
+            Extracted
+          </Text>
+          <Text variant="small" className="flex-1 min-w-0 break-words">
+            {review.finalValue ?? review.extractedValue ?? "—"}
+          </Text>
+        </div>
+        <div className="flex items-baseline gap-2">
+          <Text variant="small" color="tertiary" className="w-20 shrink-0">
+            Confidence
+          </Text>
+          <Text variant="small" color="secondary" className="tabular-nums">
+            {Math.round(review.confidence * 100)}% · {REVIEW_SOURCE_LABEL[review.source] ?? review.source}
+          </Text>
+        </div>
+        {review.reason ? (
+          <div className="flex items-baseline gap-2">
+            <Text variant="small" color="tertiary" className="w-20 shrink-0">
+              Why
+            </Text>
+            <Text variant="small" color="secondary" className="flex-1 min-w-0 break-words">
+              {review.reason}
+            </Text>
+          </div>
+        ) : null}
+        {pending && review.suggestedValue ? (
+          <div className="flex items-baseline gap-2">
+            <Text variant="small" color="tertiary" className="w-20 shrink-0">
+              Suggested
+            </Text>
+            <Text variant="small" className="flex-1 min-w-0 break-words font-medium">
+              {review.suggestedValue}
+            </Text>
+          </div>
+        ) : null}
+      </div>
+
+      {correcting ? (
+        <div className="flex items-center gap-2">
+          <Input
+            autoFocus
+            size="small"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder={review.field === "person" ? "Correct name, or “Unidentified”" : "Correct value"}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commit();
+              if (e.key === "Escape") setCorrecting(false);
+            }}
+            className="flex-1"
+          />
+          <Button size="small" variant="accent" onClick={commit}>
+            <Check className="size-3.5" />
+            Save
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {pending ? (
+            <>
+              {review.suggestedValue ? (
+                <Button size="small" variant="accent" onClick={() => onResolve("confirm")}>
+                  <Check className="size-3.5" />
+                  Confirm
+                </Button>
+              ) : null}
+              <Button size="small" variant="transparent" onClick={() => setCorrecting(true)}>
+                <Pencil className="size-3.5" />
+                Correct
+              </Button>
+              <Button size="small" variant="transparent" onClick={() => onResolve("defer")}>
+                <Clock className="size-3.5" />
+                Later
+              </Button>
+            </>
+          ) : (
+            <>
+              <span className="flex items-center gap-1 text-green-11">
+                <CheckCircle2 className="size-3.5" />
+                <Text variant="small" color="secondary">
+                  {review.status === "corrected" ? "Corrected" : "Confirmed"}
+                </Text>
+              </span>
+              <Button size="small" variant="transparent" onClick={() => setCorrecting(true)}>
+                <Pencil className="size-3.5" />
+                Change
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Expanded detail for one document: every tracked field + an audit trail. */
+function DocumentReviewCard({ docId }: { docId: number }) {
+  const queryClient = useQueryClient();
+  const [showAudit, setShowAudit] = useState(false);
+
+  const detailQuery = useQuery({
+    queryKey: ["reviewDetail", docId],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<ReviewDetail | null>("reviews:detail", docId),
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["reviewDetail", docId] });
+    queryClient.invalidateQueries({ queryKey: ["reviewQueue"] });
+    queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    queryClient.invalidateQueries({ queryKey: ["vaultDocuments"] });
+  };
+
+  const resolve = useMutation({
+    mutationFn: (vars: { field: ReviewField; action: "confirm" | "correct" | "defer"; value?: string }) =>
+      window.glazeAPI.glaze.ipc.invoke<ResolveResult>("reviews:resolve", docId, vars.field, vars.action, vars.value),
+    onSuccess: (result) => {
+      if (result?.message) toast(result.message);
+      invalidate();
+    },
+    onError: (error) => toast.error(`Couldn't save: ${error}`),
+  });
+
+  const confirmAll = useMutation({
+    mutationFn: () => window.glazeAPI.glaze.ipc.invoke<{ confirmed: number }>("reviews:confirmAll", docId),
+    onSuccess: (result) => {
+      if (result?.confirmed) toast(`Confirmed ${result.confirmed} field${result.confirmed === 1 ? "" : "s"}`);
+      invalidate();
+    },
+    onError: (error) => toast.error(`Couldn't confirm all: ${error}`),
+  });
+
+  const detail = detailQuery.data;
+  if (!detail) {
+    return (
+      <div className="px-3 py-2">
+        <Text variant="small" color="tertiary">
+          Loading…
+        </Text>
+      </div>
+    );
+  }
+
+  const pendingWithSuggestion = detail.fields.some((f) => PENDING.has(f.status) && f.suggestedValue);
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-panel bg-panel/40 px-3 py-3">
+      {pendingWithSuggestion ? (
+        <Button size="small" variant="accent" className="self-start" onClick={() => confirmAll.mutate()}>
+          <CheckCheck className="size-3.5" />
+          Confirm all suggestions
+        </Button>
+      ) : null}
+
+      {detail.fields.map((f) => (
+        <FieldReviewRow
+          key={f.field}
+          review={f}
+          onResolve={(action, value) => resolve.mutate({ field: f.field, action, value })}
+        />
+      ))}
+
+      {detail.audit.length > 0 ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowAudit((v) => !v)}
+            className="flex items-center gap-0.5 text-secondary hover:text-primary transition-colors self-start"
+          >
+            <ChevronRight className={cn("size-3.5 transition-transform", showAudit && "rotate-90")} />
+            <Text variant="small" color="secondary">
+              Audit trail ({detail.audit.length})
+            </Text>
+          </button>
+          {showAudit ? (
+            <div className="flex flex-col gap-1 pl-1 border-l border-panel">
+              {detail.audit.map((a, i) => (
+                <Text key={i} variant="small" color="tertiary" className="pl-2">
+                  {formatDate(a.at)} · {FIELD_LABEL[a.field]} {a.action}
+                  {a.newValue ? ` → "${a.newValue}"` : a.oldValue ? ` (was "${a.oldValue}")` : ""}
+                </Text>
+              ))}
+            </div>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function ReviewQueueSection() {
+  const [openDocId, setOpenDocId] = useState<number | null>(null);
+
+  const queueQuery = useQuery({
+    queryKey: ["reviewQueue"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<ReviewQueueItem[]>("reviews:queue"),
+  });
+
+  const items = queueQuery.data ?? [];
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Text variant="strong" className="flex-1">
+          Review Queue
+        </Text>
+        {items.length > 0 ? (
+          <Badge color="orange" className="tabular-nums">
+            {items.length} to review
+          </Badge>
+        ) : null}
+      </div>
+
+      {items.length === 0 ? (
+        <div className="flex items-center gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-3">
+          <CheckCircle2 className="size-4 text-green-11 shrink-0" />
+          <Text variant="small" color="secondary">
+            You&apos;re all caught up — nothing needs review.
+          </Text>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <Text variant="small" color="secondary">
+            Documents the app wasn&apos;t sure about. Confirm, correct, or defer each field.
+          </Text>
+          <div className="flex flex-col gap-2">
+            {items.map((item) => {
+              const open = openDocId === item.docId;
+              return (
+                <div key={item.docId} className="rounded-lg border border-panel overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setOpenDocId(open ? null : item.docId)}
+                    className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-control-subtle transition-colors text-left"
+                  >
+                    <ClipboardList className="size-4 text-secondary shrink-0" />
+                    <div className="flex flex-col min-w-0 flex-1 gap-1">
+                      <Text variant="small" className="font-medium truncate" title={item.filename}>
+                        {item.filename}
+                      </Text>
+                      <div className="flex flex-wrap gap-1">
+                        {item.pendingFields.map((f) => (
+                          <Badge key={f.field} color={STATUS_META[f.status].color}>
+                            {FIELD_LABEL[f.field]}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                    <ChevronRight className={cn("size-4 text-tertiary shrink-0 transition-transform", open && "rotate-90")} />
+                  </button>
+                  {open ? <DocumentReviewCard docId={item.docId} /> : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function SettingsView() {
   useTheme();
   const queryClient = useQueryClient();
@@ -1001,6 +1370,11 @@ export function SettingsView() {
             </Button>
           </div>
         </section>
+
+        <Separator />
+
+        {/* Review Queue */}
+        <ReviewQueueSection />
 
         <Separator />
 

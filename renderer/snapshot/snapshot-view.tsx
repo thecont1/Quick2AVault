@@ -9,6 +9,7 @@ import {
   ArrowRight,
   CalendarRange,
   ChevronRight,
+  ClipboardList,
   Coins,
   FileText,
   HelpCircle,
@@ -427,6 +428,20 @@ export function SnapshotView() {
     queryFn: () => window.glazeAPI.glaze.ipc.invoke<SnapshotResponse>("snapshot:getCached"),
   });
 
+  const reviewCountQuery = useQuery({
+    queryKey: ["reviewCount"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<number>("reviews:count"),
+  });
+
+  // Keep the review pill live as items are resolved elsewhere (or on refresh).
+  useEffect(() => {
+    const unsubscribe = window.glazeAPI.glaze.ipc.on("review:changed", (_event, payload: unknown) => {
+      const count = (payload as { count?: number } | undefined)?.count;
+      if (typeof count === "number") queryClient.setQueryData(["reviewCount"], count);
+    });
+    return () => unsubscribe();
+  }, [queryClient]);
+
   const refresh = useMutation({
     mutationFn: async () => {
       // Keep the popup open through the refresh (and any AI consent dialog).
@@ -439,6 +454,8 @@ export function SnapshotView() {
     },
     onSuccess: (data) => {
       queryClient.setQueryData(["snapshot"], data);
+      // A refresh runs person entity resolution, which can add review items.
+      queryClient.invalidateQueries({ queryKey: ["reviewCount"] });
     },
   });
 
@@ -451,6 +468,7 @@ export function SnapshotView() {
     !!snapshot && (snapshot.people.length > 0 || !!snapshot.unidentified || !!snapshot.needsReview);
   const unidentifiedCount = snapshot?.unidentified?.documentCount ?? 0;
   const needsReviewCount = snapshot?.needsReview?.documentCount ?? 0;
+  const pendingReviews = reviewCountQuery.data ?? 0;
 
   return (
     <div className="h-full w-full p-2.5">
@@ -459,6 +477,17 @@ export function SnapshotView() {
         <div className="flex items-center gap-2 px-4 py-3 bg-accent text-accent-contrast shrink-0">
           <Vault className="size-4 shrink-0" strokeWidth={2.2} />
           <span className="font-semibold text-sm flex-1">Financial Snapshot</span>
+          {pendingReviews > 0 ? (
+            <button
+              type="button"
+              onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings")}
+              title={`${pendingReviews} document${pendingReviews === 1 ? "" : "s"} waiting in the Review Queue — open Settings`}
+              className="flex items-center gap-1 rounded-full bg-white/20 hover:bg-white/30 px-2 py-0.5 text-[11px] font-medium tabular-nums transition-colors"
+            >
+              <ClipboardList className="size-3" strokeWidth={2.4} />
+              {pendingReviews}
+            </button>
+          ) : null}
           {needsReviewCount > 0 ? (
             <span
               className="flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-medium tabular-nums"

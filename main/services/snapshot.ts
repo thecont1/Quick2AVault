@@ -28,6 +28,7 @@ import {
   resolvePersonForName,
   seedPeopleFromExisting,
 } from "./people.js";
+import { recordPersonReview } from "./reviews.js";
 
 export interface DocRef {
   docId: number;
@@ -422,7 +423,32 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
     // ontology (create/link + evidence) before caching and aggregating.
     seedPeopleFromExisting();
     for (const a of attributions) {
-      if (a.person) resolvePersonForName(a.person, { docId: a.docId, filename: a.filename });
+      if (a.person) {
+        const res = resolvePersonForName(a.person, { docId: a.docId, filename: a.filename });
+        if (res.uncertain) {
+          // An uncertain identity match — surface it for review.
+          recordPersonReview({
+            docId: a.docId,
+            extracted: res.uncertain.detected,
+            suggested: res.uncertain.suggested,
+            confidence: res.uncertain.score,
+            status: "conflict",
+            reason: res.uncertain.reason,
+          });
+        } else {
+          recordPersonReview({ docId: a.docId, extracted: a.person, suggested: a.person, confidence: 0.9, status: "confirmed", reason: "" });
+        }
+      } else {
+        // The AI couldn't attribute this document to a named person.
+        recordPersonReview({
+          docId: a.docId,
+          extracted: null,
+          suggested: "Unidentified",
+          confidence: 0,
+          status: "missing",
+          reason: "Couldn’t confidently attribute this document to a named person.",
+        });
+      }
     }
     consolidateCandidateDuplicates();
 

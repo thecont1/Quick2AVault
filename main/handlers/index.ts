@@ -25,10 +25,19 @@ import {
   removeDocumentOverride,
   setDocumentOverride,
   PERSON_ROLES,
+  REVIEW_FIELDS,
   type PersonRole,
+  type ReviewField,
   type RuleType,
 } from "../services/database.js";
 import { getCachedSnapshot, refreshSnapshot } from "../services/snapshot.js";
+import {
+  confirmAllSuggestions,
+  getDocumentReviewDetail,
+  listReviewQueue,
+  resolveField,
+  reviewCount,
+} from "../services/reviews.js";
 import {
   addPersonAlias,
   confirmNameForPerson,
@@ -110,6 +119,17 @@ function toTrainingAnswers(value: unknown): TrainingAnswer[] {
 /** Tell the orb (and any listeners) how many training reviews are pending. */
 function broadcastTraining(): void {
   ipcMain.broadcast("training:changed", { pendingCount: getPendingReviewCount(), mode: isTrainingMode() });
+}
+
+/** Tell listeners (snapshot header, etc.) how many documents await review. */
+function broadcastReview(): void {
+  ipcMain.broadcast("review:changed", { count: reviewCount() });
+}
+
+const REVIEW_ACTIONS = new Set(["confirm", "correct", "defer"]);
+
+function isReviewField(value: unknown): value is ReviewField {
+  return typeof value === "string" && (REVIEW_FIELDS as string[]).includes(value);
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -202,7 +222,10 @@ export function registerHandlers(): void {
   });
 
   ipcMain.handle("snapshot:refresh", async () => {
-    return await refreshSnapshot();
+    const result = await refreshSnapshot();
+    // A refresh runs person entity resolution, which may add person reviews.
+    broadcastReview();
+    return result;
   });
 
   ipcMain.handle("snapshot:setBusy", async (_event, value: boolean) => {
@@ -381,6 +404,48 @@ export function registerHandlers(): void {
   ipcMain.handle("training:reset", async () => {
     await resetTrainingProgress();
     broadcastTraining();
+  });
+
+  // ── Review Queue ────────────────────────────────────────────────────
+  ipcMain.handle("reviews:queue", async () => {
+    return listReviewQueue();
+  });
+
+  ipcMain.handle("reviews:detail", async (_event, docId: number) => {
+    const id = Number(docId);
+    return Number.isFinite(id) ? getDocumentReviewDetail(id) : null;
+  });
+
+  ipcMain.handle("reviews:count", async () => {
+    return reviewCount();
+  });
+
+  ipcMain.handle("reviews:resolve", async (_event, docId: number, field: unknown, action: unknown, value: unknown) => {
+    const id = Number(docId);
+    if (!Number.isFinite(id) || !isReviewField(field) || typeof action !== "string" || !REVIEW_ACTIONS.has(action)) {
+      return { ok: false, message: "Invalid review action." };
+    }
+    const result = await resolveField(
+      id,
+      field,
+      action as "confirm" | "correct" | "defer",
+      typeof value === "string" ? value : undefined,
+    );
+    broadcastReview();
+    if (result.ruleLearned || result.ruleReinforced) {
+      const verb = result.ruleLearned ? "Learned" : "Reinforced";
+      const tail = result.ruleAutoApplies ? " It will now auto-apply to future documents." : "";
+      void showToast(`${verb} a rule from your correction`, `Training Mode is getting smarter.${tail}`, "info");
+    }
+    return result;
+  });
+
+  ipcMain.handle("reviews:confirmAll", async (_event, docId: number) => {
+    const id = Number(docId);
+    if (!Number.isFinite(id)) return { confirmed: 0 };
+    const result = await confirmAllSuggestions(id);
+    broadcastReview();
+    return result;
   });
 
   logger.info("handlers", "✓ IPC handlers registered");

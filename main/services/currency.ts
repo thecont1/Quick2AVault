@@ -1,29 +1,26 @@
 /**
- * Foreign-currency detection & conversion.
+ * Foreign-currency conversion.
  *
- * For each ingested document we use Glaze AI to extract a single primary
- * amount, its currency, and the invoice date from the document content. If the
- * currency is foreign (USD / EUR / GBP / JPY) and the extraction is confident,
- * we fetch India's official FBIL benchmark rate for that date (via the free
- * Frankfurter API) and compute the rupee value at ingestion time. FBIL doesn't
- * publish rates on weekends / Mumbai bank holidays, so the API falls back to the
- * most recent prior business day — we record when that happened.
+ * Given a primary amount, its currency, and the invoice date (extracted upstream
+ * by the unified document extraction pass), and when the currency is foreign
+ * (USD / EUR / GBP / JPY) and the inputs are confident, we fetch India's official
+ * FBIL benchmark rate for that date (via the free Frankfurter API) and compute
+ * the rupee value. FBIL doesn't publish rates on weekends / Mumbai bank holidays,
+ * so the API falls back to the most recent prior business day — we record that.
  *
  * Anything uncertain (low confidence, missing amount/date, or an unavailable
  * rate) is flagged `needs_review` instead of guessing a wrong number. Never
- * throws — AI/network problems degrade to `none`/`needs_review`.
+ * throws — network problems degrade to `none`/`needs_review`.
  */
-import { generateObject, glaze, z, GlazeAIError } from "@glaze/core/ai";
 import { logger } from "@glaze/core/backend";
 
 import { getCachedRate, saveCachedRate, type CurrencyFields, type RateCacheEntry } from "./database.js";
 
 /** Currencies we convert to INR ("dollar, euro, pound, or yen"). */
-const FOREIGN = new Set(["USD", "EUR", "GBP", "JPY"]);
-const MAX_AI_CHARS = 8000;
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+export const FOREIGN = new Set(["USD", "EUR", "GBP", "JPY"]);
+export const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-const NONE: CurrencyFields = {
+export const CURRENCY_NONE: CurrencyFields = {
   foreignAmount: null,
   foreignCurrency: null,
   invoiceDate: null,
@@ -33,31 +30,6 @@ const NONE: CurrencyFields = {
   rateIsNearest: false,
   currencyStatus: "none",
 };
-
-const extractSchema = z.object({
-  currency: z
-    .enum(["USD", "EUR", "GBP", "JPY", "INR", "NONE"])
-    .describe(
-      "The currency of the document's primary/total amount. Use the ISO code for US dollars, euros, " +
-        "British pounds, Japanese yen, or Indian rupees; use NONE if there is no clear monetary amount.",
-    ),
-  amount: z
-    .number()
-    .nullable()
-    .describe(
-      "The document's single primary amount — the invoice total, grand total, or amount due — as a plain " +
-        "number without currency symbols or thousands separators. Null if there is no clear single total.",
-    ),
-  invoiceDate: z
-    .string()
-    .nullable()
-    .describe("The invoice / document date as YYYY-MM-DD. Null if no clear document date is present."),
-  confidence: z
-    .enum(["high", "low"])
-    .describe(
-      "'high' only if you are confident about BOTH the currency AND the amount AND the date; otherwise 'low'.",
-    ),
-});
 
 /**
  * Fetch the FBIL reference rate for `currency`→INR on `reqDate`, falling back to
@@ -93,58 +65,47 @@ async function fetchRate(currency: string, reqDate: string): Promise<RateCacheEn
 }
 
 /**
- * Analyze a document's text for a foreign-currency amount and, when confident,
- * convert it to INR at the invoice date's rate. Returns the currency fields to
- * store on the document record. Never throws.
+ * Convert an already-extracted primary amount to INR at the invoice date's FBIL
+ * rate. `confident` reflects whether the upstream extraction was sure about the
+ * currency/amount/date. Non-foreign currencies return `none`; uncertain inputs
+ * or an unavailable rate return `needs_review` (with the detected fields kept).
+ * Never throws.
  */
-export async function analyzeCurrency(text: string, filename: string): Promise<CurrencyFields> {
-  const excerpt = text.slice(0, MAX_AI_CHARS).trim();
-  if (!excerpt) return NONE;
-
-  let detected: z.infer<typeof extractSchema>;
-  try {
-    const { object } = await generateObject({
-      model: glaze("fast"),
-      schema: extractSchema,
-      system:
-        "You extract the single primary monetary amount, its currency, and the document date from a " +
-        "financial document (often an invoice). Read only what is present — never guess or infer a currency, " +
-        "amount, or date that isn't clearly stated. If the amount or currency is ambiguous, set confidence to 'low'.",
-      prompt: `Extract the primary amount, currency, and date from this document named "${filename}":\n\n${excerpt}`,
-    });
-    detected = object;
-  } catch (error) {
-    if (error instanceof GlazeAIError) {
-      logger.info("currency", "AI extraction blocked", { filename, state: error.state });
-    } else {
-      logger.warn("currency", "AI extraction failed", { filename, error: String(error) });
-    }
-    return NONE;
-  }
-
+export async function convertToInr(input: {
+  currency: string | null;
+  amount: number | null;
+  invoiceDate: string | null;
+  confident: boolean;
+  filename?: string;
+}): Promise<CurrencyFields> {
+  const currency = input.currency ?? "NONE";
   // Only foreign currencies are converted; INR/NONE need no conversion.
-  const currency = detected.currency;
-  if (!FOREIGN.has(currency)) return NONE;
+  if (!FOREIGN.has(currency)) return CURRENCY_NONE;
 
   const amount =
-    detected.amount != null && Number.isFinite(detected.amount) && detected.amount > 0 ? detected.amount : null;
+    input.amount != null && Number.isFinite(input.amount) && input.amount > 0 ? input.amount : null;
   const invoiceDate =
-    detected.invoiceDate && ISO_DATE.test(detected.invoiceDate.trim()) ? detected.invoiceDate.trim() : null;
+    input.invoiceDate && ISO_DATE.test(input.invoiceDate.trim()) ? input.invoiceDate.trim() : null;
 
   // Uncertain detection → flag for review instead of converting a wrong number.
-  if (detected.confidence === "low" || amount == null || invoiceDate == null) {
-    logger.info("currency", "Flagged for review", { filename, currency, hasAmount: amount != null, hasDate: invoiceDate != null });
-    return { ...NONE, foreignAmount: amount, foreignCurrency: currency, invoiceDate, currencyStatus: "needs_review" };
+  if (!input.confident || amount == null || invoiceDate == null) {
+    logger.info("currency", "Flagged for review", {
+      filename: input.filename,
+      currency,
+      hasAmount: amount != null,
+      hasDate: invoiceDate != null,
+    });
+    return { ...CURRENCY_NONE, foreignAmount: amount, foreignCurrency: currency, invoiceDate, currencyStatus: "needs_review" };
   }
 
   const rate = await fetchRate(currency, invoiceDate);
   if (!rate) {
     // A rate couldn't be obtained — surface it for review rather than guessing.
-    return { ...NONE, foreignAmount: amount, foreignCurrency: currency, invoiceDate, currencyStatus: "needs_review" };
+    return { ...CURRENCY_NONE, foreignAmount: amount, foreignCurrency: currency, invoiceDate, currencyStatus: "needs_review" };
   }
 
   const inrValue = Math.round(amount * rate.rate * 100) / 100;
-  logger.info("currency", "Converted foreign invoice", { filename, currency, amount, inrValue, rateDate: rate.rateDate });
+  logger.info("currency", "Converted foreign invoice", { filename: input.filename, currency, amount, inrValue, rateDate: rate.rateDate });
   return {
     foreignAmount: amount,
     foreignCurrency: currency,

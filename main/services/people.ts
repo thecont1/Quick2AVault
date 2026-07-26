@@ -156,18 +156,26 @@ const MATCH_KIND_DETAIL: Record<MatchKind, string> = {
   initials: "Initials / shortened variant",
 };
 
+/** The outcome of resolving a detected name, with an optional review signal. */
+export interface PersonResolution {
+  personId: number | null;
+  /** Set when the identity link is uncertain and should be reviewed. */
+  uncertain?: { detected: string; suggested: string | null; score: number; reason: string };
+}
+
 /**
  * Resolve a detected name to a canonical person, creating or linking as needed
  * and recording evidence. High-confidence variants attach to the existing
- * person; uncertain ones create a candidate flagged as a possible duplicate.
+ * person; uncertain ones create a candidate flagged as a possible duplicate and
+ * return an `uncertain` signal so the caller can route it to the Review Queue.
  */
 export function resolvePersonForName(
   rawName: string,
   ctx: { docId?: number; filename?: string } = {},
-): number | null {
+): PersonResolution {
   const name = rawName.trim();
   const norm = normalizeName(name);
-  if (!norm) return null;
+  if (!norm) return { personId: null };
   const where = ctx.filename ? `"${ctx.filename}"` : "a document";
 
   const existing = findAliasByNormalized(norm);
@@ -178,7 +186,7 @@ export function resolvePersonForName(
       detail: `Matched known name "${name}" in ${where}`,
       docId: ctx.docId ?? null,
     });
-    return existing.personId;
+    return { personId: existing.personId };
   }
 
   const match = matchName(name);
@@ -190,7 +198,7 @@ export function resolvePersonForName(
       detail: `${MATCH_KIND_DETAIL[match.kind]}: "${name}" ↔ "${match.matchedAlias}" (in ${where})`,
       docId: ctx.docId ?? null,
     });
-    return match.personId;
+    return { personId: match.personId };
   }
 
   // No confident match → new candidate person.
@@ -217,9 +225,18 @@ export function resolvePersonForName(
         detail: `Possibly the same person as "${other.displayName}" — confirm in Training Mode`,
         docId: ctx.docId ?? null,
       });
+      return {
+        personId: person.id,
+        uncertain: {
+          detected: name,
+          suggested: other.displayName,
+          score: match.score,
+          reason: `“${name}” might be the same person as “${other.displayName}” (${MATCH_KIND_DETAIL[match.kind].toLowerCase()}).`,
+        },
+      };
     }
   }
-  return person.id;
+  return { personId: person.id };
 }
 
 // ── Linked-document counts (resolved from the cached attribution) ───────────

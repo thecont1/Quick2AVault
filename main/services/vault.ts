@@ -10,8 +10,9 @@ import * as path from "node:path";
 import { app, logger } from "@glaze/core/backend";
 
 import { convertToMarkdown, getFileType } from "./converter.js";
-import { analyzeCurrency } from "./currency.js";
 import { findByHash, insertDocument } from "./database.js";
+import { extractDocument } from "./extraction.js";
+import { recordExtractionReviews } from "./reviews.js";
 
 export function getVaultRoot(): string {
   return path.join(app.getPath("documents"), "Quick2Afvault");
@@ -113,9 +114,10 @@ async function ingestOne(sourcePath: string): Promise<IngestResult> {
     const mdDest = path.join(mdDir, mdName);
     await fs.writeFile(mdDest, markdown, "utf-8");
 
-    // Detect any foreign-currency amount and convert it to INR at the invoice
-    // date's FBIL rate (best-effort — never blocks or fails the ingest).
-    const currency = await analyzeCurrency(markdown, filename);
+    // One AI pass extracts the document's fields (type, vendor, date, amount,
+    // currency) and computes the foreign-currency conversion. Best-effort —
+    // never blocks or fails the ingest.
+    const { currency, extraction } = await extractDocument(markdown, filename);
 
     const record = insertDocument({
       hash,
@@ -127,6 +129,15 @@ async function ingestOne(sourcePath: string): Promise<IngestResult> {
       rawPath: rawDest,
       markdownPath: mdDest,
       currency,
+    });
+
+    // Route any uncertain / missing / conflicting fields to the Review Queue.
+    recordExtractionReviews({
+      docId: record.id,
+      filename,
+      extraction,
+      currency,
+      haystack: `${filename}\n${markdown}`,
     });
 
     logger.info("vault", "Ingested file", { filename, markdownSuccess: success });

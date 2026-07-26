@@ -181,6 +181,58 @@ export interface TrainingReviewRecord {
   updatedAt: string;
 }
 
+// ── Field-level document review ─────────────────────────────────────────
+
+/** The document-intelligence fields tracked for review. */
+export type ReviewField = "person" | "doc_type" | "vendor" | "doc_date" | "amount" | "fx";
+
+export const REVIEW_FIELDS: ReviewField[] = ["person", "doc_type", "vendor", "doc_date", "amount", "fx"];
+
+/**
+ * The review state of a single field. The first three are "pending" (they need
+ * the user's attention); the last two are resolved outcomes.
+ */
+export type ReviewStatus = "low_confidence" | "conflict" | "missing" | "confirmed" | "corrected";
+
+/** Statuses that keep a field (and its document) in the Review Queue. */
+export const PENDING_REVIEW_STATUSES: ReviewStatus[] = ["low_confidence", "conflict", "missing"];
+
+export interface DocumentFieldReview {
+  id: number;
+  docId: number;
+  field: ReviewField;
+  /** The value the app originally extracted (display string), or null when missing. */
+  extractedValue: string | null;
+  /** 0..1 confidence in the extracted value. */
+  confidence: number;
+  /** Authority of the current value (AI vs rule vs user). */
+  source: FieldSource;
+  /** Short human-readable reason/evidence explaining the flag. */
+  reason: string;
+  /** The app's current suggested resolution (usually the extracted value). */
+  suggestedValue: string | null;
+  /** The value after the user reviewed it (null until resolved). */
+  finalValue: string | null;
+  status: ReviewStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One entry in a field's audit trail. */
+export type ReviewAction = "flagged" | "confirmed" | "corrected" | "deferred";
+
+export interface ReviewAuditEntry {
+  id: number;
+  docId: number;
+  field: ReviewField;
+  action: ReviewAction;
+  oldValue: string | null;
+  newValue: string | null;
+  confidence: number | null;
+  source: FieldSource | null;
+  at: string;
+}
+
 export interface NewDocument {
   hash: string;
   originalFilename: string;
@@ -288,6 +340,40 @@ function getDb(): DatabaseSync {
       answers TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+  `);
+  // Field-level review: one row per (document, field) tracking what the app
+  // extracted, how confident it was, and whether it still needs the user's eyes.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS document_field_reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id INTEGER NOT NULL,
+      field TEXT NOT NULL,
+      extracted_value TEXT,
+      confidence REAL NOT NULL DEFAULT 0,
+      source TEXT NOT NULL DEFAULT 'ai_inferred',
+      reason TEXT NOT NULL DEFAULT '',
+      suggested_value TEXT,
+      final_value TEXT,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (doc_id, field)
+    );
+  `);
+  // Append-only audit trail of every review action (flag / confirm / correct /
+  // defer), preserving the original extraction and each correction over time.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS review_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id INTEGER NOT NULL,
+      field TEXT NOT NULL,
+      action TEXT NOT NULL,
+      old_value TEXT,
+      new_value TEXT,
+      confidence REAL,
+      source TEXT,
+      at TEXT NOT NULL
     );
   `);
   // Canonical Person ontology: one row per real person, with their known
@@ -779,6 +865,187 @@ export function resetTraining(): void {
   const database = getDb();
   database.exec("DELETE FROM learned_rules");
   database.exec("DELETE FROM training_reviews");
+}
+
+// ── Field-level document reviews ─────────────────────────────────────────
+
+function mapFieldReview(row: Row): DocumentFieldReview {
+  return {
+    id: Number(row.id),
+    docId: Number(row.doc_id),
+    field: String(row.field) as ReviewField,
+    extractedValue: row.extracted_value == null ? null : String(row.extracted_value),
+    confidence: Number(row.confidence),
+    source: String(row.source) as FieldSource,
+    reason: String(row.reason ?? ""),
+    suggestedValue: row.suggested_value == null ? null : String(row.suggested_value),
+    finalValue: row.final_value == null ? null : String(row.final_value),
+    status: String(row.status) as ReviewStatus,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+export function getFieldReview(docId: number, field: ReviewField): DocumentFieldReview | null {
+  const row = getDb()
+    .prepare("SELECT * FROM document_field_reviews WHERE doc_id = ? AND field = ?")
+    .get(docId, field) as Row | undefined;
+  return row ? mapFieldReview(row) : null;
+}
+
+/** All field reviews for one document (or for the whole vault when docId omitted). */
+export function listFieldReviews(docId?: number): DocumentFieldReview[] {
+  const rows =
+    docId == null
+      ? (getDb().prepare("SELECT * FROM document_field_reviews").all() as Row[])
+      : (getDb().prepare("SELECT * FROM document_field_reviews WHERE doc_id = ?").all(docId) as Row[]);
+  return rows.map(mapFieldReview);
+}
+
+/** Insert or replace a field's review row. */
+export function upsertFieldReview(input: {
+  docId: number;
+  field: ReviewField;
+  extractedValue: string | null;
+  confidence: number;
+  source: FieldSource;
+  reason: string;
+  suggestedValue: string | null;
+  finalValue?: string | null;
+  status: ReviewStatus;
+}): DocumentFieldReview {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO document_field_reviews
+         (doc_id, field, extracted_value, confidence, source, reason, suggested_value, final_value, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(doc_id, field) DO UPDATE SET
+         extracted_value = excluded.extracted_value, confidence = excluded.confidence,
+         source = excluded.source, reason = excluded.reason, suggested_value = excluded.suggested_value,
+         final_value = excluded.final_value, status = excluded.status, updated_at = excluded.updated_at`,
+    )
+    .run(
+      input.docId,
+      input.field,
+      input.extractedValue,
+      input.confidence,
+      input.source,
+      input.reason,
+      input.suggestedValue,
+      input.finalValue ?? null,
+      input.status,
+      now,
+      now,
+    );
+  return getFieldReview(input.docId, input.field)!;
+}
+
+/** Resolve a field: set its final value, status, and source authority. */
+export function setFieldReviewResolution(
+  docId: number,
+  field: ReviewField,
+  patch: { status: ReviewStatus; finalValue: string | null; source: FieldSource },
+): void {
+  getDb()
+    .prepare(
+      `UPDATE document_field_reviews SET status = ?, final_value = ?, source = ?, updated_at = ?
+       WHERE doc_id = ? AND field = ?`,
+    )
+    .run(patch.status, patch.finalValue, patch.source, new Date().toISOString(), docId, field);
+}
+
+export function deleteFieldReviewsForDoc(docId: number): void {
+  getDb().prepare("DELETE FROM document_field_reviews WHERE doc_id = ?").run(docId);
+}
+
+/** Distinct document ids that still have at least one pending field, newest first. */
+export function reviewQueueDocIds(): number[] {
+  const placeholders = PENDING_REVIEW_STATUSES.map(() => "?").join(", ");
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT doc_id FROM document_field_reviews WHERE status IN (${placeholders}) ORDER BY doc_id DESC`,
+    )
+    .all(...PENDING_REVIEW_STATUSES) as Row[];
+  return rows.map((r) => Number(r.doc_id));
+}
+
+/** How many documents currently have at least one pending field review. */
+export function countDocsNeedingReview(): number {
+  const placeholders = PENDING_REVIEW_STATUSES.map(() => "?").join(", ");
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(DISTINCT doc_id) AS n FROM document_field_reviews WHERE status IN (${placeholders})`,
+    )
+    .get(...PENDING_REVIEW_STATUSES) as Row;
+  return Number(row.n);
+}
+
+export function addReviewAudit(entry: {
+  docId: number;
+  field: ReviewField;
+  action: ReviewAction;
+  oldValue: string | null;
+  newValue: string | null;
+  confidence: number | null;
+  source: FieldSource | null;
+}): void {
+  getDb()
+    .prepare(
+      `INSERT INTO review_audit (doc_id, field, action, old_value, new_value, confidence, source, at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      entry.docId,
+      entry.field,
+      entry.action,
+      entry.oldValue,
+      entry.newValue,
+      entry.confidence,
+      entry.source,
+      new Date().toISOString(),
+    );
+}
+
+export function listReviewAudit(docId: number, field?: ReviewField): ReviewAuditEntry[] {
+  const rows = (
+    field
+      ? getDb()
+          .prepare("SELECT * FROM review_audit WHERE doc_id = ? AND field = ? ORDER BY id ASC")
+          .all(docId, field)
+      : getDb().prepare("SELECT * FROM review_audit WHERE doc_id = ? ORDER BY id ASC").all(docId)
+  ) as Row[];
+  return rows.map((row) => ({
+    id: Number(row.id),
+    docId: Number(row.doc_id),
+    field: String(row.field) as ReviewField,
+    action: String(row.action) as ReviewAction,
+    oldValue: row.old_value == null ? null : String(row.old_value),
+    newValue: row.new_value == null ? null : String(row.new_value),
+    confidence: row.confidence == null ? null : Number(row.confidence),
+    source: row.source == null ? null : (String(row.source) as FieldSource),
+    at: String(row.at),
+  }));
+}
+
+/** Update a document's currency fields in place (used when FX inputs are corrected). */
+export function updateDocumentCurrency(docId: number, c: CurrencyFields): void {
+  getDb()
+    .prepare(
+      `UPDATE documents SET foreign_amount = ?, foreign_currency = ?, invoice_date = ?, inr_value = ?,
+         rate_used = ?, rate_date = ?, rate_is_nearest = ?, currency_status = ? WHERE id = ?`,
+    )
+    .run(
+      c.foreignAmount,
+      c.foreignCurrency,
+      c.invoiceDate,
+      c.inrValue,
+      c.rateUsed,
+      c.rateDate,
+      c.rateIsNearest ? 1 : 0,
+      c.currencyStatus,
+      docId,
+    );
 }
 
 // ── Canonical persons ────────────────────────────────────────────────────
