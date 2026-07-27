@@ -38,7 +38,7 @@ import {
   type ReviewField,
   type ReviewStatus,
 } from "./database.js";
-import { convertToInr } from "./currency.js";
+import { convertToInr, CURRENCY_NONE } from "./currency.js";
 import type { DocumentExtraction } from "./extraction.js";
 import { confirmNameForPerson, ensurePerson } from "./people.js";
 import { writeRulesMarkdown } from "./training.js";
@@ -290,6 +290,56 @@ export function getDocumentReviewDetail(docId: number): DocumentReviewDetail | n
 
 export function reviewCount(): number {
   return countDocsNeedingReview();
+}
+
+/**
+ * Re-evaluate stale review rows against the current logic. Today this clears the
+ * false positive where a legitimate zero-value invoice was flagged for foreign-
+ * currency review (an earlier build treated a 0 amount as "couldn't convert").
+ * A confident ₹0 conversion isn't anomalous, so the fx flag is cleared and the
+ * stored currency status is normalized. Idempotent; safe to run at startup.
+ * Returns how many documents were reconciled.
+ */
+export function reconcileReviews(): number {
+  let reconciled = 0;
+  for (const docId of reviewQueueDocIds()) {
+    const fx = getFieldReview(docId, "fx");
+    if (!fx || !(PENDING_REVIEW_STATUSES as ReviewStatus[]).includes(fx.status)) continue;
+
+    // Is this a zero-value document? Trust the extracted amount review first
+    // (older zero invoices stored a null foreign amount, so the record alone
+    // can't tell us), then the stored foreign amount as a fallback.
+    const amountReview = getFieldReview(docId, "amount");
+    const amountText = amountReview?.finalValue ?? amountReview?.extractedValue;
+    const amountNum = amountText != null && amountText.trim() !== "" ? Number(amountText) : NaN;
+    const doc = findDocumentById(docId);
+    const isZeroValue =
+      (Number.isFinite(amountNum) && amountNum === 0) || doc?.foreignAmount === 0;
+    if (!isZeroValue) continue;
+
+    // Clear the stale FX flag: a zero-value invoice converts to ₹0 and needs no
+    // review. Keep it in the record as a resolved/valid field.
+    setFieldReviewResolution(docId, "fx", {
+      status: "confirmed",
+      finalValue: fx.extractedValue ?? null,
+      source: "ai_inferred",
+    });
+    addReviewAudit({
+      docId,
+      field: "fx",
+      action: "confirmed",
+      oldValue: fx.extractedValue,
+      newValue: fx.extractedValue,
+      confidence: CONFIDENT,
+      source: "ai_inferred",
+    });
+    if (doc && doc.currencyStatus === "needs_review") {
+      updateDocumentCurrency(docId, CURRENCY_NONE);
+    }
+    reconciled += 1;
+  }
+  if (reconciled > 0) logger.info("reviews", "Reconciled stale reviews", { reconciled });
+  return reconciled;
 }
 
 // ── Resolving a field ────────────────────────────────────────────────────

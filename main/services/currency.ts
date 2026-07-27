@@ -82,8 +82,10 @@ export async function convertToInr(input: {
   // Only foreign currencies are converted; INR/NONE need no conversion.
   if (!FOREIGN.has(currency)) return CURRENCY_NONE;
 
+  // A zero amount is a legitimate value (e.g. a $0 invoice / statement), so we
+  // accept >= 0 here; only a negative or non-numeric amount is treated as absent.
   const amount =
-    input.amount != null && Number.isFinite(input.amount) && input.amount > 0 ? input.amount : null;
+    input.amount != null && Number.isFinite(input.amount) && input.amount >= 0 ? input.amount : null;
   const invoiceDate =
     input.invoiceDate && ISO_DATE.test(input.invoiceDate.trim()) ? input.invoiceDate.trim() : null;
 
@@ -96,6 +98,14 @@ export async function convertToInr(input: {
       hasDate: invoiceDate != null,
     });
     return { ...CURRENCY_NONE, foreignAmount: amount, foreignCurrency: currency, invoiceDate, currencyStatus: "needs_review" };
+  }
+
+  // A confident zero-value foreign invoice converts to ₹0 at any rate — there's
+  // nothing uncertain to resolve, so treat it as a plain (non-foreign) document
+  // rather than flagging it for review.
+  if (amount === 0) {
+    logger.info("currency", "Zero-value invoice — no conversion needed", { filename: input.filename, currency });
+    return CURRENCY_NONE;
   }
 
   const rate = await fetchRate(currency, invoiceDate);

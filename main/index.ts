@@ -9,6 +9,7 @@ import { registerHandlers } from "./handlers/index.js";
 import { createOrbWindow, getOrbWindow } from "./windows/orb-window.js";
 import { openSettingsWindow } from "./windows/settings-window.js";
 import { ensureVaultDirs } from "./services/vault.js";
+import { reconcileReviews } from "./services/reviews.js";
 
 // ── IPC Handlers ──────────────────────────────────────────────────────
 registerHandlers();
@@ -68,6 +69,10 @@ app.on("before-quit", () => {
 app.whenReady().then(async () => {
   await setupApplicationMenu();
   await ensureVaultDirs();
+
+  // Clear stale review flags left by superseded logic (e.g. zero-value invoices)
+  // so the Review Queue count reflects only real, unresolved work.
+  reconcileReviews();
 
   createOrbWindow().catch((error) => {
     logger.error("main", "Failed to create orb window", error);

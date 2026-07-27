@@ -12,9 +12,12 @@ import {
   ClipboardList,
   Coins,
   FileText,
+  Files,
+  GraduationCap,
   HelpCircle,
   Loader2,
   RefreshCw,
+  Settings,
   User,
   Users,
   Vault,
@@ -421,18 +424,41 @@ function PersonCard({
 export function SnapshotView() {
   useTheme();
   const queryClient = useQueryClient();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Close on Escape (blur-to-dismiss is handled natively by the window).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        if (menuOpen) {
+          setMenuOpen(false);
+          return;
+        }
         void window.glazeAPI.glaze.ipc.invoke("snapshot:close");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [menuOpen]);
+
+  // Training Mode state for the quick-actions menu (kept live via broadcasts).
+  const trainingModeQuery = useQuery({
+    queryKey: ["trainingMode"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<boolean>("training:getMode"),
+  });
+  useEffect(() => {
+    const unsubscribe = window.glazeAPI.glaze.ipc.on("training:changed", (_event, payload: unknown) => {
+      const mode = (payload as { mode?: boolean } | undefined)?.mode;
+      if (typeof mode === "boolean") queryClient.setQueryData(["trainingMode"], mode);
+    });
+    return () => unsubscribe();
+  }, [queryClient]);
+  const setTrainingMode = useMutation({
+    mutationFn: (on: boolean) => window.glazeAPI.glaze.ipc.invoke<boolean>("training:setMode", on),
+    onSuccess: (mode) => queryClient.setQueryData(["trainingMode"], mode),
+  });
+  const trainingOn = trainingModeQuery.data ?? false;
 
   const cachedQuery = useQuery({
     queryKey: ["snapshot"],
@@ -517,18 +543,92 @@ export function SnapshotView() {
               {unidentifiedCount}
             </span>
           ) : null}
-          <button
-            type="button"
-            onClick={() => refresh.mutate()}
-            disabled={loading}
-            title="Refresh summary"
-            className={cn(
-              "flex items-center justify-center size-7 rounded-md transition-colors",
-              "hover:bg-white/20 disabled:opacity-60 disabled:hover:bg-transparent",
-            )}
-          >
-            <RefreshCw className={cn("size-4", loading && "animate-spin")} strokeWidth={2.2} />
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setMenuOpen((v) => !v)}
+              title="Snapshot settings"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              className={cn(
+                "flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20",
+                menuOpen && "bg-white/20",
+              )}
+            >
+              <Settings className="size-4" strokeWidth={2.2} />
+            </button>
+            {menuOpen ? (
+              <>
+                {/* Click-away closes just the menu (staying inside the window). */}
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full mt-1.5 z-50 w-56 rounded-xl border border-panel bg-popover text-primary shadow-2xl p-1 flex flex-col"
+                >
+                  <button
+                    type="button"
+                    role="menuitemcheckbox"
+                    aria-checked={trainingOn}
+                    onClick={() => setTrainingMode.mutate(!trainingOn)}
+                    className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 hover:bg-control-subtle transition-colors text-left"
+                  >
+                    <GraduationCap className="size-4 text-secondary shrink-0" />
+                    <span className="flex-1 text-sm">Training Mode</span>
+                    <span
+                      className={cn(
+                        "text-[11px] font-semibold px-1.5 py-0.5 rounded-full shrink-0",
+                        trainingOn ? "bg-accent text-accent-contrast" : "bg-control-subtle text-secondary",
+                      )}
+                    >
+                      {trainingOn ? "On" : "Off"}
+                    </span>
+                  </button>
+                  <div className="h-px bg-panel my-1" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      void window.glazeAPI.glaze.ipc.invoke("window:openSettings", "review-queue");
+                    }}
+                    className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 hover:bg-control-subtle transition-colors text-left"
+                  >
+                    <ClipboardList className="size-4 text-secondary shrink-0" />
+                    <span className="flex-1 text-sm">Review Queue</span>
+                    {pendingReviews > 0 ? (
+                      <span className="text-[11px] font-semibold tabular-nums px-1.5 py-0.5 rounded-full bg-control-subtle text-secondary shrink-0">
+                        {pendingReviews}
+                      </span>
+                    ) : null}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      void window.glazeAPI.glaze.ipc.invoke("window:openDocuments");
+                    }}
+                    className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 hover:bg-control-subtle transition-colors text-left"
+                  >
+                    <Files className="size-4 text-secondary shrink-0" />
+                    <span className="flex-1 text-sm">Browse Documents</span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      void window.glazeAPI.glaze.ipc.invoke("window:openSettings");
+                    }}
+                    className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 hover:bg-control-subtle transition-colors text-left"
+                  >
+                    <Settings className="size-4 text-secondary shrink-0" />
+                    <span className="flex-1 text-sm">Open Settings</span>
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
         </div>
 
         {/* Subheader */}

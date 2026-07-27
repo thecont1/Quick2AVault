@@ -9,7 +9,7 @@ import { fileURLToPath } from "url";
 
 import { ipcMain, shell, logger } from "@glaze/core/backend";
 
-import { getSettingsWindow, openSettingsWindow } from "../windows/settings-window.js";
+import { getSettingsWindow, openSettingsWindow, takePendingSettingsSection } from "../windows/settings-window.js";
 import { openDocumentsWindow, takeInitialFocusDocId } from "../windows/documents-window.js";
 import { showOrbMenu } from "../windows/orb-menu.js";
 import { beginOrbDrag, endOrbDrag, moveOrbBy } from "../windows/orb-window.js";
@@ -17,7 +17,8 @@ import { closeSnapshotWindow, openSnapshotWindow, setSnapshotBusy } from "../win
 import { closeTrainingWindow, openTrainingWindow } from "../windows/training-window.js";
 import { showToast } from "../windows/toast-window.js";
 import { ensureVaultDirs, getVaultRoot, ingestFile, ingestFiles, type IngestResult } from "../services/vault.js";
-import { notifyIngestOutcome } from "../services/notify.js";
+import { enqueueDrop } from "../services/ingest-queue.js";
+import { notifyIngestOutcome, toastConversionFailures } from "../services/notify.js";
 import {
   getPendingReviewCount,
   getStats,
@@ -61,6 +62,7 @@ import {
 import {
   addRule,
   editRule,
+  isTrainingDefault,
   isTrainingMode,
   listRules,
   nextPendingReview,
@@ -76,20 +78,6 @@ import {
 // Sentinels used by the document-reassignment select in Settings.
 const REASSIGN_AUTO = "__auto__";
 const REASSIGN_UNIDENTIFIED = "__unidentified__";
-
-/** Surface a near-orb toast when a genuine (non-AI-blocked) conversion failed. */
-function toastConversionFailures(results: IngestResult[]): void {
-  const failed = results.filter((r) => r.status === "ingested" && r.markdownSuccess === false && !r.aiBlocked);
-  if (failed.length === 0) return;
-  const n = failed.length;
-  void showToast(
-    `Couldn't convert ${n === 1 ? "a file" : `${n} files`} to Markdown`,
-    n === 1
-      ? "The original is stored safely in your vault."
-      : "The originals are stored safely in your vault.",
-    "warn",
-  );
-}
 
 const VALID_RULE_TYPES: RuleType[] = ["vendor_category", "person_variant", "keyword_doctype", "source_scope"];
 
@@ -150,13 +138,19 @@ export function registerHandlers(): void {
     return path.join(__dirname, "..", "..");
   });
 
-  // Settings window handlers
-  ipcMain.handle("window:openSettings", async () => {
-    await openSettingsWindow();
+  // Settings window handlers. An optional section id scrolls the settings view
+  // to that section on open (e.g. the Review Queue).
+  ipcMain.handle("window:openSettings", async (_event, section?: unknown) => {
+    await openSettingsWindow(typeof section === "string" ? section : null);
   });
 
   ipcMain.handle("window:closeSettings", async () => {
     getSettingsWindow()?.close();
+  });
+
+  // Consumed once by the settings renderer on mount to scroll to a section.
+  ipcMain.handle("settings:takeFocusSection", async () => {
+    return takePendingSettingsSection();
   });
 
   // ── Document Browser / evidence card ────────────────────────────────
@@ -192,6 +186,15 @@ export function registerHandlers(): void {
   });
 
   // ── Vault handlers ──────────────────────────────────────────────────
+  // Non-blocking intake: copies the originals into the vault immediately and
+  // returns a receipt, then processes them in the background (progress + result
+  // broadcasts drive the orb). Additional drops queue instead of blocking.
+  ipcMain.handle("vault:enqueue", async (_event, filePaths: unknown) => {
+    if (!Array.isArray(filePaths)) return { accepted: 0, duplicate: 0, unsupported: 0, error: 0 };
+    const valid = filePaths.filter((p) => typeof p === "string" && p.length > 0) as string[];
+    return await enqueueDrop(valid);
+  });
+
   ipcMain.handle("vault:ingestFiles", async (_event, filePaths: string[]) => {
     if (!Array.isArray(filePaths)) return [];
     const valid = filePaths.filter((p) => typeof p === "string" && p.length > 0);
@@ -408,7 +411,7 @@ export function registerHandlers(): void {
   });
 
   ipcMain.handle("training:getStats", async () => {
-    return { ...getTrainingStats(), mode: isTrainingMode() };
+    return { ...getTrainingStats(), mode: isTrainingMode(), isDefault: isTrainingDefault() };
   });
 
   ipcMain.handle("training:listRules", async () => {

@@ -5,6 +5,7 @@
  */
 import { Notification, logger } from "@glaze/core/backend";
 
+import { showToast } from "../windows/toast-window.js";
 import type { IngestResult } from "./vault.js";
 
 // Per blocked-state message shown when AI conversion is unavailable. The file is
@@ -65,4 +66,22 @@ export function notifyIngestOutcome(results: IngestResult[]): void {
   } catch (error) {
     logger.warn("notify", "Failed to show notification", { error: String(error) });
   }
+}
+
+/**
+ * Surface a near-orb toast when a genuine (non-AI-blocked) conversion failed.
+ * The original is always kept safe — this makes clear that intake succeeded but
+ * processing didn't, and the document may need a look.
+ */
+export function toastConversionFailures(results: IngestResult[]): void {
+  const failed = results.filter((r) => r.status === "ingested" && r.markdownSuccess === false && !r.aiBlocked);
+  if (failed.length === 0) return;
+  const n = failed.length;
+  void showToast(
+    `Couldn't process ${n === 1 ? "a file" : `${n} files`}`,
+    n === 1
+      ? "The original is safe in your vault — processing failed, so it may need review."
+      : "The originals are safe in your vault — processing failed, so they may need review.",
+    "warn",
+  );
 }

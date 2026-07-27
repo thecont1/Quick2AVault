@@ -1,15 +1,30 @@
-import { BrowserWindow, logger } from "@glaze/core/backend";
+import { BrowserWindow, ipcMain, logger } from "@glaze/core/backend";
 import { getPreloadPath, getWindowUrl } from "./window-paths.js";
 
 let settingsWindow: BrowserWindow | null = null;
+// A section to scroll to on open (e.g. "review-queue"), consumed once by the
+// renderer on mount. When the window is already open we broadcast instead.
+let pendingSection: string | null = null;
 
-export async function openSettingsWindow(): Promise<void> {
+/** Consumed once by the settings renderer on mount to scroll to a section. */
+export function takePendingSettingsSection(): string | null {
+  const section = pendingSection;
+  pendingSection = null;
+  return section;
+}
+
+export async function openSettingsWindow(section?: string | null): Promise<void> {
+  const target = section?.trim() || null;
+
   // If window exists and is not destroyed, just show it
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     logger.debug("settings", "Settings window already exists, showing it");
     settingsWindow.show();
+    if (target) ipcMain.broadcast("settings:focusSection", { section: target });
     return;
   }
+
+  pendingSection = target;
 
   logger.info("settings", "Creating settings window");
 

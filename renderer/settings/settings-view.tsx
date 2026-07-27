@@ -152,6 +152,8 @@ interface TrainingStats {
   reviewed: number;
   ruleCount: number;
   mode: boolean;
+  /** True while Training Mode is still on its first-run default (never toggled). */
+  isDefault?: boolean;
 }
 
 const RULE_TYPE_LABEL: Record<RuleType, string> = {
@@ -364,8 +366,19 @@ function TrainingSection() {
       <Text variant="small" color="tertiary">
         When on, the orb asks a few quick questions about each new document and learns reusable rules. Confirmed
         rules are applied automatically and won't be asked again. A readable summary is saved to RULES.md in your
-        vault.
+        vault. You can turn Training Mode off any time once the app has learned enough about your financial world.
       </Text>
+
+      {/* First-run note: explain why it's on by default, without feeling sneaky. */}
+      {modeOn && stats?.isDefault ? (
+        <div className="flex items-start gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-2">
+          <GraduationCap className="size-4 text-accent shrink-0 mt-0.5" />
+          <Text variant="small" color="secondary">
+            Training Mode is on to help Quick2Afvault learn your financial world faster from your first documents.
+            Leave it on for a while, then turn it off here whenever you'd like.
+          </Text>
+        </div>
+      ) : null}
 
       {/* Progress */}
       <div className="flex gap-2">
@@ -1288,6 +1301,24 @@ export function SettingsView() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Scroll to a requested section when opened from a deep link (e.g. the
+  // snapshot quick actions → "Review Queue"). Handles both the initial open and
+  // subsequent requests while the window is already open.
+  useEffect(() => {
+    const scrollToSection = (section: string | null) => {
+      if (!section) return;
+      window.setTimeout(() => {
+        document.getElementById(`settings-${section}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
+    };
+    void window.glazeAPI.glaze.ipc.invoke<string | null>("settings:takeFocusSection").then(scrollToSection).catch(() => {});
+    const unsubscribe = window.glazeAPI.glaze.ipc.on("settings:focusSection", (_event, payload: unknown) => {
+      const section = (payload as { section?: string } | undefined)?.section;
+      if (typeof section === "string") scrollToSection(section);
+    });
+    return () => unsubscribe();
+  }, []);
+
   const vaultPathQuery = useQuery({
     queryKey: ["vaultPath"],
     queryFn: () => window.glazeAPI.glaze.ipc.invoke<string>("vault:getVaultPath"),
@@ -1386,7 +1417,9 @@ export function SettingsView() {
         <Separator />
 
         {/* Review Queue */}
-        <ReviewQueueSection />
+        <div id="settings-review-queue" className="scroll-mt-4">
+          <ReviewQueueSection />
+        </div>
 
         <Separator />
 

@@ -94,8 +94,21 @@ const MAX_DOC_CHARS = 6000;
 
 // ── Mode toggle ─────────────────────────────────────────────────────────
 
+/**
+ * Training Mode defaults to ON for a brand-new install so the app can start
+ * learning the user's financial world from the very first drops. Once the user
+ * makes an explicit choice (either On or Off), that choice is stored and always
+ * wins — we never silently re-enable it for someone who turned it off.
+ */
 export function isTrainingMode(): boolean {
-  return getSetting(TRAINING_MODE_KEY) === "1";
+  const stored = getSetting(TRAINING_MODE_KEY);
+  if (stored == null) return true; // first run: on by default
+  return stored === "1";
+}
+
+/** True while Training Mode is still on its first-run default (never toggled). */
+export function isTrainingDefault(): boolean {
+  return getSetting(TRAINING_MODE_KEY) == null;
 }
 
 export function setTrainingMode(on: boolean): void {

@@ -9,7 +9,7 @@ import * as path from "node:path";
 
 import { app, logger } from "@glaze/core/backend";
 
-import { convertToMarkdown, getFileType } from "./converter.js";
+import { convertToMarkdown, getFileType, type FileType } from "./converter.js";
 import { findByHash, insertDocument } from "./database.js";
 import { extractDocument } from "./extraction.js";
 import { recordExtractionReviews } from "./reviews.js";
@@ -77,35 +77,69 @@ export interface IngestResult {
   docId?: number;
 }
 
-/** Ingest a single dropped file. Ensures the vault exists first. Never throws. */
-export async function ingestFile(sourcePath: string): Promise<IngestResult> {
-  await ensureVaultDirs();
-  return ingestOne(sourcePath);
+/**
+ * A file that has been safely copied into the vault and is ready to process.
+ * Intake (copy + dedup) is fast; the heavy Markdown/extraction work happens
+ * later in `processIntake`, off the drop's critical path.
+ */
+export interface ProcessJob {
+  filename: string;
+  type: FileType;
+  hash: string;
+  rawDest: string;
+  dateFolder: string;
 }
 
-async function ingestOne(sourcePath: string): Promise<IngestResult> {
+export interface IntakeResult {
+  filename: string;
+  /** "accepted" means the original is safely copied and a job is queued. */
+  status: "accepted" | "duplicate" | "unsupported" | "error";
+  error?: string;
+  job?: ProcessJob;
+}
+
+/**
+ * Phase 1 — intake: hash, dedupe, and copy the original into the vault. Fast and
+ * safe; returns immediately so the UI can acknowledge receipt before the slow
+ * AI processing runs. `inFlightHashes` guards against duplicate files within the
+ * same burst of drops (before their records exist in the database). Never throws.
+ */
+export async function intakeFile(sourcePath: string, inFlightHashes: Set<string>): Promise<IntakeResult> {
   const filename = path.basename(sourcePath);
   const type = getFileType(filename);
-
-  if (!type) {
-    return { filename, status: "unsupported" };
-  }
+  if (!type) return { filename, status: "unsupported" };
 
   try {
     const hash = await hashFile(sourcePath);
-    if (findByHash(hash)) {
+    if (findByHash(hash) || inFlightHashes.has(hash)) {
       logger.info("vault", "Skipping duplicate file", { filename });
       return { filename, status: "duplicate" };
     }
+    inFlightHashes.add(hash);
 
     const dateFolder = todayFolder();
-
-    // Copy the original into Raw/<date>/
     const rawDir = path.join(getRawRoot(), dateFolder);
     await fs.mkdir(rawDir, { recursive: true });
     const rawDest = await uniqueDest(rawDir, filename);
     await fs.copyFile(sourcePath, rawDest);
 
+    logger.info("vault", "Received file", { filename });
+    return { filename, status: "accepted", job: { filename, type, hash, rawDest, dateFolder } };
+  } catch (error) {
+    logger.error("vault", "Failed to receive file", { filename, error: String(error) });
+    return { filename, status: "error", error: String(error) };
+  }
+}
+
+/**
+ * Phase 2 — process an already-received file: convert to Markdown, run the
+ * unified extraction, record the document, and route uncertain fields to the
+ * Review Queue. The original is already safe in the vault, so a failure here
+ * surfaces as a processing failure, not a lost file. Never throws.
+ */
+export async function processIntake(job: ProcessJob): Promise<IngestResult> {
+  const { filename, type, hash, rawDest, dateFolder } = job;
+  try {
     // Convert to Markdown under Markdown/<date>/, mirroring the filename.
     const { markdown, success, aiBlocked } = await convertToMarkdown(rawDest, filename, type);
     const mdDir = path.join(getMarkdownRoot(), dateFolder);
@@ -115,8 +149,7 @@ async function ingestOne(sourcePath: string): Promise<IngestResult> {
     await fs.writeFile(mdDest, markdown, "utf-8");
 
     // One AI pass extracts the document's fields (type, vendor, date, amount,
-    // currency) and computes the foreign-currency conversion. Best-effort —
-    // never blocks or fails the ingest.
+    // currency) and computes the foreign-currency conversion. Best-effort.
     const { currency, extraction } = await extractDocument(markdown, filename);
 
     const record = insertDocument({
@@ -140,20 +173,40 @@ async function ingestOne(sourcePath: string): Promise<IngestResult> {
       haystack: `${filename}\n${markdown}`,
     });
 
-    logger.info("vault", "Ingested file", { filename, markdownSuccess: success });
+    logger.info("vault", "Processed file", { filename, markdownSuccess: success });
     return { filename, status: "ingested", markdownSuccess: success, aiBlocked, docId: record.id };
   } catch (error) {
-    logger.error("vault", "Failed to ingest file", { filename, error: String(error) });
+    logger.error("vault", "Failed to process file", { filename, error: String(error) });
     return { filename, status: "error", error: String(error) };
   }
 }
 
-/** Ingest a batch of dropped file paths, sequentially. */
+/** Ingest a single dropped file end-to-end (intake + process). Never throws. */
+export async function ingestFile(sourcePath: string): Promise<IngestResult> {
+  await ensureVaultDirs();
+  const intake = await intakeFile(sourcePath, new Set());
+  if (intake.status !== "accepted" || !intake.job) {
+    return { filename: intake.filename, status: intake.status === "accepted" ? "error" : intake.status, error: intake.error };
+  }
+  return processIntake(intake.job);
+}
+
+/** Ingest a batch of dropped file paths, sequentially (intake + process each). */
 export async function ingestFiles(sourcePaths: string[]): Promise<IngestResult[]> {
   await ensureVaultDirs();
+  const inFlight = new Set<string>();
   const results: IngestResult[] = [];
   for (const sourcePath of sourcePaths) {
-    results.push(await ingestOne(sourcePath));
+    const intake = await intakeFile(sourcePath, inFlight);
+    if (intake.status !== "accepted" || !intake.job) {
+      results.push({
+        filename: intake.filename,
+        status: intake.status === "accepted" ? "error" : intake.status,
+        error: intake.error,
+      });
+      continue;
+    }
+    results.push(await processIntake(intake.job));
   }
   return results;
 }

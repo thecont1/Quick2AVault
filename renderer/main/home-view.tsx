@@ -2,7 +2,7 @@ import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef,
 import { AlertCircle, ArrowDownToLine, Check, Loader2, Vault } from "lucide-react";
 import { cn } from "@glaze/core/utils";
 
-type OrbStatus = "idle" | "processing" | "success" | "error";
+type OrbStatus = "idle" | "received" | "processing" | "success" | "error";
 
 interface IngestResult {
   filename: string;
@@ -13,8 +13,26 @@ interface IngestResult {
   docId?: number;
 }
 
+interface DropReceipt {
+  accepted: number;
+  duplicate: number;
+  unsupported: number;
+  error: number;
+}
+
+interface IngestProgress {
+  remaining: number;
+  done: number;
+  total: number;
+  processing: boolean;
+}
+
 // Pointer travel (screen px) below which a press+release counts as a click.
 const CLICK_THRESHOLD = 4;
+
+// How long the brief "received / safe" acknowledgment shows before the orb
+// settles into background processing.
+const RECEIVED_MS = 850;
 
 export function HomeView() {
   const [status, setStatus] = useState<OrbStatus>("idle");
@@ -29,6 +47,9 @@ export function HomeView() {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+
+  // Files still to finish in the active run, readable from the flash timer.
+  const remainingRef = useRef(0);
 
   // Latest pending-review count, readable from the click handler.
   const trainingPendingRef = useRef(0);
@@ -60,36 +81,55 @@ export function HomeView() {
       return;
     }
 
-    setStatus("processing");
-    setProgress({ done: 0, total: paths.length });
-    const results: IngestResult[] = [];
     try {
-      // Process one file at a time so we can show "how many left" in the batch.
-      for (const path of paths) {
-        const result = await window.glazeAPI.glaze.ipc.invoke<IngestResult>("vault:ingestFile", path);
-        results.push(result);
-        setProgress((p) => ({ ...p, done: p.done + 1 }));
+      // Intake is fast: the backend copies the originals into the vault and
+      // returns as soon as they're safe. Heavy processing continues in the
+      // background (progress + done arrive via broadcasts), so the app stays
+      // responsive and further drops just queue.
+      const receipt = await window.glazeAPI.glaze.ipc.invoke<DropReceipt>("vault:enqueue", paths);
+      const anySafe = receipt.accepted > 0 || receipt.duplicate > 0;
+      if (!anySafe) {
+        // Only unsupported / failed intakes — nothing landed in the vault.
+        setStatus("error");
+        return;
       }
-      // Report the whole batch once (native notification + near-orb failure toast).
-      await window.glazeAPI.glaze.ipc.invoke("vault:notifyBatch", results);
-      const hadHardFailure = results.some((r) => r.status === "error" || r.status === "unsupported");
-      const anyIngested = results.some((r) => r.status === "ingested" || r.status === "duplicate");
-      setStatus(anyIngested && !hadHardFailure ? "success" : hadHardFailure ? "error" : "success");
 
-      // When Training Mode is on, prepare per-document questions for the freshly
-      // ingested files. The backend no-ops when the mode is off and opens the
-      // training popup itself if anything needs asking.
-      const newDocIds = results
-        .filter((r) => r.status === "ingested" && typeof r.docId === "number")
-        .map((r) => r.docId as number);
-      if (newDocIds.length > 0) {
-        void window.glazeAPI.glaze.ipc.invoke("training:prepareBatch", newDocIds);
-      }
+      // Acknowledge receipt immediately, then settle into processing if the
+      // background queue still has work to do.
+      setStatus("received");
+      window.setTimeout(() => {
+        if (statusRef.current !== "received") return;
+        setStatus(remainingRef.current > 0 ? "processing" : "success");
+      }, RECEIVED_MS);
     } catch {
       setStatus("error");
-    } finally {
-      setProgress({ done: 0, total: 0 });
     }
+  }, []);
+
+  // Background ingestion updates: progress drives the batch pill; done flashes
+  // the final result. Status transitions are gated so the "received" flash is
+  // always seen first.
+  useEffect(() => {
+    const onProgress = window.glazeAPI.glaze.ipc.on("ingest:progress", (_event, payload: unknown) => {
+      const p = payload as IngestProgress | undefined;
+      if (!p) return;
+      remainingRef.current = p.remaining;
+      setProgress({ done: p.done, total: p.total });
+      // If work remains and the received flash is over, keep the orb spinning.
+      if (p.remaining > 0 && statusRef.current !== "received") setStatus("processing");
+    });
+    const onDone = window.glazeAPI.glaze.ipc.on("ingest:done", (_event, payload: unknown) => {
+      const results = (payload as { results?: IngestResult[] } | undefined)?.results ?? [];
+      remainingRef.current = 0;
+      setProgress({ done: 0, total: 0 });
+      const hadHardFailure = results.some((r) => r.status === "error" || r.status === "unsupported");
+      const anyGood = results.some((r) => r.status === "ingested" || r.status === "duplicate");
+      setStatus(anyGood && !hadHardFailure ? "success" : hadHardFailure ? "error" : "success");
+    });
+    return () => {
+      onProgress();
+      onDone();
+    };
   }, []);
 
   // Drag-and-drop and right-click are handled at the window level so they fire
@@ -198,11 +238,11 @@ export function HomeView() {
   }, []);
 
   const Icon =
-    dragActive && status !== "processing"
+    dragActive && status !== "processing" && status !== "received"
       ? ArrowDownToLine
       : status === "processing"
         ? Loader2
-        : status === "success"
+        : status === "success" || status === "received"
           ? Check
           : status === "error"
             ? AlertCircle
@@ -227,6 +267,7 @@ export function HomeView() {
             "ring-1 ring-black/10 shadow-lg shadow-black/20",
             "dark:ring-white/20 dark:shadow-xl dark:shadow-black/50",
             dragActive && "scale-110 shadow-xl",
+            status === "received" && "orb-received",
             status === "processing" && "orb-pulse",
             trainingGlow && "orb-training ring-white/60 dark:ring-white/70",
           )}
