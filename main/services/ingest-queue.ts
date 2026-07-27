@@ -17,6 +17,7 @@ import {
   ensureVaultDirs,
   intakeFile,
   processIntake,
+  reprocessDocument,
   type IngestResult,
   type IntakeResult,
   type ProcessJob,
@@ -48,7 +49,10 @@ export interface IngestProgress {
 
 // ── Queue state ──────────────────────────────────────────────────────────
 
-const queue: ProcessJob[] = [];
+/** A unit of background work: a freshly-received file, or a reprocess request. */
+type QueueTask = { kind: "new"; job: ProcessJob } | { kind: "reprocess"; docId: number };
+
+const queue: QueueTask[] = [];
 /** Hashes accepted but not yet recorded — guards dupes within a burst of drops. */
 const inFlightHashes = new Set<string>();
 let processing = false;
@@ -98,7 +102,7 @@ export async function enqueueDrop(paths: string[]): Promise<DropReceipt> {
   }
 
   if (jobs.length > 0) {
-    queue.push(...jobs);
+    queue.push(...jobs.map((job) => ({ kind: "new" as const, job })));
     runTotal += jobs.length;
     broadcastProgress();
     void drain();
@@ -110,15 +114,33 @@ export async function enqueueDrop(paths: string[]): Promise<DropReceipt> {
   return receipt;
 }
 
+/**
+ * Reprocess an existing document (rescue an irrelevant/excluded file) using its
+ * raw file on disk — no re-drop. Queues alongside new drops, never blocking.
+ */
+export async function enqueueReprocess(docIds: number[]): Promise<void> {
+  const ids = docIds.filter((id) => Number.isFinite(id));
+  if (ids.length === 0) return;
+  queue.push(...ids.map((docId) => ({ kind: "reprocess" as const, docId })));
+  runTotal += ids.length;
+  broadcastProgress();
+  void drain();
+}
+
 async function drain(): Promise<void> {
   if (draining) return;
   draining = true;
   while (queue.length > 0) {
-    const job = queue.shift()!;
+    const task = queue.shift()!;
     processing = true;
     broadcastProgress();
-    const result = await processIntake(job);
-    inFlightHashes.delete(job.hash);
+    let result: IngestResult;
+    if (task.kind === "new") {
+      result = await processIntake(task.job);
+      inFlightHashes.delete(task.job.hash);
+    } else {
+      result = await reprocessDocument(task.docId);
+    }
     runResults.push(result);
     runDone += 1;
     processing = false;
@@ -143,6 +165,8 @@ async function finalizeRun(): Promise<void> {
 
   // Processing may have created review items and (in Training Mode) questions.
   ipcMain.broadcast("review:changed", { count: reviewCount() });
+  // Nudge any open Document Browser to refresh its list (new/triaged/reprocessed).
+  ipcMain.broadcast("documents:changed", {});
   const newDocIds = results
     .filter((r) => r.status === "ingested" && typeof r.docId === "number")
     .map((r) => r.docId as number);

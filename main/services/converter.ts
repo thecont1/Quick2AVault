@@ -13,7 +13,7 @@ import { logger } from "@glaze/core/backend";
 import * as XLSX from "xlsx";
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
 
-export type FileType = "pdf" | "xlsx" | "csv" | "txt";
+export type FileType = "pdf" | "xlsx" | "csv" | "txt" | "image";
 
 const EXTENSION_MAP: Record<string, FileType> = {
   ".pdf": "pdf",
@@ -21,6 +21,20 @@ const EXTENSION_MAP: Record<string, FileType> = {
   ".xls": "xlsx",
   ".csv": "csv",
   ".txt": "txt",
+  ".md": "txt",
+  // Images are accepted into intake so casual/personal files (e.g. family
+  // photos) can be triaged as irrelevant instead of being rejected outright.
+  // We don't OCR them, so they carry no extractable financial text.
+  ".jpg": "image",
+  ".jpeg": "image",
+  ".png": "image",
+  ".gif": "image",
+  ".webp": "image",
+  ".bmp": "image",
+  ".tiff": "image",
+  ".tif": "image",
+  ".heic": "image",
+  ".heif": "image",
 };
 
 // Keep AI input bounded so a huge statement doesn't burn excess credits.
@@ -74,22 +88,34 @@ function spreadsheetToMarkdown(buffer: Buffer): string {
   return sections.join("\n\n");
 }
 
-/** Produce a plain, deterministic representation of the file's content. */
-async function extractRepresentation(filePath: string, type: FileType): Promise<string> {
-  switch (type) {
-    case "pdf": {
-      const buffer = await fs.readFile(filePath);
-      const parsed = await pdfParse(buffer);
-      return parsed.text.trim();
+/**
+ * Produce a plain, deterministic text representation of the file's content.
+ * Images carry no extractable text (we don't OCR), so they return "". Exported
+ * so intake can triage a file's relevance before any expensive AI step. Never
+ * throws — returns "" when content can't be read.
+ */
+export async function extractText(filePath: string, type: FileType): Promise<string> {
+  try {
+    switch (type) {
+      case "pdf": {
+        const buffer = await fs.readFile(filePath);
+        const parsed = await pdfParse(buffer);
+        return parsed.text.trim();
+      }
+      case "xlsx":
+      case "csv": {
+        const buffer = await fs.readFile(filePath);
+        return spreadsheetToMarkdown(buffer);
+      }
+      case "txt": {
+        return (await fs.readFile(filePath, "utf-8")).trim();
+      }
+      case "image":
+        return "";
     }
-    case "xlsx":
-    case "csv": {
-      const buffer = await fs.readFile(filePath);
-      return spreadsheetToMarkdown(buffer);
-    }
-    case "txt": {
-      return (await fs.readFile(filePath, "utf-8")).trim();
-    }
+  } catch (error) {
+    logger.warn("converter", "Failed to extract file content", { filePath, error: String(error) });
+    return "";
   }
 }
 
@@ -102,19 +128,21 @@ const TYPE_LABEL: Record<FileType, string> = {
   xlsx: "spreadsheet",
   csv: "CSV data",
   txt: "text document",
+  image: "image",
 };
 
 /**
- * Convert a file to Markdown. Never throws — always returns something writable.
+ * Polish a plain-text representation into clean Markdown via AI. Never throws —
+ * falls back to the deterministic representation when AI is blocked/unavailable.
+ * Split out from {@link convertToMarkdown} so intake can extract + triage a file
+ * before deciding whether to spend AI credits on it.
  */
-export async function convertToMarkdown(filePath: string, filename: string, type: FileType): Promise<ConversionResult> {
-  let representation = "";
-  try {
-    representation = await extractRepresentation(filePath, type);
-  } catch (error) {
-    logger.warn("converter", "Failed to extract file content", { filename, error: String(error) });
-    return { markdown: fallbackMarkdown(filename, ""), success: false };
-  }
+export async function polishToMarkdown(
+  representation: string,
+  filename: string,
+  type: FileType,
+): Promise<ConversionResult> {
+  if (!representation.trim()) return { markdown: fallbackMarkdown(filename, ""), success: false };
 
   const truncated = representation.length > MAX_AI_CHARS;
   const aiInput = truncated ? representation.slice(0, MAX_AI_CHARS) : representation;
@@ -146,4 +174,15 @@ export async function convertToMarkdown(filePath: string, filename: string, type
     logger.warn("converter", "AI conversion failed, using fallback", { filename, error: String(error) });
     return { markdown: fallbackMarkdown(filename, representation), success: false };
   }
+}
+
+/**
+ * Extract a file's content and polish it into Markdown in one call. Never throws.
+ * Retained for the legacy end-to-end ingest path; the queue path extracts once
+ * (for triage) and then calls {@link polishToMarkdown} directly.
+ */
+export async function convertToMarkdown(filePath: string, filename: string, type: FileType): Promise<ConversionResult> {
+  const representation = await extractText(filePath, type);
+  if (!representation) return { markdown: fallbackMarkdown(filename, ""), success: false };
+  return polishToMarkdown(representation, filename, type);
 }

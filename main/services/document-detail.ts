@@ -28,6 +28,7 @@ import {
   type CurrencyFields,
   type DocumentFieldReview,
   type FieldSource,
+  type LifecycleState,
   type PersonRole,
   type ReviewAuditEntry,
   type ReviewField,
@@ -83,6 +84,10 @@ export interface DocumentBrowserRow {
   foreignCurrency: string | null;
   inrValue: number | null;
   currencyStatus: CurrencyFields["currencyStatus"];
+  /** Intake triage lane / lifecycle state. */
+  lifecycleState: LifecycleState;
+  /** One-line explanation of the triage decision, or null. */
+  triageReason: string | null;
 }
 
 export interface DetailField {
@@ -126,6 +131,10 @@ export interface DocumentDetail {
   docType: string | null;
   vendor: string | null;
   category: string | null;
+  /** Intake triage lane / lifecycle state. */
+  lifecycleState: LifecycleState;
+  /** One-line explanation of the triage decision, or null. */
+  triageReason: string | null;
   /** Best-effort business/personal classification from a learned rule. */
   scope: "business" | "personal" | null;
   scopeEvidence: string | null;
@@ -251,6 +260,8 @@ export function listDocumentBrowser(): DocumentBrowserRow[] {
       foreignCurrency: doc.foreignCurrency,
       inrValue: doc.inrValue,
       currencyStatus: doc.currencyStatus,
+      lifecycleState: doc.lifecycleState,
+      triageReason: doc.triageReason,
     };
   });
 }
@@ -343,6 +354,8 @@ export async function getDocumentDetail(docId: number): Promise<DocumentDetail |
     docType,
     vendor,
     category,
+    lifecycleState: doc.lifecycleState,
+    triageReason: doc.triageReason,
     scope: scopeHit?.scope ?? null,
     scopeEvidence: scopeHit ? `Learned rule: “${scopeHit.matchKey}” → ${scopeHit.scope}` : null,
     person,

@@ -15,6 +15,7 @@ import { logger } from "@glaze/core/backend";
 
 import {
   getSnapshotCache,
+  listActiveDocuments,
   listDocumentOverrides,
   listDocuments,
   listPersons,
@@ -173,7 +174,7 @@ const snapshotSchema = z.object({
 });
 
 function buildFallback(): FallbackStats {
-  const docs = listDocuments(500);
+  const docs = listActiveDocuments(500);
   const documents = docs.map((d) => ({
     filename: d.originalFilename,
     fileType: d.fileType,
@@ -194,7 +195,7 @@ function aggregate(attributions: Attribution[]): SnapshotData {
   const docMap = new Map(listDocumentOverrides().map((o) => [o.docId, o.person]));
   // Currency data lives on the document record (computed at ingestion), so join
   // it in at read time rather than caching it in the attribution blob.
-  const docMeta = new Map(listDocuments(500).map((d) => [d.id, d]));
+  const docMeta = new Map(listActiveDocuments(500).map((d) => [d.id, d]));
   // Canonical person resolution: every raw name resolves to a stored person via
   // its alias index, so reorders/variants and user merges collapse instantly.
   const aliasIndex = buildAliasIndex();
@@ -379,7 +380,7 @@ export function getAttributionMap(): Map<number, DocAttribution> {
 
 /** Read Markdown excerpts for the vault's documents, bounded for the AI. */
 async function buildAiInput(): Promise<{ text: string; docs: ReturnType<typeof listDocuments> }> {
-  const docs = listDocuments(MAX_DOCS);
+  const docs = listActiveDocuments(MAX_DOCS);
   const used: typeof docs = [];
   const blocks: string[] = [];
   let total = 0;

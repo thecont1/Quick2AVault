@@ -9,12 +9,21 @@ import * as path from "node:path";
 
 import { app, logger } from "@glaze/core/backend";
 
-import { convertToMarkdown, getFileType, type FileType } from "./converter.js";
-import { findByHash, insertDocument } from "./database.js";
+import { extractText, getFileType, polishToMarkdown, type FileType } from "./converter.js";
+import {
+  deleteFieldReviewsForDoc,
+  findByHash,
+  findDocumentById,
+  findLatestByFilename,
+  insertDocument,
+  insertDuplicateEvent,
+  updateDocumentProcessing,
+} from "./database.js";
 import { extractDocument } from "./extraction.js";
 import { recordExtractionReviews } from "./reviews.js";
 import { deriveAccountingHint } from "./accounting.js";
 import { financialYearKey, getFinancePrefs } from "./preferences.js";
+import { classifyRelevance } from "./triage.js";
 
 export function getVaultRoot(): string {
   return path.join(app.getPath("documents"), "Quick2Afvault");
@@ -28,10 +37,15 @@ function getMarkdownRoot(): string {
   return path.join(getVaultRoot(), "Markdown");
 }
 
+function getIrrelevantRoot(): string {
+  return path.join(getVaultRoot(), "Irrelevant");
+}
+
 /** Ensure the top-level vault folders exist. */
 export async function ensureVaultDirs(): Promise<void> {
   await fs.mkdir(getRawRoot(), { recursive: true });
   await fs.mkdir(getMarkdownRoot(), { recursive: true });
+  await fs.mkdir(getIrrelevantRoot(), { recursive: true });
 }
 
 function todayFolder(): string {
@@ -71,7 +85,7 @@ async function uniqueDest(dir: string, filename: string): Promise<string> {
 
 export interface IngestResult {
   filename: string;
-  status: "ingested" | "duplicate" | "unsupported" | "error";
+  status: "ingested" | "irrelevant" | "duplicate" | "unsupported" | "error";
   markdownSuccess?: boolean;
   aiBlocked?: string;
   error?: string;
@@ -90,6 +104,8 @@ export interface ProcessJob {
   hash: string;
   rawDest: string;
   dateFolder: string;
+  /** Set when the visible filename matched an earlier, different-content file. */
+  filenameNote?: string | null;
 }
 
 export interface IntakeResult {
@@ -98,6 +114,8 @@ export interface IntakeResult {
   status: "accepted" | "duplicate" | "unsupported" | "error";
   error?: string;
   job?: ProcessJob;
+  /** For a duplicate: the document this file exactly matches, if still present. */
+  duplicateOfDocId?: number | null;
 }
 
 /**
@@ -113,11 +131,44 @@ export async function intakeFile(sourcePath: string, inFlightHashes: Set<string>
 
   try {
     const hash = await hashFile(sourcePath);
-    if (findByHash(hash) || inFlightHashes.has(hash)) {
-      logger.info("vault", "Skipping duplicate file", { filename });
-      return { filename, status: "duplicate" };
+
+    // Exact duplicate: identical SHA-256 to an already-ingested document (or one
+    // already accepted earlier in this same burst of drops). Don't reprocess —
+    // log a lightweight duplicate event so the user can see/dismiss it, and
+    // point them at the original document.
+    const existing = findByHash(hash);
+    if (existing) {
+      const when = existing.dateIngested.slice(0, 10);
+      insertDuplicateEvent({
+        hash,
+        filename,
+        sourcePath,
+        duplicateOfDocId: existing.id,
+        reason: `Exact duplicate of “${existing.originalFilename}” already ingested on ${when}.`,
+      });
+      logger.info("vault", "Exact duplicate of an existing document", { filename, ofDocId: existing.id });
+      return { filename, status: "duplicate", duplicateOfDocId: existing.id };
+    }
+    if (inFlightHashes.has(hash)) {
+      insertDuplicateEvent({
+        hash,
+        filename,
+        sourcePath,
+        duplicateOfDocId: null,
+        reason: "Exact duplicate of another file dropped in the same batch.",
+      });
+      logger.info("vault", "Duplicate within the same drop", { filename });
+      return { filename, status: "duplicate", duplicateOfDocId: null };
     }
     inFlightHashes.add(hash);
+
+    // Same visible filename but different content (hash differs): keep both.
+    // uniqueDest below stores the new file under a safe unique path; we record a
+    // note so the UI can explain that the original name was preserved.
+    const sameName = findLatestByFilename(filename);
+    const filenameNote = sameName
+      ? "Filename matches an earlier file, but the content differs; stored separately."
+      : null;
 
     const dateFolder = todayFolder();
     const rawDir = path.join(getRawRoot(), dateFolder);
@@ -126,7 +177,7 @@ export async function intakeFile(sourcePath: string, inFlightHashes: Set<string>
     await fs.copyFile(sourcePath, rawDest);
 
     logger.info("vault", "Received file", { filename });
-    return { filename, status: "accepted", job: { filename, type, hash, rawDest, dateFolder } };
+    return { filename, status: "accepted", job: { filename, type, hash, rawDest, dateFolder, filenameNote } };
   } catch (error) {
     logger.error("vault", "Failed to receive file", { filename, error: String(error) });
     return { filename, status: "error", error: String(error) };
@@ -140,10 +191,40 @@ export async function intakeFile(sourcePath: string, inFlightHashes: Set<string>
  * surfaces as a processing failure, not a lost file. Never throws.
  */
 export async function processIntake(job: ProcessJob): Promise<IngestResult> {
-  const { filename, type, hash, rawDest, dateFolder } = job;
+  const { filename, type, hash, rawDest, dateFolder, filenameNote } = job;
   try {
+    // Cheap, deterministic first pass: pull the plain text once, then triage
+    // relevance before spending any AI credits. Clearly non-financial files are
+    // filed away into Irrelevant/ and recorded, but never deeply processed.
+    const representation = await extractText(rawDest, type);
+    const triage = classifyRelevance(type, filename, representation);
+    if (!triage.relevant) {
+      const irrelevantDir = path.join(getIrrelevantRoot(), dateFolder);
+      await fs.mkdir(irrelevantDir, { recursive: true });
+      const irrelevantDest = await uniqueDest(irrelevantDir, path.basename(rawDest));
+      await fs.rename(rawDest, irrelevantDest).catch(async () => {
+        // Cross-device rename can fail; fall back to copy + unlink.
+        await fs.copyFile(rawDest, irrelevantDest);
+        await fs.unlink(rawDest).catch(() => {});
+      });
+      const record = insertDocument({
+        hash,
+        originalFilename: filename,
+        fileType: type,
+        dateIngested: new Date().toISOString(),
+        dateFolder,
+        markdownSuccess: false,
+        rawPath: irrelevantDest,
+        markdownPath: "",
+        lifecycleState: "irrelevant",
+        triageReason: triage.reason,
+      });
+      logger.info("vault", "Filed irrelevant file", { filename });
+      return { filename, status: "irrelevant", docId: record.id };
+    }
+
     // Convert to Markdown under Markdown/<date>/, mirroring the filename.
-    const { markdown, success, aiBlocked } = await convertToMarkdown(rawDest, filename, type);
+    const { markdown, success, aiBlocked } = await polishToMarkdown(representation, filename, type);
     const mdDir = path.join(getMarkdownRoot(), dateFolder);
     await fs.mkdir(mdDir, { recursive: true });
     const mdName = `${path.basename(rawDest, path.extname(rawDest))}.md`;
@@ -175,6 +256,8 @@ export async function processIntake(job: ProcessJob): Promise<IngestResult> {
       documentDate,
       financialYear,
       accounting,
+      lifecycleState: "active",
+      triageReason: filenameNote ?? null,
     });
 
     // Route any uncertain / missing / conflicting fields to the Review Queue.
@@ -193,6 +276,86 @@ export async function processIntake(job: ProcessJob): Promise<IngestResult> {
     return { filename, status: "ingested", markdownSuccess: success, aiBlocked, docId: record.id };
   } catch (error) {
     logger.error("vault", "Failed to process file", { filename, error: String(error) });
+    return { filename, status: "error", error: String(error) };
+  }
+}
+
+/**
+ * Reprocess an existing document from its raw file (no re-drop needed): re-run
+ * conversion + extraction and update the record in place, then set it active.
+ * Used to rescue an irrelevant/excluded document the user wants analyzed. If the
+ * raw file lives in Irrelevant/, it's moved back into Raw/ first. Never throws.
+ */
+export async function reprocessDocument(docId: number): Promise<IngestResult> {
+  const doc = findDocumentById(docId);
+  if (!doc) return { filename: "", status: "error", error: "Document not found" };
+  const filename = doc.originalFilename;
+  try {
+    await ensureVaultDirs();
+    if (!(await fileExists(doc.rawPath))) {
+      return { filename, status: "error", error: "Original file is no longer on disk" };
+    }
+
+    const type = getFileType(filename) ?? (doc.fileType as FileType);
+    const dateFolder = doc.dateFolder || todayFolder();
+
+    // If the raw file was filed under Irrelevant/, move it back into Raw/.
+    let rawPath = doc.rawPath;
+    if (rawPath.startsWith(getIrrelevantRoot())) {
+      const rawDir = path.join(getRawRoot(), dateFolder);
+      await fs.mkdir(rawDir, { recursive: true });
+      const rawDest = await uniqueDest(rawDir, path.basename(rawPath));
+      await fs.rename(rawPath, rawDest).catch(async () => {
+        await fs.copyFile(rawPath, rawDest);
+        await fs.unlink(rawPath).catch(() => {});
+      });
+      rawPath = rawDest;
+    }
+
+    const representation = await extractText(rawPath, type);
+    const { markdown, success } = await polishToMarkdown(representation, filename, type);
+    const mdDir = path.join(getMarkdownRoot(), dateFolder);
+    await fs.mkdir(mdDir, { recursive: true });
+    const mdName = `${path.basename(rawPath, path.extname(rawPath))}.md`;
+    const mdDest = path.join(mdDir, mdName);
+    await fs.writeFile(mdDest, markdown, "utf-8");
+
+    const { currency, extraction } = await extractDocument(markdown, filename);
+    const fyStartMonth = getFinancePrefs().fyStartMonth;
+    const documentDate = extraction.docDate.value;
+    const financialYear = financialYearKey(documentDate, fyStartMonth);
+    const accounting = deriveAccountingHint(extraction, fyStartMonth);
+
+    updateDocumentProcessing(docId, {
+      markdownSuccess: success,
+      markdownPath: mdDest,
+      rawPath,
+      dateFolder,
+      currency,
+      documentDate,
+      financialYear,
+      accounting,
+      lifecycleState: "active",
+      triageReason: null,
+    });
+
+    // Re-record field reviews from scratch (drop any that referenced the old pass).
+    deleteFieldReviewsForDoc(docId);
+    recordExtractionReviews({
+      docId,
+      filename,
+      extraction,
+      currency,
+      financialYear,
+      fyStartMonth,
+      accounting,
+      haystack: `${filename}\n${markdown}`,
+    });
+
+    logger.info("vault", "Reprocessed document", { docId, filename, markdownSuccess: success });
+    return { filename, status: "ingested", markdownSuccess: success, docId };
+  } catch (error) {
+    logger.error("vault", "Failed to reprocess document", { docId, error: String(error) });
     return { filename, status: "error", error: String(error) };
   }
 }

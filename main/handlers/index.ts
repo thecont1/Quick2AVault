@@ -48,6 +48,14 @@ import {
   openDocumentFile,
   openDocumentMarkdown,
 } from "../services/document-detail.js";
+import { listDuplicateEvents } from "../services/database.js";
+import {
+  deleteDocumentPermanently,
+  excludeDocument,
+  requestReprocess,
+  resolveDuplicate,
+  restoreDocument,
+} from "../services/lifecycle.js";
 import {
   addPersonAlias,
   confirmNameForPerson,
@@ -231,6 +239,39 @@ export function registerHandlers(): void {
     const id = Number(docId);
     if (!Number.isFinite(id)) return "Invalid document.";
     return await openDocumentMarkdown(id);
+  });
+
+  // ── Lifecycle actions (exclude / restore / reprocess / delete) ────────
+  ipcMain.handle("documents:exclude", async (_event, docId: unknown) => {
+    const id = Number(docId);
+    return Number.isFinite(id) ? excludeDocument(id) : { ok: false, message: "Invalid document." };
+  });
+
+  ipcMain.handle("documents:restore", async (_event, docId: unknown) => {
+    const id = Number(docId);
+    return Number.isFinite(id) ? restoreDocument(id) : { ok: false, message: "Invalid document." };
+  });
+
+  ipcMain.handle("documents:reprocess", async (_event, docId: unknown, when: unknown) => {
+    const id = Number(docId);
+    const w = when === "later" ? "later" : "now";
+    return Number.isFinite(id) ? requestReprocess(id, w) : { ok: false, message: "Invalid document." };
+  });
+
+  ipcMain.handle("documents:deletePermanently", async (_event, docId: unknown) => {
+    const id = Number(docId);
+    return Number.isFinite(id) ? await deleteDocumentPermanently(id) : { ok: false, message: "Invalid document." };
+  });
+
+  // ── Duplicate events ──────────────────────────────────────────────────
+  ipcMain.handle("duplicates:list", async () => {
+    return listDuplicateEvents();
+  });
+
+  ipcMain.handle("duplicates:resolve", async (_event, eventId: unknown, action: unknown) => {
+    const id = Number(eventId);
+    const a = action === "delete" ? "delete" : "acknowledge";
+    return Number.isFinite(id) ? resolveDuplicate(id, a) : { ok: false, message: "Invalid duplicate." };
   });
 
   // ── Vault handlers ──────────────────────────────────────────────────

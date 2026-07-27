@@ -13,6 +13,17 @@ import { app, logger } from "@glaze/core/backend";
 /** Outcome of foreign-currency detection for a document. */
 export type CurrencyStatus = "none" | "converted" | "needs_review";
 
+/**
+ * Where a document sits in its lifecycle:
+ *  - active               → a relevant financial document in normal analysis
+ *  - irrelevant           → triaged as clearly non-financial; kept but not analyzed
+ *  - excluded             → user removed it from active analysis (raw file kept)
+ *  - reprocess_requested  → user asked to reprocess it (picked up by the queue)
+ */
+export type LifecycleState = "active" | "irrelevant" | "excluded" | "reprocess_requested";
+
+export const LIFECYCLE_STATES: LifecycleState[] = ["active", "irrelevant", "excluded", "reprocess_requested"];
+
 /** Foreign-currency conversion fields stored alongside a document record. */
 export interface CurrencyFields {
   foreignAmount: number | null;
@@ -84,6 +95,26 @@ export interface DocumentRecord extends CurrencyFields {
   financialYear: string | null;
   /** Advisory accounting treatment hint, or null when not applicable. */
   accounting: AccountingHint | null;
+  /** Intake triage lane / lifecycle state (defaults to "active"). */
+  lifecycleState: LifecycleState;
+  /** One-line human explanation of the triage decision, or null. */
+  triageReason: string | null;
+}
+
+/** A logged exact-duplicate drop (same SHA-256 as an already-ingested document). */
+export interface DuplicateEvent {
+  id: number;
+  hash: string;
+  /** The visible filename the user dropped this time. */
+  filename: string;
+  /** Absolute source path of the dropped file (for reference only). */
+  sourcePath: string | null;
+  /** The document this is an exact duplicate of, or null if it's gone. */
+  duplicateOfDocId: number | null;
+  detectedAt: string;
+  /** new = unacknowledged; acknowledged = user has seen and kept it ignored. */
+  status: "new" | "acknowledged";
+  reason: string;
 }
 
 /** The kinds of rule Training Mode / review corrections can learn. */
@@ -321,6 +352,10 @@ export interface NewDocument {
   financialYear?: string | null;
   /** Advisory accounting hint computed at ingestion. */
   accounting?: AccountingHint | null;
+  /** Intake triage lane (defaults to "active"). */
+  lifecycleState?: LifecycleState;
+  /** One-line explanation of the triage decision. */
+  triageReason?: string | null;
 }
 
 let db: DatabaseSync | null = null;
@@ -490,6 +525,21 @@ function getDb(): DatabaseSync {
     );
   `);
   // Add the foreign-currency columns to older document tables (idempotent).
+  // Log of exact-duplicate drops (same content hash as an already-ingested doc).
+  // Kept lightweight so duplicates can surface in review/history without being
+  // re-processed or bloating the vault.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS duplicate_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      hash TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      source_path TEXT,
+      duplicate_of_doc_id INTEGER,
+      detected_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'new',
+      reason TEXT NOT NULL DEFAULT ''
+    );
+  `);
   ensureCurrencyColumns(db);
   logger.info("database", "Document database ready", { dbPath });
   return db;
@@ -515,6 +565,8 @@ function ensureCurrencyColumns(database: DatabaseSync): void {
     ["document_date", "TEXT"],
     ["financial_year", "TEXT"],
     ["accounting_json", "TEXT"],
+    ["lifecycle_state", "TEXT"],
+    ["triage_reason", "TEXT"],
   ];
   for (const [name, type] of columns) {
     if (!existing.has(name)) database.exec(`ALTER TABLE documents ADD COLUMN ${name} ${type}`);
@@ -555,6 +607,8 @@ function mapRow(row: Row): DocumentRecord {
     documentDate: row.document_date == null ? null : String(row.document_date),
     financialYear: row.financial_year == null ? null : String(row.financial_year),
     accounting: parseAccounting(row.accounting_json),
+    lifecycleState: row.lifecycle_state == null ? "active" : (String(row.lifecycle_state) as LifecycleState),
+    triageReason: row.triage_reason == null ? null : String(row.triage_reason),
   };
 }
 
@@ -578,12 +632,14 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
   const documentDate = doc.documentDate ?? null;
   const financialYear = doc.financialYear ?? null;
   const accounting = doc.accounting ?? null;
+  const lifecycleState = doc.lifecycleState ?? "active";
+  const triageReason = doc.triageReason ?? null;
   const stmt = getDb().prepare(`
     INSERT INTO documents
       (hash, original_filename, file_type, date_ingested, date_folder, markdown_success, raw_path, markdown_path,
        foreign_amount, foreign_currency, invoice_date, inr_value, rate_used, rate_date, rate_is_nearest, currency_status,
-       document_date, financial_year, accounting_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       document_date, financial_year, accounting_json, lifecycle_state, triage_reason)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const info = stmt.run(
     doc.hash,
@@ -605,6 +661,8 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
     documentDate,
     financialYear,
     accounting ? JSON.stringify(accounting) : null,
+    lifecycleState,
+    triageReason,
   );
   return {
     id: Number(info.lastInsertRowid),
@@ -620,6 +678,8 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
     documentDate,
     financialYear,
     accounting,
+    lifecycleState,
+    triageReason,
   };
 }
 
@@ -647,9 +707,165 @@ export function updateDocumentClassification(
   getDb().prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...(values as never[]));
 }
 
+/** Set a document's lifecycle state and (optionally) the human triage reason. */
+export function setDocumentLifecycle(docId: number, state: LifecycleState, reason?: string | null): void {
+  if (reason === undefined) {
+    getDb().prepare("UPDATE documents SET lifecycle_state = ? WHERE id = ?").run(state, docId);
+  } else {
+    getDb()
+      .prepare("UPDATE documents SET lifecycle_state = ?, triage_reason = ? WHERE id = ?")
+      .run(state, reason ?? null, docId);
+  }
+}
+
+/**
+ * Update a document's record after a (re)process pass: markdown result + path,
+ * currency, classification, lifecycle. Used when reprocessing an existing raw file.
+ */
+export function updateDocumentProcessing(
+  docId: number,
+  patch: {
+    markdownSuccess?: boolean;
+    markdownPath?: string;
+    rawPath?: string;
+    dateFolder?: string;
+    currency?: CurrencyFields;
+    documentDate?: string | null;
+    financialYear?: string | null;
+    accounting?: AccountingHint | null;
+    lifecycleState?: LifecycleState;
+    triageReason?: string | null;
+  },
+): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  const push = (col: string, val: unknown) => {
+    sets.push(`${col} = ?`);
+    values.push(val);
+  };
+  if (patch.markdownSuccess !== undefined) push("markdown_success", patch.markdownSuccess ? 1 : 0);
+  if (patch.markdownPath !== undefined) push("markdown_path", patch.markdownPath);
+  if (patch.rawPath !== undefined) push("raw_path", patch.rawPath);
+  if (patch.dateFolder !== undefined) push("date_folder", patch.dateFolder);
+  if (patch.currency) {
+    const c = patch.currency;
+    push("foreign_amount", c.foreignAmount);
+    push("foreign_currency", c.foreignCurrency);
+    push("invoice_date", c.invoiceDate);
+    push("inr_value", c.inrValue);
+    push("rate_used", c.rateUsed);
+    push("rate_date", c.rateDate);
+    push("rate_is_nearest", c.rateIsNearest ? 1 : 0);
+    push("currency_status", c.currencyStatus);
+  }
+  if ("documentDate" in patch) push("document_date", patch.documentDate ?? null);
+  if ("financialYear" in patch) push("financial_year", patch.financialYear ?? null);
+  if ("accounting" in patch) push("accounting_json", patch.accounting ? JSON.stringify(patch.accounting) : null);
+  if (patch.lifecycleState !== undefined) push("lifecycle_state", patch.lifecycleState);
+  if ("triageReason" in patch) push("triage_reason", patch.triageReason ?? null);
+  if (sets.length === 0) return;
+  values.push(docId);
+  getDb().prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...(values as never[]));
+}
+
+/** Most-recently-ingested document sharing this exact original filename, if any. */
+export function findLatestByFilename(filename: string): DocumentRecord | null {
+  const row = getDb()
+    .prepare("SELECT * FROM documents WHERE original_filename = ? ORDER BY id DESC LIMIT 1")
+    .get(filename) as Row | undefined;
+  return row ? mapRow(row) : null;
+}
+
+/** Permanently remove a document row and its reviews/audit (files handled by caller). */
+export function deleteDocumentRow(docId: number): void {
+  const d = getDb();
+  d.prepare("DELETE FROM document_field_reviews WHERE doc_id = ?").run(docId);
+  d.prepare("DELETE FROM review_audit WHERE doc_id = ?").run(docId);
+  d.prepare("DELETE FROM document_overrides WHERE doc_id = ?").run(docId);
+  d.prepare("DELETE FROM training_reviews WHERE doc_id = ?").run(docId);
+  d.prepare("DELETE FROM documents WHERE id = ?").run(docId);
+}
+
+/** Ids of documents currently waiting to be reprocessed (user requested "later"). */
+export function reprocessRequestedDocIds(): number[] {
+  const rows = getDb()
+    .prepare("SELECT id FROM documents WHERE lifecycle_state = 'reprocess_requested' ORDER BY id ASC")
+    .all() as Row[];
+  return rows.map((r) => Number(r.id));
+}
+
+// ── Duplicate events ──────────────────────────────────────────────────────
+
+function mapDuplicateEvent(row: Row): DuplicateEvent {
+  return {
+    id: Number(row.id),
+    hash: String(row.hash),
+    filename: String(row.filename),
+    sourcePath: row.source_path == null ? null : String(row.source_path),
+    duplicateOfDocId: row.duplicate_of_doc_id == null ? null : Number(row.duplicate_of_doc_id),
+    detectedAt: String(row.detected_at),
+    status: String(row.status) === "acknowledged" ? "acknowledged" : "new",
+    reason: String(row.reason ?? ""),
+  };
+}
+
+export function insertDuplicateEvent(entry: {
+  hash: string;
+  filename: string;
+  sourcePath: string | null;
+  duplicateOfDocId: number | null;
+  reason: string;
+}): DuplicateEvent {
+  const info = getDb()
+    .prepare(
+      `INSERT INTO duplicate_events (hash, filename, source_path, duplicate_of_doc_id, detected_at, status, reason)
+       VALUES (?, ?, ?, ?, ?, 'new', ?)`,
+    )
+    .run(entry.hash, entry.filename, entry.sourcePath, entry.duplicateOfDocId, new Date().toISOString(), entry.reason);
+  return {
+    id: Number(info.lastInsertRowid),
+    hash: entry.hash,
+    filename: entry.filename,
+    sourcePath: entry.sourcePath,
+    duplicateOfDocId: entry.duplicateOfDocId,
+    detectedAt: new Date().toISOString(),
+    status: "new",
+    reason: entry.reason,
+  };
+}
+
+export function listDuplicateEvents(): DuplicateEvent[] {
+  const rows = getDb().prepare("SELECT * FROM duplicate_events ORDER BY id DESC").all() as Row[];
+  return rows.map(mapDuplicateEvent);
+}
+
+/** How many duplicate events are still unacknowledged (drive the review badge). */
+export function countNewDuplicateEvents(): number {
+  const row = getDb().prepare("SELECT COUNT(*) AS n FROM duplicate_events WHERE status = 'new'").get() as Row;
+  return Number(row.n);
+}
+
+export function setDuplicateEventStatus(id: number, status: DuplicateEvent["status"]): void {
+  getDb().prepare("UPDATE duplicate_events SET status = ? WHERE id = ?").run(status, id);
+}
+
+export function deleteDuplicateEvent(id: number): void {
+  getDb().prepare("DELETE FROM duplicate_events WHERE id = ?").run(id);
+}
+
 export function listDocuments(limit = 200): DocumentRecord[] {
   const rows = getDb()
     .prepare("SELECT * FROM documents ORDER BY id DESC LIMIT ?")
+    .all(limit) as Row[];
+  return rows.map(mapRow);
+}
+
+/** Active documents only (excludes irrelevant/excluded/reprocess_requested). */
+export function listActiveDocuments(limit = 500): DocumentRecord[] {
+  const rows = getDb()
+    .prepare(
+      "SELECT * FROM documents WHERE lifecycle_state IS NULL OR lifecycle_state = 'active' ORDER BY id DESC LIMIT ?",
+    )
     .all(limit) as Row[];
   return rows.map(mapRow);
 }
@@ -662,7 +878,8 @@ export function findDocumentById(id: number): DocumentRecord | null {
 export function getStats(): { total: number; converted: number } {
   const row = getDb()
     .prepare(
-      "SELECT COUNT(*) AS total, COALESCE(SUM(markdown_success), 0) AS converted FROM documents",
+      `SELECT COUNT(*) AS total, COALESCE(SUM(markdown_success), 0) AS converted FROM documents
+       WHERE lifecycle_state IS NULL OR lifecycle_state = 'active'`,
     )
     .get() as Row;
   return { total: Number(row.total), converted: Number(row.converted) };
@@ -1089,23 +1306,31 @@ export function deleteFieldReviewsForDoc(docId: number): void {
   getDb().prepare("DELETE FROM document_field_reviews WHERE doc_id = ?").run(docId);
 }
 
-/** Distinct document ids that still have at least one pending field, newest first. */
+/**
+ * Distinct document ids that still have at least one pending field, newest first.
+ * Only active documents count — excluded/irrelevant docs drop out of the queue.
+ */
 export function reviewQueueDocIds(): number[] {
   const placeholders = PENDING_REVIEW_STATUSES.map(() => "?").join(", ");
   const rows = getDb()
     .prepare(
-      `SELECT DISTINCT doc_id FROM document_field_reviews WHERE status IN (${placeholders}) ORDER BY doc_id DESC`,
+      `SELECT DISTINCT r.doc_id FROM document_field_reviews r
+       JOIN documents d ON d.id = r.doc_id
+       WHERE r.status IN (${placeholders}) AND (d.lifecycle_state IS NULL OR d.lifecycle_state = 'active')
+       ORDER BY r.doc_id DESC`,
     )
     .all(...PENDING_REVIEW_STATUSES) as Row[];
   return rows.map((r) => Number(r.doc_id));
 }
 
-/** How many documents currently have at least one pending field review. */
+/** How many active documents currently have at least one pending field review. */
 export function countDocsNeedingReview(): number {
   const placeholders = PENDING_REVIEW_STATUSES.map(() => "?").join(", ");
   const row = getDb()
     .prepare(
-      `SELECT COUNT(DISTINCT doc_id) AS n FROM document_field_reviews WHERE status IN (${placeholders})`,
+      `SELECT COUNT(DISTINCT r.doc_id) AS n FROM document_field_reviews r
+       JOIN documents d ON d.id = r.doc_id
+       WHERE r.status IN (${placeholders}) AND (d.lifecycle_state IS NULL OR d.lifecycle_state = 'active')`,
     )
     .get(...PENDING_REVIEW_STATUSES) as Row;
   return Number(row.n);

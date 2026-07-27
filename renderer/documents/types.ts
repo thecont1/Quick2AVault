@@ -63,6 +63,24 @@ export interface AccountingHint {
 export type OverallReviewStatus = "conflict" | "missing" | "low_confidence" | "ok";
 export type ReviewAction = "flagged" | "confirmed" | "corrected" | "deferred";
 
+export type LifecycleState = "active" | "irrelevant" | "excluded" | "reprocess_requested";
+
+export interface DuplicateEvent {
+  id: number;
+  hash: string;
+  filename: string;
+  sourcePath: string | null;
+  duplicateOfDocId: number | null;
+  detectedAt: string;
+  status: "new" | "acknowledged";
+  reason: string;
+}
+
+export interface LifecycleResult {
+  ok: boolean;
+  message?: string;
+}
+
 export interface CurrencyFields {
   foreignAmount: number | null;
   foreignCurrency: string | null;
@@ -97,6 +115,8 @@ export interface DocumentBrowserRow {
   foreignCurrency: string | null;
   inrValue: number | null;
   currencyStatus: CurrencyFields["currencyStatus"];
+  lifecycleState: LifecycleState;
+  triageReason: string | null;
 }
 
 export interface DetailField {
@@ -148,6 +168,8 @@ export interface DocumentDetail {
   docType: string | null;
   vendor: string | null;
   category: string | null;
+  lifecycleState: LifecycleState;
+  triageReason: string | null;
   scope: "business" | "personal" | null;
   scopeEvidence: string | null;
   person: PersonContext;
@@ -230,6 +252,14 @@ export const STATUS_META: Record<ReviewStatus, { label: string; color: BadgeColo
   missing: { label: "Missing", color: "orange" },
   confirmed: { label: "Confirmed", color: "green" },
   corrected: { label: "Corrected", color: "blue" },
+};
+
+/** Calm, explicit labels for each intake lane / lifecycle state. */
+export const LIFECYCLE_META: Record<LifecycleState, { label: string; color: BadgeColor }> = {
+  active: { label: "Active", color: "green" },
+  irrelevant: { label: "Irrelevant", color: "secondary" },
+  excluded: { label: "Excluded", color: "orange" },
+  reprocess_requested: { label: "Reprocess requested", color: "blue" },
 };
 
 export const OVERALL_META: Record<OverallReviewStatus, { label: string; color: BadgeColor }> = {

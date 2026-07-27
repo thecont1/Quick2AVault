@@ -29,6 +29,7 @@ export function notifyIngestOutcome(results: IngestResult[]): void {
   if (!Notification.isSupported()) return;
 
   const ingested = results.filter((r) => r.status === "ingested");
+  const irrelevant = results.filter((r) => r.status === "irrelevant");
   const duplicates = results.filter((r) => r.status === "duplicate");
   const unsupported = results.filter((r) => r.status === "unsupported");
   const errored = results.filter((r) => r.status === "error");
@@ -47,10 +48,20 @@ export function notifyIngestOutcome(results: IngestResult[]): void {
       parts.push(`Converted ${pluralize(converted, "file")} to Markdown.`);
     }
     if (duplicates.length > 0) parts.push(`Skipped ${pluralize(duplicates.length, "duplicate")}.`);
+    if (irrelevant.length > 0) parts.push(`Filed ${pluralize(irrelevant.length, "file")} as not financial.`);
     body = parts.join(" ");
+  } else if (irrelevant.length > 0 && duplicates.length === 0 && unsupported.length === 0 && errored.length === 0) {
+    title = "Filed as not financial";
+    body =
+      irrelevant.length === 1
+        ? "It's kept safe — restore or delete it in the Document Browser."
+        : `${pluralize(irrelevant.length, "file")} kept safe — restore or delete them in the Document Browser.`;
   } else if (duplicates.length > 0 && unsupported.length === 0 && errored.length === 0) {
     title = "Already in your vault";
-    body = `Skipped ${pluralize(duplicates.length, "duplicate")}.`;
+    body =
+      irrelevant.length > 0
+        ? `Skipped ${pluralize(duplicates.length, "duplicate")}. Filed ${pluralize(irrelevant.length, "file")} as not financial.`
+        : `Skipped ${pluralize(duplicates.length, "duplicate")}.`;
   } else if (unsupported.length > 0) {
     title = "Unsupported file";
     body = "Drop PDF, XLSX, CSV, or TXT files.";

@@ -7,20 +7,36 @@
  * pins the document and opens the full, editable Evidence Card (stable study).
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Badge, EmptyState, Input, List, ScrollArea, SplitView, Text } from "@glaze/core/components";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Badge,
+  Button,
+  EmptyState,
+  Input,
+  List,
+  ScrollArea,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  SplitView,
+  Text,
+} from "@glaze/core/components";
 import { cn, getFileThumbnailUrl } from "@glaze/core/utils";
 import {
   Building2,
   Calendar,
   CalendarClock,
   Coins,
+  Copy,
   ExternalLink,
   FileText,
   Pencil,
   Search,
   Star,
   Tag,
+  Trash2,
   User,
 } from "lucide-react";
 import { EvidenceCard } from "./evidence-card";
@@ -30,14 +46,28 @@ import {
   formatForeign,
   formatInr,
   fyLabel,
+  LIFECYCLE_META,
   OVERALL_META,
   ROLE_LABEL,
   type DocumentBrowserRow,
   type DocumentDetail,
+  type DuplicateEvent,
+  type LifecycleResult,
 } from "./types";
 
 const invoke = <T,>(channel: string, ...args: unknown[]): Promise<T> =>
   window.glazeAPI.glaze.ipc.invoke<T>(channel, ...args);
+
+/** The lanes the browser can filter to. */
+type Lane = "all" | "active" | "irrelevant" | "excluded" | "duplicates";
+
+const LANE_OPTIONS: { value: Lane; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "active", label: "Active" },
+  { value: "irrelevant", label: "Irrelevant" },
+  { value: "excluded", label: "Excluded" },
+  { value: "duplicates", label: "Duplicates" },
+];
 
 // ── Contact-sheet preview ─────────────────────────────────────────────────
 
@@ -113,6 +143,9 @@ function PeekSummary({ row, prefs }: { row: DocumentBrowserRow; prefs: FinancePr
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-1.5">
+        {row.lifecycleState !== "active" ? (
+          <Badge color={LIFECYCLE_META[row.lifecycleState].color}>{LIFECYCLE_META[row.lifecycleState].label}</Badge>
+        ) : null}
         <Badge color={meta.color}>{meta.label}</Badge>
         {row.personIsSelf ? (
           <Badge color="blue">
@@ -139,9 +172,93 @@ function PeekSummary({ row, prefs }: { row: DocumentBrowserRow; prefs: FinancePr
         <SummaryLine icon={<Tag className="size-3.5" />} label="Category" value={row.category ?? "Uncategorized"} muted={!row.category} />
         {currencyLine ? <SummaryLine icon={<Coins className="size-3.5" />} label="Currency" value={currencyLine} /> : null}
       </div>
+      {row.triageReason ? (
+        <Text variant="small" color="secondary">
+          {row.triageReason}
+        </Text>
+      ) : null}
       <Text variant="small" color="tertiary" className="italic">
         Click this document to inspect and edit every field.
       </Text>
+    </div>
+  );
+}
+
+// ── Duplicates lane ────────────────────────────────────────────────────────
+
+function DuplicatesPanel({ onOpenOriginal }: { onOpenOriginal: (docId: number) => void }) {
+  const queryClient = useQueryClient();
+  const dupQuery = useQuery({
+    queryKey: ["documents", "duplicates"],
+    queryFn: () => invoke<DuplicateEvent[]>("duplicates:list"),
+  });
+  const events = dupQuery.data ?? [];
+
+  const resolve = useMutation({
+    mutationFn: (input: { id: number; action: "acknowledge" | "delete" }) =>
+      invoke<LifecycleResult>("duplicates:resolve", input.id, input.action),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["documents", "duplicates"] });
+    },
+  });
+
+  if (events.length === 0) {
+    return (
+      <div className="p-4">
+        <EmptyState
+          title="No duplicates"
+          description="When you drop a file that exactly matches one already in your vault, it's logged here instead of being processed again."
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2 p-3">
+      <Text variant="small" color="secondary">
+        Exact duplicates (identical content) are never reprocessed. Keep them ignored, or delete the log entry.
+      </Text>
+      {events.map((e) => (
+        <div key={e.id} className="flex flex-col gap-2 rounded-card border border-separator bg-well px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <Copy className="size-4 shrink-0 text-tertiary" />
+            <Text variant="small-strong" className="flex-1 min-w-0 truncate" title={e.filename}>
+              {e.filename}
+            </Text>
+            {e.status === "acknowledged" ? <Badge color="secondary">Kept ignored</Badge> : <Badge color="yellow">New</Badge>}
+          </div>
+          <Text variant="small" color="secondary" className="break-words">
+            {e.reason}
+          </Text>
+          <div className="flex items-center gap-1.5">
+            {e.duplicateOfDocId != null ? (
+              <Button size="small" variant="transparent" onClick={() => onOpenOriginal(e.duplicateOfDocId!)}>
+                <ExternalLink className="size-3.5" />
+                Inspect original
+              </Button>
+            ) : null}
+            {e.status === "new" ? (
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={resolve.isPending}
+                onClick={() => resolve.mutate({ id: e.id, action: "acknowledge" })}
+              >
+                Keep ignored
+              </Button>
+            ) : null}
+            <Button
+              size="small"
+              variant="transparent"
+              disabled={resolve.isPending}
+              onClick={() => resolve.mutate({ id: e.id, action: "delete" })}
+            >
+              <Trash2 className="size-3.5" />
+              Delete log entry
+            </Button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -167,7 +284,9 @@ export function DocumentsView() {
   const [pinnedId, setPinnedId] = useState<number | null>(null);
   const [hoverId, setHoverId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
+  const [lane, setLane] = useState<Lane>("all");
   const prefs = useFinancePrefs();
+  const queryClient = useQueryClient();
 
   const rowsQuery = useQuery({
     queryKey: ["documents", "list"],
@@ -175,31 +294,43 @@ export function DocumentsView() {
   });
   const rows = useMemo(() => rowsQuery.data ?? [], [rowsQuery.data]);
 
+  const laneMatches = (r: DocumentBrowserRow) =>
+    lane === "all" || lane === "duplicates" ? true : r.lifecycleState === lane;
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) =>
-      [r.filename, r.personName, r.vendor, r.docType, r.category, r.financialYear && fyLabel(r.financialYear)].some(
+    return rows.filter((r) => {
+      if (!laneMatches(r)) return false;
+      if (!q) return true;
+      return [r.filename, r.personName, r.vendor, r.docType, r.category, r.financialYear && fyLabel(r.financialYear)].some(
         (v) => v?.toLowerCase().includes(q),
-      ),
-    );
-  }, [rows, query]);
+      );
+    });
+  }, [rows, query, lane]);
 
-  // Consume any initial focus request, and subscribe to later ones.
+  // Consume any initial focus request, and subscribe to later ones + data changes.
   useEffect(() => {
     let cancelled = false;
     void invoke<number | null>("documents:takeInitialFocus").then((id) => {
       if (!cancelled && typeof id === "number") setPinnedId(id);
     });
-    const unsubscribe = window.glazeAPI.glaze.ipc.on("documents:focus", (_e, payload: unknown) => {
+    const unsubscribeFocus = window.glazeAPI.glaze.ipc.on("documents:focus", (_e, payload: unknown) => {
       const id = (payload as { docId?: unknown })?.docId;
       if (typeof id === "number") setPinnedId(id);
     });
+    const unsubscribeChanged = window.glazeAPI.glaze.ipc.on("documents:changed", () => {
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
+    });
+    const unsubscribeDupes = window.glazeAPI.glaze.ipc.on("duplicates:changed", () => {
+      void queryClient.invalidateQueries({ queryKey: ["documents", "duplicates"] });
+    });
     return () => {
       cancelled = true;
-      unsubscribe();
+      unsubscribeFocus();
+      unsubscribeChanged();
+      unsubscribeDupes();
     };
-  }, []);
+  }, [queryClient]);
 
   // Default the pinned document to the first row once data arrives.
   useEffect(() => {
@@ -221,20 +352,52 @@ export function DocumentsView() {
     void invoke<string>("documents:open", docId);
   };
 
+  const openOriginal = (docId: number) => {
+    setLane("all");
+    setPinnedId(docId);
+  };
+
+  const laneSelect = (
+    <Select value={lane} onValueChange={(v) => setLane(v as Lane)}>
+      <SelectTrigger size="small" variant="filled" className="w-28">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {LANE_OPTIONS.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+
+  // The Duplicates lane is a full-width log rather than a list/detail split.
+  if (lane === "duplicates") {
+    return (
+      <ScrollArea title="Duplicates" actions={laneSelect} className="h-full">
+        <DuplicatesPanel onOpenOriginal={openOriginal} />
+      </ScrollArea>
+    );
+  }
+
   const list = (
     <ScrollArea
       title="Documents"
       subtitle={rows.length > 0 ? `${rows.length} file${rows.length === 1 ? "" : "s"}` : undefined}
       actions={
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-tertiary" />
-          <Input
-            size="small"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search"
-            className="w-40 pl-7"
-          />
+        <div className="flex items-center gap-1.5">
+          {laneSelect}
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-tertiary" />
+            <Input
+              size="small"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search"
+              className="w-32 pl-7"
+            />
+          </div>
         </div>
       }
       className="h-full"
@@ -248,7 +411,11 @@ export function DocumentsView() {
       ) : filtered.length === 0 ? (
         <div className="p-4">
           <Text variant="small" color="tertiary">
-            No documents match “{query}”.
+            {query
+              ? `No documents match “${query}”.`
+              : lane === "all"
+                ? "No documents."
+                : `No ${LANE_OPTIONS.find((o) => o.value === lane)?.label.toLowerCase()} documents.`}
           </Text>
         </div>
       ) : (
@@ -280,6 +447,9 @@ export function DocumentsView() {
                 </List.ItemContent>
                 <List.ItemAccessory>
                   <div className="flex items-center gap-1.5">
+                    {r.lifecycleState !== "active" ? (
+                      <Badge color={LIFECYCLE_META[r.lifecycleState].color}>{LIFECYCLE_META[r.lifecycleState].label}</Badge>
+                    ) : null}
                     {r.hasFx ? <Coins className="size-3.5 text-tertiary" /> : null}
                     {r.hasManualOverride ? <Pencil className="size-3 text-support-blue" /> : null}
                     <span

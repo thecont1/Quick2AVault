@@ -43,6 +43,7 @@ import {
   ClipboardList,
   Clock,
   Coins,
+  Copy,
   ExternalLink,
   FileSearch,
   FolderOpen,
@@ -974,6 +975,15 @@ interface ResolveResult {
   message?: string;
 }
 
+interface DuplicateEvent {
+  id: number;
+  filename: string;
+  duplicateOfDocId: number | null;
+  detectedAt: string;
+  status: "new" | "acknowledged";
+  reason: string;
+}
+
 const FIELD_LABEL: Record<ReviewField, string> = {
   person: "Person",
   doc_type: "Document type",
@@ -1245,6 +1255,83 @@ function DocumentReviewCard({ docId }: { docId: number }) {
   );
 }
 
+/** Logged exact-duplicate drops — kept ignored or deleted from history. */
+function DuplicatesReviewBlock() {
+  const queryClient = useQueryClient();
+  const dupQuery = useQuery({
+    queryKey: ["duplicateEvents"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<DuplicateEvent[]>("duplicates:list"),
+  });
+
+  useEffect(() => {
+    const unsubscribe = window.glazeAPI.glaze.ipc.on("duplicates:changed", () => {
+      void queryClient.invalidateQueries({ queryKey: ["duplicateEvents"] });
+    });
+    return unsubscribe;
+  }, [queryClient]);
+
+  const resolve = useMutation({
+    mutationFn: (input: { id: number; action: "acknowledge" | "delete" }) =>
+      window.glazeAPI.glaze.ipc.invoke("duplicates:resolve", input.id, input.action),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["duplicateEvents"] }),
+  });
+
+  const events = dupQuery.data ?? [];
+  if (events.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-2 pt-2">
+      <Text variant="small-strong" color="secondary">
+        Duplicates ({events.length})
+      </Text>
+      <Text variant="small" color="secondary">
+        Exact copies of documents already in your vault — never reprocessed.
+      </Text>
+      <div className="flex flex-col gap-2">
+        {events.map((e) => (
+          <div key={e.id} className="flex flex-col gap-2 rounded-lg border border-panel px-3 py-2.5">
+            <div className="flex items-center gap-2">
+              <Copy className="size-4 shrink-0 text-secondary" />
+              <Text variant="small" className="flex-1 min-w-0 truncate font-medium" title={e.filename}>
+                {e.filename}
+              </Text>
+              {e.status === "acknowledged" ? (
+                <Badge color="secondary">Kept ignored</Badge>
+              ) : (
+                <Badge color="yellow">New</Badge>
+              )}
+            </div>
+            <Text variant="small" color="secondary" className="break-words">
+              {e.reason}
+            </Text>
+            <div className="flex items-center gap-1.5">
+              {e.duplicateOfDocId != null ? (
+                <Button
+                  size="small"
+                  variant="transparent"
+                  onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments", e.duplicateOfDocId)}
+                >
+                  <ExternalLink className="size-3.5" />
+                  Inspect original
+                </Button>
+              ) : null}
+              {e.status === "new" ? (
+                <Button size="small" variant="transparent" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: e.id, action: "acknowledge" })}>
+                  Keep ignored
+                </Button>
+              ) : null}
+              <Button size="small" variant="transparent" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: e.id, action: "delete" })}>
+                <Trash2 className="size-3.5" />
+                Delete entry
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReviewQueueSection() {
   const [openDocId, setOpenDocId] = useState<number | null>(null);
 
@@ -1322,6 +1409,8 @@ function ReviewQueueSection() {
           </div>
         </div>
       )}
+
+      <DuplicatesReviewBlock />
     </section>
   );
 }

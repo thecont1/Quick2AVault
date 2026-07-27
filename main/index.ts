@@ -9,6 +9,8 @@ import { registerHandlers } from "./handlers/index.js";
 import { createOrbWindow, getOrbWindow } from "./windows/orb-window.js";
 import { openSettingsWindow } from "./windows/settings-window.js";
 import { ensureVaultDirs } from "./services/vault.js";
+import { enqueueReprocess } from "./services/ingest-queue.js";
+import { reprocessRequestedDocIds } from "./services/database.js";
 import { backfillFinancialYears, reconcileReviews } from "./services/reviews.js";
 import { isFirstRun } from "./services/preferences.js";
 import { openOnboardingWindow } from "./windows/onboarding-window.js";
@@ -77,6 +79,14 @@ app.whenReady().then(async () => {
   // any previously-ingested documents into their financial-year buckets.
   reconcileReviews();
   backfillFinancialYears();
+
+  // Pick up any documents the user asked to reprocess "later" in a prior session.
+  const pending = reprocessRequestedDocIds();
+  if (pending.length > 0) {
+    enqueueReprocess(pending).catch((error) => {
+      logger.error("main", "Failed to enqueue pending reprocess", error);
+    });
+  }
 
   createOrbWindow().catch((error) => {
     logger.error("main", "Failed to create orb window", error);

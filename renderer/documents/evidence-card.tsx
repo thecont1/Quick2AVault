@@ -26,6 +26,7 @@ import {
 import { cn } from "@glaze/core/utils";
 import {
   AlertTriangle,
+  Archive,
   Building2,
   Calendar,
   CalendarClock,
@@ -39,10 +40,13 @@ import {
   Info,
   Landmark,
   Pencil,
+  RefreshCw,
+  RotateCcw,
   Scale,
   Sparkles,
   Star,
   Tag,
+  Trash2,
   User,
   Wallet,
 } from "lucide-react";
@@ -54,6 +58,7 @@ import {
   formatInr,
   fyLabel,
   isPending,
+  LIFECYCLE_META,
   ROLE_LABEL,
   SOURCE_LABEL,
   STATUS_META,
@@ -62,6 +67,8 @@ import {
   type AccountingTreatment,
   type DetailField,
   type DocumentDetail,
+  type LifecycleResult,
+  type LifecycleState,
   type ResolveResult,
 } from "./types";
 
@@ -441,6 +448,145 @@ function AccountingBlock({
   );
 }
 
+/** A calm banner explaining a non-active lane, or a filename-collision note. */
+function LifecycleBanner({ state, reason }: { state: LifecycleState; reason: string | null }) {
+  if (state === "active" && !reason) return null;
+  const meta = LIFECYCLE_META[state];
+  const tone =
+    state === "irrelevant"
+      ? "border-separator bg-well"
+      : state === "excluded"
+        ? "border-orange-6 bg-orange-2"
+        : state === "reprocess_requested"
+          ? "border-blue-6 bg-blue-2"
+          : "border-separator bg-well";
+  return (
+    <div className={cn("flex items-start gap-2 rounded-card border px-3 py-2.5", tone)}>
+      <Info className="mt-0.5 size-4 shrink-0 text-secondary" />
+      <div className="flex flex-col gap-0.5 min-w-0">
+        <div className="flex items-center gap-1.5">
+          {state !== "active" ? <Badge color={meta.color}>{meta.label}</Badge> : null}
+        </div>
+        {reason ? (
+          <Text variant="small" color="secondary" className="break-words">
+            {reason}
+          </Text>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Deliberate, reversible lane controls for a document (exclude / restore / reprocess / delete). */
+function LifecycleActions({
+  docId,
+  state,
+  onChanged,
+}: {
+  docId: number;
+  state: LifecycleState;
+  onChanged: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const act = useMutation({
+    mutationFn: (input: { channel: string; args: unknown[] }) =>
+      invoke<LifecycleResult>(input.channel, ...input.args),
+    onSuccess: (result) => {
+      if (result?.message) toast(result.message);
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
+      onChanged();
+    },
+  });
+
+  const run = (channel: string, ...args: unknown[]) => act.mutate({ channel, args });
+  const busy = act.isPending;
+
+  return (
+    <>
+      <Separator />
+      <div className="flex flex-col gap-2">
+        <Text variant="small-strong" color="secondary">
+          Manage this document
+        </Text>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {state === "active" ? (
+            <>
+              <Button size="small" variant="transparent" disabled={busy} onClick={() => run("documents:reprocess", docId, "now")}>
+                <RefreshCw className="size-3.5" />
+                Reprocess
+              </Button>
+              <Button size="small" variant="transparent" disabled={busy} onClick={() => run("documents:exclude", docId)}>
+                <Archive className="size-3.5" />
+                Remove from active
+              </Button>
+            </>
+          ) : null}
+
+          {state === "irrelevant" ? (
+            <Button size="small" variant="accent" disabled={busy} onClick={() => run("documents:restore", docId)}>
+              <RotateCcw className="size-3.5" />
+              Restore &amp; process
+            </Button>
+          ) : null}
+
+          {state === "excluded" ? (
+            <>
+              <Button size="small" variant="accent" disabled={busy} onClick={() => run("documents:restore", docId)}>
+                <RotateCcw className="size-3.5" />
+                Restore to active
+              </Button>
+              <Button size="small" variant="transparent" disabled={busy} onClick={() => run("documents:reprocess", docId, "now")}>
+                <RefreshCw className="size-3.5" />
+                Reprocess
+              </Button>
+            </>
+          ) : null}
+
+          {state === "reprocess_requested" ? (
+            <>
+              <Button size="small" variant="accent" disabled={busy} onClick={() => run("documents:reprocess", docId, "now")}>
+                <RefreshCw className="size-3.5" />
+                Reprocess now
+              </Button>
+              <Button size="small" variant="transparent" disabled={busy} onClick={() => run("documents:restore", docId)}>
+                Cancel request
+              </Button>
+            </>
+          ) : null}
+
+          {confirmingDelete ? (
+            <>
+              <Button size="small" variant="destructive" disabled={busy} onClick={() => run("documents:deletePermanently", docId)}>
+                <Trash2 className="size-3.5" />
+                Confirm delete
+              </Button>
+              <Button size="small" variant="transparent" disabled={busy} onClick={() => setConfirmingDelete(false)}>
+                Cancel
+              </Button>
+            </>
+          ) : (
+            <Button size="small" variant="transparent" disabled={busy} onClick={() => setConfirmingDelete(true)}>
+              <Trash2 className="size-3.5" />
+              Delete permanently
+            </Button>
+          )}
+        </div>
+        {confirmingDelete ? (
+          <Text variant="small" color="tertiary">
+            This removes the file from disk and the app. This can&apos;t be undone.
+          </Text>
+        ) : (
+          <Text variant="small" color="tertiary">
+            Removing from active keeps the original file safe — you can restore or reprocess it anytime.
+          </Text>
+        )}
+      </div>
+    </>
+  );
+}
+
 export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; onChanged: () => void }) {
   const [showIdentity, setShowIdentity] = useState(false);
   const queryClient = useQueryClient();
@@ -467,6 +613,9 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
 
   return (
     <div className="flex flex-col gap-3">
+      {/* Lane / triage context */}
+      <LifecycleBanner state={detail.lifecycleState} reason={detail.triageReason} />
+
       {/* Summary — scan in seconds */}
       <div className="flex flex-col divide-y divide-separator">
         <SummaryRow icon={<User className="size-4" />} label="Person">
@@ -680,6 +829,9 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
           </Text>
         </div>
       ) : null}
+
+      {/* Lifecycle controls — deliberate and reversible */}
+      <LifecycleActions docId={detail.docId} state={detail.lifecycleState} onChanged={onChanged} />
     </div>
   );
 }
