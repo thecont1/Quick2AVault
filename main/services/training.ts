@@ -177,6 +177,7 @@ function knownFactsText(rules: LearnedRule[]): string {
     person_variant: "Name variant → person",
     keyword_doctype: "Keyword → document type",
     source_scope: "Account/source scope",
+    accounting_treatment: "Vendor → accounting treatment",
   };
   return rules
     .map((r) => `- ${label[r.ruleType]}: "${r.matchKey}" → ${r.value} (confidence ${r.confidence})`)
@@ -473,6 +474,7 @@ const TYPE_HEADINGS: Record<RuleType, string> = {
   person_variant: "Name variant → Person",
   keyword_doctype: "Keyword / layout → Document type",
   source_scope: "Account / source → Business vs Personal",
+  accounting_treatment: "Vendor → Accounting treatment",
 };
 
 /** Regenerate the human-readable RULES.md from the current learned rules. */

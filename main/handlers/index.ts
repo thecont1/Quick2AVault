@@ -10,6 +10,7 @@ import { fileURLToPath } from "url";
 import { ipcMain, shell, logger } from "@glaze/core/backend";
 
 import { getSettingsWindow, openSettingsWindow, takePendingSettingsSection } from "../windows/settings-window.js";
+import { closeOnboardingWindow, openOnboardingWindow } from "../windows/onboarding-window.js";
 import { openDocumentsWindow, takeInitialFocusDocId } from "../windows/documents-window.js";
 import { showOrbMenu } from "../windows/orb-menu.js";
 import { beginOrbDrag, endOrbDrag, moveOrbBy } from "../windows/orb-window.js";
@@ -33,6 +34,7 @@ import {
   type RuleType,
 } from "../services/database.js";
 import { getCachedSnapshot, refreshSnapshot } from "../services/snapshot.js";
+import { getFinancePrefs, isFirstRun, setFinancePrefs, type FinancePrefs } from "../services/preferences.js";
 import {
   confirmAllSuggestions,
   getDocumentReviewDetail,
@@ -79,10 +81,34 @@ import {
 const REASSIGN_AUTO = "__auto__";
 const REASSIGN_UNIDENTIFIED = "__unidentified__";
 
-const VALID_RULE_TYPES: RuleType[] = ["vendor_category", "person_variant", "keyword_doctype", "source_scope"];
+const VALID_RULE_TYPES: RuleType[] = [
+  "vendor_category",
+  "person_variant",
+  "keyword_doctype",
+  "source_scope",
+  "accounting_treatment",
+];
 
 function isRuleType(value: unknown): value is RuleType {
   return typeof value === "string" && (VALID_RULE_TYPES as string[]).includes(value);
+}
+
+const VALID_DATE_FORMATS = new Set(["DD-MM-YYYY", "DD MMM YYYY", "MM/DD/YYYY", "YYYY-MM-DD"]);
+const VALID_GROUPINGS = new Set(["indian", "western"]);
+
+/** Coerce a loosely-typed IPC value into a finance-prefs patch (only known keys). */
+function coercePrefsPatch(value: unknown): Partial<FinancePrefs> {
+  if (!value || typeof value !== "object") return {};
+  const v = value as Record<string, unknown>;
+  const patch: Partial<FinancePrefs> = {};
+  if (typeof v.currency === "string" && v.currency.trim()) patch.currency = v.currency.trim().toUpperCase();
+  if (typeof v.locale === "string" && v.locale.trim()) patch.locale = v.locale.trim();
+  if (typeof v.dateFormat === "string" && VALID_DATE_FORMATS.has(v.dateFormat)) patch.dateFormat = v.dateFormat as FinancePrefs["dateFormat"];
+  if (typeof v.decimalSeparator === "string" && v.decimalSeparator) patch.decimalSeparator = v.decimalSeparator;
+  if (typeof v.thousandsSeparator === "string") patch.thousandsSeparator = v.thousandsSeparator;
+  if (typeof v.grouping === "string" && VALID_GROUPINGS.has(v.grouping)) patch.grouping = v.grouping as FinancePrefs["grouping"];
+  if (typeof v.fyStartMonth === "number" && Number.isInteger(v.fyStartMonth)) patch.fyStartMonth = v.fyStartMonth;
+  return patch;
 }
 
 /** Coerce a loosely-typed IPC value into a list of valid person roles. */
@@ -151,6 +177,28 @@ export function registerHandlers(): void {
   // Consumed once by the settings renderer on mount to scroll to a section.
   ipcMain.handle("settings:takeFocusSection", async () => {
     return takePendingSettingsSection();
+  });
+
+  // ── Finance / locale preferences ────────────────────────────────────
+  ipcMain.handle("prefs:get", async () => getFinancePrefs());
+  ipcMain.handle("prefs:isFirstRun", async () => isFirstRun());
+
+  ipcMain.handle("prefs:set", async (_event, patch: unknown) => {
+    const next = setFinancePrefs(coercePrefsPatch(patch));
+    ipcMain.broadcast("prefs:changed", next);
+    return next;
+  });
+
+  // First-run: persist the (reviewed) preferences and dismiss the window.
+  ipcMain.handle("onboarding:complete", async (_event, patch: unknown) => {
+    const next = setFinancePrefs(coercePrefsPatch(patch));
+    ipcMain.broadcast("prefs:changed", next);
+    closeOnboardingWindow();
+    return next;
+  });
+
+  ipcMain.handle("window:openOnboarding", async () => {
+    await openOnboardingWindow();
   });
 
   // ── Document Browser / evidence card ────────────────────────────────

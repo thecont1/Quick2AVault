@@ -9,12 +9,26 @@
  */
 import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Badge, Button, Input, Separator, Text, toast } from "@glaze/core/components";
+import {
+  Badge,
+  Button,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Separator,
+  Text,
+  toast,
+  type BadgeColor,
+} from "@glaze/core/components";
 import { cn } from "@glaze/core/utils";
 import {
   AlertTriangle,
   Building2,
   Calendar,
+  CalendarClock,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -23,22 +37,29 @@ import {
   ExternalLink,
   FileText,
   Info,
+  Landmark,
   Pencil,
+  Scale,
   Sparkles,
   Star,
   Tag,
   User,
   Wallet,
 } from "lucide-react";
+import { useFinancePrefs, type FinancePrefs } from "../finance";
 import {
   confidenceColor,
   formatDate,
   formatForeign,
   formatInr,
+  fyLabel,
   isPending,
   ROLE_LABEL,
   SOURCE_LABEL,
   STATUS_META,
+  TREATMENT_LABEL,
+  TREATMENT_OPTIONS,
+  type AccountingTreatment,
   type DetailField,
   type DocumentDetail,
   type ResolveResult,
@@ -262,9 +283,168 @@ function AuditTrail({ audit }: { audit: DocumentDetail["audit"] }) {
   );
 }
 
+function treatmentColor(t: AccountingTreatment): BadgeColor {
+  switch (t) {
+    case "needs_accounting_review":
+      return "orange";
+    case "prepaid_expense":
+    case "accrued_expense":
+    case "deferred_revenue":
+      return "yellow";
+    case "recognized_revenue":
+    case "current_period_expense":
+      return "green";
+    case "reimbursement":
+      return "blue";
+    default:
+      return "secondary";
+  }
+}
+
+/**
+ * The advisory Accounting Policy Hint — kept separate from the raw facts and
+ * always framed as a suggestion. Lets the user override the treatment (which
+ * teaches a vendor rule) or confirm/defer the suggestion.
+ */
+function AccountingBlock({
+  detail,
+  prefs,
+  onChanged,
+}: {
+  detail: DocumentDetail;
+  prefs: FinancePrefs;
+  onChanged: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const acc = detail.fields.find((f) => f.field === "accounting");
+  const hint = detail.accounting;
+  const treatment = (hint?.treatment ?? (acc?.value as AccountingTreatment | null) ?? null) as AccountingTreatment | null;
+
+  const resolve = useMutation({
+    mutationFn: (input: { action: "confirm" | "correct" | "defer"; value?: string }) =>
+      invoke<ResolveResult>("reviews:resolve", detail.docId, "accounting", input.action, input.value),
+    onSuccess: (result) => {
+      if (result?.ruleLearned) toast("Learned an accounting rule from your choice");
+      else if (result?.ruleReinforced) toast("Reinforced your accounting rule");
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
+      onChanged();
+    },
+  });
+
+  if (!acc && !hint) return null;
+  const confidence = hint?.confidence ?? acc?.confidence ?? 0;
+  const reason = hint?.reason ?? acc?.reason ?? "";
+  const pending = acc ? isPending(acc.status) : false;
+  const userTouched = acc?.userTouched ?? false;
+
+  return (
+    <>
+      <Separator />
+      <div className="flex flex-col gap-2 rounded-lg bg-well px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <Scale className="size-4 text-tertiary" />
+          <Text variant="small-strong" className="flex-1">
+            Accounting hint
+          </Text>
+          {userTouched ? <Badge color="blue">Edited by you</Badge> : null}
+          {acc ? <Badge color={STATUS_META[acc.status].color}>{STATUS_META[acc.status].label}</Badge> : null}
+          {confidence > 0 ? (
+            <Badge color={confidenceColor(confidence)} className="tabular-nums">
+              {Math.round(confidence * 100)}%
+            </Badge>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Text variant="small" color="tertiary" className="w-28 shrink-0">
+            Suggested treatment
+          </Text>
+          {treatment ? (
+            <Badge color={treatmentColor(treatment)}>{TREATMENT_LABEL[treatment]}</Badge>
+          ) : (
+            <Text variant="small" color="tertiary">
+              Not applicable
+            </Text>
+          )}
+        </div>
+
+        {hint && (hint.servicePeriodStart || hint.servicePeriodEnd || hint.paymentDate) ? (
+          <div className="flex flex-col gap-0.5">
+            {hint.servicePeriodStart || hint.servicePeriodEnd ? (
+              <div className="flex items-center gap-1.5">
+                <CalendarClock className="size-3.5 text-tertiary shrink-0" />
+                <Text variant="small" color="secondary">
+                  Service period: {formatDate(hint.servicePeriodStart, prefs)} – {formatDate(hint.servicePeriodEnd, prefs)}
+                </Text>
+              </div>
+            ) : null}
+            {hint.paymentDate ? (
+              <div className="flex items-center gap-1.5">
+                <Landmark className="size-3.5 text-tertiary shrink-0" />
+                <Text variant="small" color="secondary">
+                  Payment date: {formatDate(hint.paymentDate, prefs)}
+                </Text>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {reason ? (
+          <Text variant="small" color="secondary" className="break-words">
+            {reason}
+          </Text>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+          <Text variant="small" color="tertiary">
+            Set treatment
+          </Text>
+          <Select value={treatment ?? undefined} onValueChange={(v) => resolve.mutate({ action: "correct", value: v })}>
+            <SelectTrigger size="small" variant="filled" className="w-56">
+              <SelectValue placeholder="Choose a treatment…" />
+            </SelectTrigger>
+            <SelectContent>
+              {TREATMENT_OPTIONS.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {TREATMENT_LABEL[t]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {pending ? (
+            <Button
+              size="small"
+              variant="accent"
+              disabled={resolve.isPending}
+              onClick={() => resolve.mutate({ action: "confirm", value: acc?.suggestedValue ?? treatment ?? undefined })}
+            >
+              <CheckCircle2 className="size-3.5" />
+              Confirm
+            </Button>
+          ) : null}
+          {pending ? (
+            <Button size="small" variant="transparent" disabled={resolve.isPending} onClick={() => resolve.mutate({ action: "defer" })}>
+              <Clock className="size-3.5" />
+              Later
+            </Button>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-1 text-tertiary">
+          <Info className="size-3 shrink-0" />
+          <Text variant="small" color="tertiary">
+            Suggested treatment — an accounting hint, not a booked entry or accounting advice.
+          </Text>
+        </div>
+      </div>
+    </>
+  );
+}
+
 export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; onChanged: () => void }) {
   const [showIdentity, setShowIdentity] = useState(false);
   const queryClient = useQueryClient();
+  const prefs = useFinancePrefs();
   const p = detail.person;
 
   const confirmAll = useMutation({
@@ -322,7 +502,17 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
 
         <SummaryRow icon={<Calendar className="size-4" />} label="Document date">
           <Text variant="small" color={detail.docDate ? "primary" : "tertiary"} className="tabular-nums">
-            {formatDate(detail.docDate)}
+            {formatDate(detail.docDate, prefs)}
+          </Text>
+        </SummaryRow>
+
+        <SummaryRow
+          icon={<CalendarClock className="size-4" />}
+          label="Financial year"
+          emphasize={!detail.financialYear}
+        >
+          <Text variant="small" color={detail.financialYear ? "primary" : "tertiary"} className="tabular-nums">
+            {detail.financialYear ? fyLabel(detail.financialYear) : "Not determined — needs a document date"}
           </Text>
         </SummaryRow>
 
@@ -348,7 +538,7 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
             {cur.currencyStatus === "converted" && cur.foreignAmount != null && cur.foreignCurrency && cur.inrValue != null ? (
               <div className="flex flex-col gap-0.5">
                 <Text variant="small" className="tabular-nums">
-                  {formatForeign(cur.foreignAmount, cur.foreignCurrency)} → {formatInr(cur.inrValue)}
+                  {formatForeign(cur.foreignAmount, cur.foreignCurrency, prefs)} → {formatInr(cur.inrValue, prefs)}
                 </Text>
                 {cur.rateUsed != null && cur.rateDate ? (
                   <Text variant="small" color="tertiary" className="tabular-nums">
@@ -365,6 +555,9 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
           </SummaryRow>
         ) : null}
       </div>
+
+      {/* Accounting policy hint (advisory) */}
+      <AccountingBlock detail={detail} prefs={prefs} onChanged={onChanged} />
 
       {/* Identity reasoning */}
       {(p.aliases.length > 0 || p.evidence.length > 0) ? (
@@ -432,7 +625,9 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
             No field intelligence recorded yet for this document.
           </Text>
         ) : (
-          detail.fields.map((f) => <FieldRow key={f.field} docId={detail.docId} field={f} onChanged={onChanged} />)
+          detail.fields
+            .filter((f) => f.field !== "accounting")
+            .map((f) => <FieldRow key={f.field} docId={detail.docId} field={f} onChanged={onChanged} />)
         )}
       </div>
 

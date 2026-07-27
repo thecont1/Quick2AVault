@@ -4,6 +4,13 @@
  * review/person types in main/services/database.ts.
  */
 import type { BadgeColor } from "@glaze/core/components";
+import {
+  formatDatePref,
+  formatForeign as formatForeignPref,
+  formatMoney,
+  INDIA_DEFAULTS,
+  type FinancePrefs,
+} from "../finance";
 
 export type PersonRole =
   | "self"
@@ -22,8 +29,37 @@ export type PersonRole =
   | "other";
 
 export type FieldSource = "ai_inferred" | "learned_rule" | "user_confirmed" | "manual";
-export type ReviewField = "person" | "doc_type" | "vendor" | "doc_date" | "amount" | "fx";
+export type ReviewField =
+  | "person"
+  | "doc_type"
+  | "vendor"
+  | "doc_date"
+  | "fin_year"
+  | "amount"
+  | "fx"
+  | "accounting";
 export type ReviewStatus = "low_confidence" | "conflict" | "missing" | "confirmed" | "corrected";
+
+export type AccountingFlow = "expense" | "income" | "unknown";
+export type AccountingTreatment =
+  | "current_period_expense"
+  | "prepaid_expense"
+  | "accrued_expense"
+  | "deferred_revenue"
+  | "recognized_revenue"
+  | "reimbursement"
+  | "needs_accounting_review";
+
+export interface AccountingHint {
+  flow: AccountingFlow;
+  treatment: AccountingTreatment;
+  confidence: number;
+  reason: string;
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
+  paymentDate: string | null;
+  source: FieldSource;
+}
 export type OverallReviewStatus = "conflict" | "missing" | "low_confidence" | "ok";
 export type ReviewAction = "flagged" | "confirmed" | "corrected" | "deferred";
 
@@ -51,6 +87,7 @@ export interface DocumentBrowserRow {
   docType: string | null;
   vendor: string | null;
   docDate: string | null;
+  financialYear: string | null;
   category: string | null;
   reviewStatus: OverallReviewStatus;
   pendingCount: number;
@@ -107,6 +144,7 @@ export interface DocumentDetail {
   markdownPath: string;
   dateIngested: string;
   docDate: string | null;
+  financialYear: string | null;
   docType: string | null;
   vendor: string | null;
   category: string | null;
@@ -114,6 +152,7 @@ export interface DocumentDetail {
   scopeEvidence: string | null;
   person: PersonContext;
   currency: CurrencyFields;
+  accounting: AccountingHint | null;
   fields: DetailField[];
   audit: ReviewAuditEntry[];
   markdownExcerpt: string | null;
@@ -158,9 +197,32 @@ export const FIELD_LABEL: Record<ReviewField, string> = {
   doc_type: "Document type",
   vendor: "Vendor / institution",
   doc_date: "Document date",
+  fin_year: "Financial year",
   amount: "Amount",
   fx: "Currency conversion",
+  accounting: "Accounting hint",
 };
+
+export const TREATMENT_LABEL: Record<AccountingTreatment, string> = {
+  current_period_expense: "Current-period expense",
+  prepaid_expense: "Prepaid expense",
+  accrued_expense: "Accrued expense",
+  deferred_revenue: "Deferred revenue",
+  recognized_revenue: "Recognized revenue",
+  reimbursement: "Reimbursement",
+  needs_accounting_review: "Needs accounting review",
+};
+
+/** Treatments offered in the override picker (review-only isn't a target). */
+export const TREATMENT_OPTIONS: AccountingTreatment[] = [
+  "current_period_expense",
+  "prepaid_expense",
+  "accrued_expense",
+  "deferred_revenue",
+  "recognized_revenue",
+  "reimbursement",
+  "needs_accounting_review",
+];
 
 export const STATUS_META: Record<ReviewStatus, { label: string; color: BadgeColor }> = {
   low_confidence: { label: "Low confidence", color: "yellow" },
@@ -189,32 +251,17 @@ export function confidenceColor(confidence: number): BadgeColor {
   return "red";
 }
 
-export function formatInr(amount: number): string {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    maximumFractionDigits: 0,
-  }).format(amount);
+/** Format the vault currency (INR by default), honoring the user's prefs. */
+export function formatInr(amount: number, prefs: FinancePrefs = INDIA_DEFAULTS): string {
+  return formatMoney(amount, prefs);
 }
 
-export function formatForeign(amount: number, currency: string): string {
-  try {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency,
-      maximumFractionDigits: 2,
-    }).format(amount);
-  } catch {
-    return `${amount} ${currency}`;
-  }
+export function formatForeign(amount: number, currency: string, prefs: FinancePrefs = INDIA_DEFAULTS): string {
+  return formatForeignPref(amount, currency, prefs);
 }
 
-export function formatDate(value: string | null): string {
-  if (!value) return "—";
-  // Accept YYYY, YYYY-MM, YYYY-MM-DD and ISO timestamps.
-  const iso = value.length <= 10 ? value : value.slice(0, 10);
-  const d = new Date(iso.length === 4 ? `${iso}-01-01` : iso);
-  if (Number.isNaN(d.getTime())) return value;
-  if (iso.length === 4) return iso;
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+export function formatDate(value: string | null, prefs: FinancePrefs = INDIA_DEFAULTS): string {
+  return formatDatePref(value, prefs);
 }
+
+export { fyLabel } from "../finance";

@@ -24,6 +24,7 @@ import {
   listLearnedRules,
   listReviewAudit,
   REVIEW_FIELDS,
+  type AccountingHint,
   type CurrencyFields,
   type DocumentFieldReview,
   type FieldSource,
@@ -44,8 +45,10 @@ export const FIELD_LABEL: Record<ReviewField, string> = {
   doc_type: "Document type",
   vendor: "Vendor / institution",
   doc_date: "Document date",
+  fin_year: "Financial year",
   amount: "Amount",
   fx: "Currency conversion",
+  accounting: "Accounting hint",
 };
 
 /** Compact status used for the browser list's overall review badge. */
@@ -65,6 +68,8 @@ export interface DocumentBrowserRow {
   docType: string | null;
   vendor: string | null;
   docDate: string | null;
+  /** Financial-year key (e.g. "2025-26"), or null when undetermined. */
+  financialYear: string | null;
   category: string | null;
   /** Worst pending review state across fields; "ok" when nothing pending. */
   reviewStatus: OverallReviewStatus;
@@ -116,6 +121,8 @@ export interface DocumentDetail {
   markdownPath: string;
   dateIngested: string;
   docDate: string | null;
+  /** Financial-year key (e.g. "2025-26"), or null when undetermined. */
+  financialYear: string | null;
   docType: string | null;
   vendor: string | null;
   category: string | null;
@@ -124,6 +131,8 @@ export interface DocumentDetail {
   scopeEvidence: string | null;
   person: PersonContext;
   currency: CurrencyFields;
+  /** Advisory accounting treatment hint, or null when not applicable. */
+  accounting: AccountingHint | null;
   fields: DetailField[];
   audit: ReviewAuditEntry[];
   /** A short excerpt of the converted Markdown, for evidence context. */
@@ -231,7 +240,8 @@ export function listDocumentBrowser(): DocumentBrowserRow[] {
       personRoles: entity?.roles ?? [],
       docType: fieldValue(reviews, "doc_type"),
       vendor: fieldValue(reviews, "vendor"),
-      docDate: fieldValue(reviews, "doc_date") ?? attribution.get(doc.id)?.periodStart ?? null,
+      docDate: doc.documentDate ?? fieldValue(reviews, "doc_date") ?? attribution.get(doc.id)?.periodStart ?? null,
+      financialYear: doc.financialYear,
       category: attribution.get(doc.id)?.category ?? null,
       reviewStatus: status,
       pendingCount: pending,
@@ -316,7 +326,7 @@ export async function getDocumentDetail(docId: number): Promise<DocumentDetail |
   const person = buildPersonContext(doc, overrides, attribution, aliasIndex, entities);
   const docType = fieldValue(reviews, "doc_type");
   const vendor = fieldValue(reviews, "vendor");
-  const docDate = fieldValue(reviews, "doc_date") ?? attribution.get(docId)?.periodStart ?? null;
+  const docDate = doc.documentDate ?? fieldValue(reviews, "doc_date") ?? attribution.get(docId)?.periodStart ?? null;
   const category = attribution.get(docId)?.category ?? null;
 
   const scopeHit = detectScope([vendor ?? "", doc.originalFilename, category ?? ""].join(" "));
@@ -329,6 +339,7 @@ export async function getDocumentDetail(docId: number): Promise<DocumentDetail |
     markdownPath: doc.markdownPath,
     dateIngested: doc.dateIngested,
     docDate,
+    financialYear: doc.financialYear,
     docType,
     vendor,
     category,
@@ -345,6 +356,7 @@ export async function getDocumentDetail(docId: number): Promise<DocumentDetail |
       rateIsNearest: doc.rateIsNearest,
       currencyStatus: doc.currencyStatus,
     },
+    accounting: doc.accounting,
     fields: reviews.map(toDetailField),
     audit: listReviewAudit(docId),
     markdownExcerpt: await readExcerpt(doc.markdownPath),

@@ -18,6 +18,7 @@ import {
   addReviewAudit,
   findDocumentById,
   getFieldReview,
+  listDocuments,
   listFieldReviews,
   listLearnedRules,
   listReviewAudit,
@@ -26,10 +27,14 @@ import {
   setDocumentOverride,
   setFieldReviewResolution,
   updateDocumentCurrency,
+  updateDocumentClassification,
   upsertConfirmedRule,
   upsertFieldReview,
+  ACCOUNTING_TREATMENTS,
   PENDING_REVIEW_STATUSES,
   REVIEW_FIELDS,
+  type AccountingHint,
+  type AccountingTreatment,
   type CurrencyFields,
   type DocumentFieldReview,
   type DocumentRecord,
@@ -40,7 +45,9 @@ import {
 } from "./database.js";
 import { convertToInr, CURRENCY_NONE } from "./currency.js";
 import type { DocumentExtraction } from "./extraction.js";
+import { TREATMENT_LABEL } from "./accounting.js";
 import { confirmNameForPerson, ensurePerson } from "./people.js";
+import { financialYearKey, fyLabel, getFinancePrefs } from "./preferences.js";
 import { writeRulesMarkdown } from "./training.js";
 
 // ── Public shapes (for IPC / UI) ─────────────────────────────────────────
@@ -115,9 +122,12 @@ export function recordExtractionReviews(input: {
   filename: string;
   extraction: DocumentExtraction;
   currency: CurrencyFields;
+  financialYear: string | null;
+  fyStartMonth: number;
+  accounting: AccountingHint | null;
   haystack: string;
 }): void {
-  const { docId, extraction, currency, haystack } = input;
+  const { docId, extraction, currency, financialYear, accounting, haystack } = input;
   const put = (
     field: ReviewField,
     value: string | null,
@@ -184,6 +194,22 @@ export function recordExtractionReviews(input: {
     put("doc_date", dd.value, true, true, "confirmed", "", dd.value);
   }
 
+  // Financial year — a first-class classification derived from the document
+  // date. A missing/ambiguous date makes the FY uncertain, so it goes to review
+  // rather than being guessed silently.
+  const fyText = fyLabel(financialYear);
+  if (!financialYear) {
+    if (!dd.present) {
+      put("fin_year", null, false, false, "missing", "Can't assign a financial year — no clear document date was found.", null);
+    } else {
+      put("fin_year", null, true, false, "low_confidence", "The document date is unclear, so its financial year can't be determined confidently.", null, UNSURE);
+    }
+  } else if (!dd.confident) {
+    put("fin_year", fyText, true, false, "low_confidence", `Assigned to ${fyText} from an unconfident document date — please confirm the period.`, fyText, UNSURE);
+  } else {
+    put("fin_year", fyText, true, true, "confirmed", `Classified into ${fyText} from the document date.`, fyText);
+  }
+
   // Primary amount — only track when relevant (present, or a currency implies one).
   const am = extraction.amount;
   if (am.present) {
@@ -210,6 +236,23 @@ export function recordExtractionReviews(input: {
     );
   } else if (currency.currencyStatus === "converted") {
     put("fx", describeFx(currency), true, true, "confirmed", "", describeFx(currency), CONFIDENT);
+  }
+
+  // Accounting treatment hint — advisory only. Route advances / prepaid /
+  // deferred items and cross-financial-year cases to review; recognize plain
+  // current-period items with confidence.
+  if (accounting) {
+    const routeToReview =
+      accounting.treatment === "prepaid_expense" ||
+      accounting.treatment === "accrued_expense" ||
+      accounting.treatment === "deferred_revenue";
+    if (accounting.treatment === "needs_accounting_review") {
+      put("accounting", accounting.treatment, true, false, "conflict", accounting.reason, accounting.treatment, accounting.confidence);
+    } else if (routeToReview || accounting.confidence < 0.6) {
+      put("accounting", accounting.treatment, true, false, "low_confidence", accounting.reason, accounting.treatment, accounting.confidence);
+    } else {
+      put("accounting", accounting.treatment, true, true, "confirmed", accounting.reason, accounting.treatment, accounting.confidence);
+    }
   }
 
   logger.info("reviews", "Recorded extraction reviews", { docId });
@@ -342,6 +385,39 @@ export function reconcileReviews(): number {
   return reconciled;
 }
 
+/**
+ * Backfill the financial-year classification for documents ingested before FY
+ * awareness existed (or before their date was known). Uses the stored document
+ * date, else the document-date review value. Idempotent; safe to run at startup.
+ */
+export function backfillFinancialYears(): number {
+  const startMonth = getFinancePrefs().fyStartMonth;
+  let updated = 0;
+  for (const doc of listDocuments(5000)) {
+    if (doc.financialYear) continue;
+    const dd = getFieldReview(doc.id, "doc_date");
+    const dateVal = doc.documentDate ?? dd?.finalValue ?? dd?.extractedValue ?? null;
+    const key = financialYearKey(dateVal, startMonth);
+    if (!key) continue;
+    updateDocumentClassification(doc.id, { documentDate: doc.documentDate ?? dateVal, financialYear: key });
+    if (!getFieldReview(doc.id, "fin_year")) {
+      upsertFieldReview({
+        docId: doc.id,
+        field: "fin_year",
+        extractedValue: fyLabel(key),
+        confidence: CONFIDENT,
+        source: "ai_inferred",
+        reason: `Classified into ${fyLabel(key)} from the document date.`,
+        suggestedValue: fyLabel(key),
+        status: "confirmed",
+      });
+    }
+    updated += 1;
+  }
+  if (updated > 0) logger.info("reviews", "Backfilled financial years", { updated });
+  return updated;
+}
+
 // ── Resolving a field ────────────────────────────────────────────────────
 
 function applyPersonResolution(
@@ -425,6 +501,88 @@ async function applyFxResolution(
 }
 
 /**
+ * When the document date is confirmed/corrected, reclassify the financial year
+ * to match — and keep the (unresolved) FY review row consistent so 31-Mar vs
+ * 01-Apr always land in the right period.
+ */
+function applyDocDateResolution(docId: number, finalValue: string): ResolveResult {
+  const iso = /^\d{4}-\d{2}-\d{2}/.test(finalValue) ? finalValue.slice(0, 10) : null;
+  const key = financialYearKey(iso, getFinancePrefs().fyStartMonth);
+  updateDocumentClassification(docId, { documentDate: iso, financialYear: key });
+
+  const fyReview = getFieldReview(docId, "fin_year");
+  const userSetFy = fyReview?.source === "user_confirmed" || fyReview?.source === "manual";
+  if (!userSetFy) {
+    upsertFieldReview({
+      docId,
+      field: "fin_year",
+      extractedValue: key ? fyLabel(key) : null,
+      confidence: key ? CONFIDENT : 0,
+      source: "ai_inferred",
+      reason: key ? `Reclassified into ${fyLabel(key)} from the corrected document date.` : "No financial year — the corrected date is unclear.",
+      suggestedValue: key ? fyLabel(key) : null,
+      status: key ? "confirmed" : "missing",
+    });
+  }
+  return { ok: true, message: key ? `Reclassified into ${fyLabel(key)}.` : undefined };
+}
+
+/** Persist a confirmed/corrected financial year onto the document record. */
+function applyFinYearResolution(docId: number, finalValue: string): ResolveResult {
+  const key = /(\d{4}-\d{2})/.exec(finalValue)?.[1] ?? null;
+  updateDocumentClassification(docId, { financialYear: key });
+  return { ok: true, message: key ? `Set to ${fyLabel(key)}.` : "Financial year cleared." };
+}
+
+/**
+ * Persist a confirmed/corrected accounting treatment onto the record and — on a
+ * correction with a known vendor — teach a reusable vendor→treatment rule.
+ */
+function applyAccountingResolution(
+  docId: number,
+  doc: DocumentRecord | null,
+  finalValue: string,
+  action: "confirm" | "correct",
+  filename: string,
+): ResolveResult {
+  const treatment = (ACCOUNTING_TREATMENTS as string[]).includes(finalValue)
+    ? (finalValue as AccountingTreatment)
+    : null;
+  if (!treatment) return { ok: true };
+
+  const source: FieldSource = action === "confirm" ? "user_confirmed" : "manual";
+  const current = doc?.accounting ?? null;
+  const updated: AccountingHint = current
+    ? { ...current, treatment, source, reason: action === "correct" ? `You set this to ${TREATMENT_LABEL[treatment]}.` : current.reason }
+    : {
+        flow: "unknown",
+        treatment,
+        confidence: 1,
+        reason: `You set this to ${TREATMENT_LABEL[treatment]}.`,
+        servicePeriodStart: null,
+        servicePeriodEnd: null,
+        paymentDate: null,
+        source,
+      };
+  updateDocumentClassification(docId, { accounting: updated });
+
+  if (action === "correct") {
+    const vendorReview = getFieldReview(docId, "vendor");
+    const vendor = (vendorReview?.finalValue ?? vendorReview?.extractedValue)?.trim();
+    if (vendor) {
+      const { rule, isNew } = upsertConfirmedRule({
+        ruleType: "accounting_treatment",
+        matchKey: vendor,
+        value: treatment,
+        evidence: [{ filename, docId, phrase: vendor }],
+      });
+      return { ok: true, ruleLearned: isNew, ruleReinforced: !isNew, ruleAutoApplies: rule.autoApply };
+    }
+  }
+  return { ok: true };
+}
+
+/**
  * Resolve one field. `confirm` accepts the app's suggestion, `correct` records a
  * user-supplied value, `defer` leaves it pending for later. Writes an audit
  * entry either way and applies the field's side effects.
@@ -461,6 +619,9 @@ export async function resolveField(
   if (field === "person") result = applyPersonResolution(docId, review, finalValue, action, filename);
   else if (field === "doc_type") result = applyDocTypeResolution(docId, finalValue, action, filename);
   else if (field === "fx") result = await applyFxResolution(docId, doc, finalValue, action);
+  else if (field === "doc_date") result = applyDocDateResolution(docId, finalValue);
+  else if (field === "fin_year") result = applyFinYearResolution(docId, finalValue);
+  else if (field === "accounting") result = applyAccountingResolution(docId, doc, finalValue, action, filename);
 
   setFieldReviewResolution(docId, field, { status, finalValue: finalValue || null, source });
   addReviewAudit({

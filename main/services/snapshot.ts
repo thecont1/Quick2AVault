@@ -29,6 +29,7 @@ import {
   seedPeopleFromExisting,
 } from "./people.js";
 import { recordPersonReview } from "./reviews.js";
+import { fyLabel } from "./preferences.js";
 
 export interface DocRef {
   docId: number;
@@ -82,10 +83,20 @@ export interface NeedsReviewSummary {
   documents: NeedsReviewDoc[];
 }
 
+export interface FinancialYearSummary {
+  /** FY key, e.g. "2025-26". */
+  key: string;
+  /** Display label, e.g. "FY 2025-26". */
+  label: string;
+  documentCount: number;
+}
+
 export interface SnapshotData {
   people: PersonSummary[];
   unidentified: UnidentifiedSummary | null;
   needsReview: NeedsReviewSummary | null;
+  /** Document counts per financial year (newest first); empty when none dated. */
+  financialYears: FinancialYearSummary[];
 }
 
 export interface FallbackStats {
@@ -298,6 +309,15 @@ function aggregate(attributions: Attribution[]): SnapshotData {
     })
     .sort((a, b) => Number(b.isSelf) - Number(a.isSelf) || b.documentCount - a.documentCount || a.name.localeCompare(b.name));
 
+  // Financial-year breakdown across all documents (a natural organizing lens).
+  const fyCounts = new Map<string, number>();
+  for (const d of docMeta.values()) {
+    if (d.financialYear) fyCounts.set(d.financialYear, (fyCounts.get(d.financialYear) ?? 0) + 1);
+  }
+  const financialYears: FinancialYearSummary[] = Array.from(fyCounts.entries())
+    .sort((a, b) => b[0].localeCompare(a[0]))
+    .map(([key, documentCount]) => ({ key, label: fyLabel(key), documentCount }));
+
   return {
     people: peopleList,
     unidentified:
@@ -311,6 +331,7 @@ function aggregate(attributions: Attribution[]): SnapshotData {
           }
         : null,
     needsReview: needsReview.length > 0 ? { documentCount: needsReview.length, documents: needsReview } : null,
+    financialYears,
   };
 }
 
@@ -408,7 +429,7 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
   if (fallback.totalDocuments === 0) {
     const now = new Date().toISOString();
     saveSnapshotCache(JSON.stringify({ version: 2, attributions: [] } satisfies CachedAttributions), now);
-    return { snapshot: { people: [], unidentified: null, needsReview: null }, generatedAt: now, fallback };
+    return { snapshot: { people: [], unidentified: null, needsReview: null, financialYears: [] }, generatedAt: now, fallback };
   }
 
   const { text: documentsText, docs } = await buildAiInput();

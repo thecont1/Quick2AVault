@@ -13,6 +13,7 @@ import { cn, getFileThumbnailUrl } from "@glaze/core/utils";
 import {
   Building2,
   Calendar,
+  CalendarClock,
   Coins,
   ExternalLink,
   FileText,
@@ -23,10 +24,12 @@ import {
   User,
 } from "lucide-react";
 import { EvidenceCard } from "./evidence-card";
+import { useFinancePrefs, type FinancePrefs } from "../finance";
 import {
   formatDate,
   formatForeign,
   formatInr,
+  fyLabel,
   OVERALL_META,
   ROLE_LABEL,
   type DocumentBrowserRow,
@@ -98,11 +101,11 @@ function SummaryLine({ icon, label, value, muted }: { icon: ReactNode; label: st
   );
 }
 
-function PeekSummary({ row }: { row: DocumentBrowserRow }) {
+function PeekSummary({ row, prefs }: { row: DocumentBrowserRow; prefs: FinancePrefs }) {
   const meta = OVERALL_META[row.reviewStatus];
   const currencyLine =
     row.currencyStatus === "converted" && row.foreignAmount != null && row.foreignCurrency && row.inrValue != null
-      ? `${formatForeign(row.foreignAmount, row.foreignCurrency)} → ${formatInr(row.inrValue)}`
+      ? `${formatForeign(row.foreignAmount, row.foreignCurrency, prefs)} → ${formatInr(row.inrValue, prefs)}`
       : row.currencyStatus === "needs_review"
         ? "Foreign amount — needs review"
         : null;
@@ -131,7 +134,8 @@ function PeekSummary({ row }: { row: DocumentBrowserRow }) {
         <SummaryLine icon={<User className="size-3.5" />} label="Person" value={row.personName ?? "Unidentified"} muted={!row.personName} />
         <SummaryLine icon={<FileText className="size-3.5" />} label="Type" value={row.docType ?? "Unknown"} muted={!row.docType} />
         <SummaryLine icon={<Building2 className="size-3.5" />} label="Vendor" value={row.vendor ?? "Unknown"} muted={!row.vendor} />
-        <SummaryLine icon={<Calendar className="size-3.5" />} label="Date" value={formatDate(row.docDate)} muted={!row.docDate} />
+        <SummaryLine icon={<Calendar className="size-3.5" />} label="Date" value={formatDate(row.docDate, prefs)} muted={!row.docDate} />
+        <SummaryLine icon={<CalendarClock className="size-3.5" />} label="Financial year" value={row.financialYear ? fyLabel(row.financialYear) : "Not determined"} muted={!row.financialYear} />
         <SummaryLine icon={<Tag className="size-3.5" />} label="Category" value={row.category ?? "Uncategorized"} muted={!row.category} />
         {currencyLine ? <SummaryLine icon={<Coins className="size-3.5" />} label="Currency" value={currencyLine} /> : null}
       </div>
@@ -163,6 +167,7 @@ export function DocumentsView() {
   const [pinnedId, setPinnedId] = useState<number | null>(null);
   const [hoverId, setHoverId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
+  const prefs = useFinancePrefs();
 
   const rowsQuery = useQuery({
     queryKey: ["documents", "list"],
@@ -174,7 +179,9 @@ export function DocumentsView() {
     const q = query.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((r) =>
-      [r.filename, r.personName, r.vendor, r.docType, r.category].some((v) => v?.toLowerCase().includes(q)),
+      [r.filename, r.personName, r.vendor, r.docType, r.category, r.financialYear && fyLabel(r.financialYear)].some(
+        (v) => v?.toLowerCase().includes(q),
+      ),
     );
   }, [rows, query]);
 
@@ -265,7 +272,10 @@ export function DocumentsView() {
                 <List.ItemContent>
                   <List.ItemTitle>{r.filename}</List.ItemTitle>
                   <List.ItemDescription>
-                    {(r.personName ?? "Unidentified") + " · " + (r.docType ?? "Unknown type")}
+                    {(r.personName ?? "Unidentified") +
+                      " · " +
+                      (r.docType ?? "Unknown type") +
+                      (r.financialYear ? " · " + fyLabel(r.financialYear) : "")}
                   </List.ItemDescription>
                 </List.ItemContent>
                 <List.ItemAccessory>
@@ -290,7 +300,7 @@ export function DocumentsView() {
     <SplitView list={list} listSize={{ default: 340, min: 280, max: 460 }} storageKey="documents-browser">
       <ScrollArea
         title={activeRow ? activeRow.filename : "Details"}
-        subtitle={activeRow ? formatDate(activeRow.dateIngested) + " · ingested" : undefined}
+        subtitle={activeRow ? formatDate(activeRow.dateIngested, prefs) + " · ingested" : undefined}
         className="h-full"
       >
         <div className="mx-auto flex max-w-2xl flex-col gap-4 p-4">
@@ -324,7 +334,7 @@ export function DocumentsView() {
                   />
                 )
               ) : (
-                <PeekSummary row={activeRow} />
+                <PeekSummary row={activeRow} prefs={prefs} />
               )}
             </>
           )}

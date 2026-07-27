@@ -25,6 +25,49 @@ export interface CurrencyFields {
   currencyStatus: CurrencyStatus;
 }
 
+// ── Accounting policy hints (advisory, not bookkeeping truth) ─────────────
+
+/** Whether a document represents money going out (expense) or coming in (income). */
+export type AccountingFlow = "expense" | "income" | "unknown";
+
+/** A suggested accounting treatment — a hint, never a booked entry. */
+export type AccountingTreatment =
+  | "current_period_expense"
+  | "prepaid_expense"
+  | "accrued_expense"
+  | "deferred_revenue"
+  | "recognized_revenue"
+  | "reimbursement"
+  | "needs_accounting_review";
+
+export const ACCOUNTING_TREATMENTS: AccountingTreatment[] = [
+  "current_period_expense",
+  "prepaid_expense",
+  "accrued_expense",
+  "deferred_revenue",
+  "recognized_revenue",
+  "reimbursement",
+  "needs_accounting_review",
+];
+
+/**
+ * The app's advisory accounting interpretation of a document — kept separate
+ * from the raw extracted facts. Presented as a suggestion with confidence and
+ * evidence, never as final accounting truth.
+ */
+export interface AccountingHint {
+  flow: AccountingFlow;
+  treatment: AccountingTreatment;
+  /** 0..1 confidence in the suggested treatment. */
+  confidence: number;
+  /** Short human-readable reason for the suggested treatment. */
+  reason: string;
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
+  paymentDate: string | null;
+  source: FieldSource;
+}
+
 export interface DocumentRecord extends CurrencyFields {
   id: number;
   hash: string;
@@ -35,10 +78,21 @@ export interface DocumentRecord extends CurrencyFields {
   markdownSuccess: boolean;
   rawPath: string;
   markdownPath: string;
+  /** Extracted primary document date (YYYY-MM-DD), or null when unknown. */
+  documentDate: string | null;
+  /** Financial-year key this document is classified into (e.g. "2025-26"). */
+  financialYear: string | null;
+  /** Advisory accounting treatment hint, or null when not applicable. */
+  accounting: AccountingHint | null;
 }
 
-/** The four kinds of rule Training Mode can learn. */
-export type RuleType = "vendor_category" | "person_variant" | "keyword_doctype" | "source_scope";
+/** The kinds of rule Training Mode / review corrections can learn. */
+export type RuleType =
+  | "vendor_category"
+  | "person_variant"
+  | "keyword_doctype"
+  | "source_scope"
+  | "accounting_treatment";
 
 /** A piece of evidence explaining why a rule exists. */
 export interface RuleEvidence {
@@ -184,9 +238,26 @@ export interface TrainingReviewRecord {
 // ── Field-level document review ─────────────────────────────────────────
 
 /** The document-intelligence fields tracked for review. */
-export type ReviewField = "person" | "doc_type" | "vendor" | "doc_date" | "amount" | "fx";
+export type ReviewField =
+  | "person"
+  | "doc_type"
+  | "vendor"
+  | "doc_date"
+  | "fin_year"
+  | "amount"
+  | "fx"
+  | "accounting";
 
-export const REVIEW_FIELDS: ReviewField[] = ["person", "doc_type", "vendor", "doc_date", "amount", "fx"];
+export const REVIEW_FIELDS: ReviewField[] = [
+  "person",
+  "doc_type",
+  "vendor",
+  "doc_date",
+  "fin_year",
+  "amount",
+  "fx",
+  "accounting",
+];
 
 /**
  * The review state of a single field. The first three are "pending" (they need
@@ -244,6 +315,12 @@ export interface NewDocument {
   markdownPath: string;
   /** Foreign-currency conversion computed at ingestion, if any. */
   currency?: CurrencyFields;
+  /** Primary document date (YYYY-MM-DD) extracted at ingestion. */
+  documentDate?: string | null;
+  /** Financial-year key classified at ingestion. */
+  financialYear?: string | null;
+  /** Advisory accounting hint computed at ingestion. */
+  accounting?: AccountingHint | null;
 }
 
 let db: DatabaseSync | null = null;
@@ -418,7 +495,10 @@ function getDb(): DatabaseSync {
   return db;
 }
 
-/** Add the currency conversion columns to `documents` if they don't exist yet. */
+/**
+ * Add the later-added `documents` columns if they don't exist yet: the currency
+ * conversion fields, plus the financial-year classification and accounting hint.
+ */
 function ensureCurrencyColumns(database: DatabaseSync): void {
   const existing = new Set(
     (database.prepare("PRAGMA table_info(documents)").all() as Row[]).map((r) => String(r.name)),
@@ -432,9 +512,22 @@ function ensureCurrencyColumns(database: DatabaseSync): void {
     ["rate_date", "TEXT"],
     ["rate_is_nearest", "INTEGER"],
     ["currency_status", "TEXT"],
+    ["document_date", "TEXT"],
+    ["financial_year", "TEXT"],
+    ["accounting_json", "TEXT"],
   ];
   for (const [name, type] of columns) {
     if (!existing.has(name)) database.exec(`ALTER TABLE documents ADD COLUMN ${name} ${type}`);
+  }
+}
+
+function parseAccounting(raw: unknown): AccountingHint | null {
+  if (raw == null) return null;
+  try {
+    const parsed = JSON.parse(String(raw)) as AccountingHint;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
@@ -459,6 +552,9 @@ function mapRow(row: Row): DocumentRecord {
     rateDate: row.rate_date == null ? null : String(row.rate_date),
     rateIsNearest: Number(row.rate_is_nearest) === 1,
     currencyStatus: row.currency_status == null ? "none" : (String(row.currency_status) as CurrencyStatus),
+    documentDate: row.document_date == null ? null : String(row.document_date),
+    financialYear: row.financial_year == null ? null : String(row.financial_year),
+    accounting: parseAccounting(row.accounting_json),
   };
 }
 
@@ -479,11 +575,15 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
     rateIsNearest: false,
     currencyStatus: "none",
   };
+  const documentDate = doc.documentDate ?? null;
+  const financialYear = doc.financialYear ?? null;
+  const accounting = doc.accounting ?? null;
   const stmt = getDb().prepare(`
     INSERT INTO documents
       (hash, original_filename, file_type, date_ingested, date_folder, markdown_success, raw_path, markdown_path,
-       foreign_amount, foreign_currency, invoice_date, inr_value, rate_used, rate_date, rate_is_nearest, currency_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       foreign_amount, foreign_currency, invoice_date, inr_value, rate_used, rate_date, rate_is_nearest, currency_status,
+       document_date, financial_year, accounting_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const info = stmt.run(
     doc.hash,
@@ -502,6 +602,9 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
     c.rateDate,
     c.rateIsNearest ? 1 : 0,
     c.currencyStatus,
+    documentDate,
+    financialYear,
+    accounting ? JSON.stringify(accounting) : null,
   );
   return {
     id: Number(info.lastInsertRowid),
@@ -514,7 +617,34 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
     rawPath: doc.rawPath,
     markdownPath: doc.markdownPath,
     ...c,
+    documentDate,
+    financialYear,
+    accounting,
   };
+}
+
+/** Update a document's classification fields (document date, FY, accounting hint) in place. */
+export function updateDocumentClassification(
+  docId: number,
+  patch: { documentDate?: string | null; financialYear?: string | null; accounting?: AccountingHint | null },
+): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  if ("documentDate" in patch) {
+    sets.push("document_date = ?");
+    values.push(patch.documentDate ?? null);
+  }
+  if ("financialYear" in patch) {
+    sets.push("financial_year = ?");
+    values.push(patch.financialYear ?? null);
+  }
+  if ("accounting" in patch) {
+    sets.push("accounting_json = ?");
+    values.push(patch.accounting ? JSON.stringify(patch.accounting) : null);
+  }
+  if (sets.length === 0) return;
+  values.push(docId);
+  getDb().prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...(values as never[]));
 }
 
 export function listDocuments(limit = 200): DocumentRecord[] {

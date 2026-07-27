@@ -35,16 +35,19 @@ import { cn } from "@glaze/core/utils";
 import type { NativeThemeInfo } from "@glaze/core/ipc";
 import {
   ArrowRight,
+  CalendarClock,
   Check,
   CheckCheck,
   CheckCircle2,
   ChevronRight,
   ClipboardList,
   Clock,
+  Coins,
   ExternalLink,
   FileSearch,
   FolderOpen,
   GraduationCap,
+  Hash,
   Info,
   Pencil,
   Plus,
@@ -55,6 +58,15 @@ import {
   Users,
   X,
 } from "lucide-react";
+import {
+  financialYearKey,
+  formatDatePref,
+  fyLabel,
+  INDIA_DEFAULTS,
+  MONTH_NAMES,
+  type DateFormat,
+  type FinancePrefs,
+} from "../finance";
 
 interface DocumentRecord {
   id: number;
@@ -129,7 +141,7 @@ function AppLogo() {
 
 // ── Training Mode ─────────────────────────────────────────────────────────
 
-type RuleType = "vendor_category" | "person_variant" | "keyword_doctype" | "source_scope";
+type RuleType = "vendor_category" | "person_variant" | "keyword_doctype" | "source_scope" | "accounting_treatment";
 
 interface RuleEvidence {
   filename: string;
@@ -161,6 +173,7 @@ const RULE_TYPE_LABEL: Record<RuleType, string> = {
   person_variant: "Name variant → Person",
   keyword_doctype: "Keyword → Doc type",
   source_scope: "Account → Business / Personal",
+  accounting_treatment: "Vendor → Accounting treatment",
 };
 const RULE_TYPES = Object.keys(RULE_TYPE_LABEL) as RuleType[];
 
@@ -904,8 +917,18 @@ function PeopleSection() {
 
 // ── Review Queue ────────────────────────────────────────────────────────────
 
-type ReviewField = "person" | "doc_type" | "vendor" | "doc_date" | "amount" | "fx";
+type ReviewField = "person" | "doc_type" | "vendor" | "doc_date" | "fin_year" | "amount" | "fx" | "accounting";
 type ReviewStatus = "low_confidence" | "conflict" | "missing" | "confirmed" | "corrected";
+
+const TREATMENT_LABEL: Record<string, string> = {
+  current_period_expense: "Current-period expense",
+  prepaid_expense: "Prepaid expense",
+  accrued_expense: "Accrued expense",
+  deferred_revenue: "Deferred revenue",
+  recognized_revenue: "Recognized revenue",
+  reimbursement: "Reimbursement",
+  needs_accounting_review: "Needs accounting review",
+};
 
 interface QueueFieldRef {
   field: ReviewField;
@@ -956,8 +979,10 @@ const FIELD_LABEL: Record<ReviewField, string> = {
   doc_type: "Document type",
   vendor: "Vendor / institution",
   doc_date: "Document date",
+  fin_year: "Financial year",
   amount: "Primary amount",
   fx: "Currency conversion",
+  accounting: "Accounting hint",
 };
 
 const STATUS_META: Record<ReviewStatus, { label: string; color: "yellow" | "red" | "orange" | "green" | "blue" }> = {
@@ -1160,13 +1185,37 @@ function DocumentReviewCard({ docId }: { docId: number }) {
         </Button>
       ) : null}
 
-      {detail.fields.map((f) => (
-        <FieldReviewRow
-          key={f.field}
-          review={f}
-          onResolve={(action, value) => resolve.mutate({ field: f.field, action, value })}
-        />
-      ))}
+      {detail.fields
+        .filter((f) => f.field !== "accounting")
+        .map((f) => (
+          <FieldReviewRow
+            key={f.field}
+            review={f}
+            onResolve={(action, value) => resolve.mutate({ field: f.field, action, value })}
+          />
+        ))}
+
+      {/* Accounting hint is advisory — surface it here, but resolve it in the
+          Documents browser's Evidence Card (with a proper treatment picker). */}
+      {detail.fields
+        .filter((f) => f.field === "accounting")
+        .map((f) => (
+          <div key={f.field} className="flex flex-col gap-1 rounded-lg bg-control-subtle px-3 py-2">
+            <div className="flex items-center gap-2">
+              <Text variant="small-strong" className="flex-1">
+                Accounting hint
+              </Text>
+              <Badge color={STATUS_META[f.status].color}>{STATUS_META[f.status].label}</Badge>
+            </div>
+            <Text variant="small" color="secondary">
+              Suggested treatment: {TREATMENT_LABEL[f.finalValue ?? f.extractedValue ?? ""] ?? "—"}
+              {f.reason ? ` — ${f.reason}` : ""}
+            </Text>
+            <Text variant="small" color="tertiary">
+              Open this document in the browser to confirm or change the treatment.
+            </Text>
+          </div>
+        ))}
 
       {detail.audit.length > 0 ? (
         <>
@@ -1273,6 +1322,134 @@ function ReviewQueueSection() {
           </div>
         </div>
       )}
+    </section>
+  );
+}
+
+const DATE_FORMATS: DateFormat[] = ["DD-MM-YYYY", "DD MMM YYYY", "MM/DD/YYYY", "YYYY-MM-DD"];
+
+/** Editable finance / locale preferences (India defaults on first run). */
+function FinancePreferencesSection() {
+  const queryClient = useQueryClient();
+  const prefsQuery = useQuery({
+    queryKey: ["financePrefs"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<FinancePrefs>("prefs:get"),
+  });
+  const prefs = prefsQuery.data ?? INDIA_DEFAULTS;
+
+  const update = useMutation({
+    mutationFn: (patch: Partial<FinancePrefs>) => window.glazeAPI.glaze.ipc.invoke<FinancePrefs>("prefs:set", patch),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["financePrefs"], next);
+      // FY / date / currency formatting is derived from prefs across the app.
+      queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+    },
+    onError: (error) => toast.error(`Couldn't save preferences: ${error}`),
+  });
+
+  const month = prefs.fyStartMonth;
+  const fyMar = fyLabel(financialYearKey("2026-03-31", month));
+  const fyApr = fyLabel(financialYearKey("2026-04-01", month));
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Coins className="size-4 text-secondary" />
+        <Text variant="strong" className="flex-1">
+          Finance &amp; locale
+        </Text>
+      </div>
+      <Text variant="small" color="tertiary">
+        How the app reads and shows money, dates, and financial years. Prefilled with India defaults; change them any
+        time — they drive display and the financial-year classification everywhere.
+      </Text>
+
+      <div className="flex flex-wrap gap-4">
+        <div className="flex flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Currency
+          </Text>
+          <Input
+            size="small"
+            value={prefs.currency}
+            onChange={(e) => queryClient.setQueryData(["financePrefs"], { ...prefs, currency: e.target.value })}
+            onBlur={(e) => update.mutate({ currency: e.target.value.trim().toUpperCase() || "INR" })}
+            className="w-28"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Financial year starts
+          </Text>
+          <Select value={String(month)} onValueChange={(v) => update.mutate({ fyStartMonth: Number(v) })}>
+            <SelectTrigger size="small" variant="filled" className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MONTH_NAMES.map((name, i) => (
+                <SelectItem key={name} value={String(i + 1)}>
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Date format
+          </Text>
+          <Select value={prefs.dateFormat} onValueChange={(v) => update.mutate({ dateFormat: v as DateFormat })}>
+            <SelectTrigger size="small" variant="filled" className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {DATE_FORMATS.map((f) => (
+                <SelectItem key={f} value={f}>
+                  {f}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Number format
+          </Text>
+          <Select
+            value={prefs.grouping}
+            onValueChange={(v) =>
+              update.mutate({ grouping: v as FinancePrefs["grouping"], decimalSeparator: ".", thousandsSeparator: "," })
+            }
+          >
+            <SelectTrigger size="small" variant="filled" className="w-52">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="indian">Indian (1,23,456.78)</SelectItem>
+              <SelectItem value="western">International (1,234,567.89)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1 rounded-lg bg-control-subtle px-3 py-2">
+        <div className="flex items-center gap-1.5">
+          <CalendarClock className="size-3.5 text-tertiary shrink-0" />
+          <Text variant="small" color="secondary">
+            31 Mar 2026 → {fyMar} · 1 Apr 2026 → {fyApr}
+          </Text>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Hash className="size-3.5 text-tertiary shrink-0" />
+          <Text variant="small" color="tertiary">
+            Dates show as {formatDatePref("2026-03-31", prefs)}.
+          </Text>
+        </div>
+      </div>
     </section>
   );
 }
@@ -1413,6 +1590,13 @@ export function SettingsView() {
             </Button>
           </div>
         </section>
+
+        <Separator />
+
+        {/* Finance & locale preferences */}
+        <div id="settings-finance" className="scroll-mt-4">
+          <FinancePreferencesSection />
+        </div>
 
         <Separator />
 

@@ -9,7 +9,9 @@ import { registerHandlers } from "./handlers/index.js";
 import { createOrbWindow, getOrbWindow } from "./windows/orb-window.js";
 import { openSettingsWindow } from "./windows/settings-window.js";
 import { ensureVaultDirs } from "./services/vault.js";
-import { reconcileReviews } from "./services/reviews.js";
+import { backfillFinancialYears, reconcileReviews } from "./services/reviews.js";
+import { isFirstRun } from "./services/preferences.js";
+import { openOnboardingWindow } from "./windows/onboarding-window.js";
 
 // ── IPC Handlers ──────────────────────────────────────────────────────
 registerHandlers();
@@ -71,10 +73,20 @@ app.whenReady().then(async () => {
   await ensureVaultDirs();
 
   // Clear stale review flags left by superseded logic (e.g. zero-value invoices)
-  // so the Review Queue count reflects only real, unresolved work.
+  // so the Review Queue count reflects only real, unresolved work, and classify
+  // any previously-ingested documents into their financial-year buckets.
   reconcileReviews();
+  backfillFinancialYears();
 
   createOrbWindow().catch((error) => {
     logger.error("main", "Failed to create orb window", error);
   });
+
+  // Fresh install: invite the user to confirm their finance preferences
+  // (prefilled with India defaults) before serious analysis begins.
+  if (isFirstRun()) {
+    openOnboardingWindow().catch((error) => {
+      logger.error("main", "Failed to open onboarding window", error);
+    });
+  }
 });

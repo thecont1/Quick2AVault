@@ -14,7 +14,7 @@ import { generateObject, glaze, z, GlazeAIError } from "@glaze/core/ai";
 import { logger } from "@glaze/core/backend";
 
 import { convertToInr } from "./currency.js";
-import type { CurrencyFields } from "./database.js";
+import type { AccountingFlow, CurrencyFields } from "./database.js";
 
 const MAX_AI_CHARS = 8000;
 
@@ -33,6 +33,17 @@ export interface DocumentExtraction {
   amount: ExtractedField;
   /** Detected currency code (USD/EUR/GBP/JPY/INR/NONE). */
   currency: string;
+  // ── Accounting-relevant facts (feed the advisory accounting hint) ──
+  /** Money out (expense) vs money in (income), or unknown. */
+  flow: AccountingFlow;
+  flowConfident: boolean;
+  /** The period the goods/services cover, if stated (YYYY-MM-DD each). */
+  servicePeriodStart: string | null;
+  servicePeriodEnd: string | null;
+  /** Date payment was actually made, if stated separately (YYYY-MM-DD). */
+  paymentDate: string | null;
+  /** Looks like an advance / deposit / prepaid or annual-up-front payment. */
+  advanceOrPrepaid: boolean;
 }
 
 export interface ExtractionResult {
@@ -52,6 +63,12 @@ const EMPTY_EXTRACTION: DocumentExtraction = {
   docDate: EMPTY_FIELD,
   amount: EMPTY_FIELD,
   currency: "NONE",
+  flow: "unknown",
+  flowConfident: false,
+  servicePeriodStart: null,
+  servicePeriodEnd: null,
+  paymentDate: null,
+  advanceOrPrepaid: false,
 };
 
 const schema = z.object({
@@ -87,6 +104,34 @@ const schema = z.object({
   currency: z
     .enum(["USD", "EUR", "GBP", "JPY", "INR", "NONE"])
     .describe("Currency of the primary amount; NONE if there is no clear monetary amount."),
+  flow: z
+    .enum(["expense", "income", "unknown"])
+    .describe(
+      "Does this document represent money the user PAYS (expense: invoices, bills, receipts) or RECEIVES " +
+        "(income: sales invoices you issued, salary, interest)? 'unknown' when it isn't a financial transaction.",
+    ),
+  flowConfident: z.boolean().describe("true only if the expense/income direction is clear"),
+  servicePeriodStart: z
+    .string()
+    .nullable()
+    .describe(
+      "Start of the period the goods/services cover, as YYYY-MM-DD (e.g. a subscription, rental, or insurance " +
+        "period). Null if no coverage period is stated.",
+    ),
+  servicePeriodEnd: z
+    .string()
+    .nullable()
+    .describe("End of the covered service period as YYYY-MM-DD. Null if none is stated."),
+  paymentDate: z
+    .string()
+    .nullable()
+    .describe("The date payment was actually made, as YYYY-MM-DD, if stated separately from the document date. Null otherwise."),
+  advanceOrPrepaid: z
+    .boolean()
+    .describe(
+      "true if this looks like an advance payment, deposit, retainer, or a prepaid / annual subscription paid " +
+        "up front for a future period",
+    ),
 });
 
 function trimField(value: string | null, confident: boolean): ExtractedField {
@@ -129,6 +174,11 @@ export async function extractDocument(text: string, filename: string): Promise<E
   const amountValue =
     detected.amount != null && Number.isFinite(detected.amount) ? detected.amount : null;
 
+  const isoOrNull = (v: string | null): string | null => {
+    const t = v?.trim();
+    return t && /^\d{4}-\d{2}-\d{2}/.test(t) ? t.slice(0, 10) : null;
+  };
+
   const extraction: DocumentExtraction = {
     docType: trimField(detected.documentType, detected.documentTypeConfident),
     vendor: trimField(detected.vendor, detected.vendorConfident),
@@ -139,6 +189,12 @@ export async function extractDocument(text: string, filename: string): Promise<E
       present: amountValue != null,
     },
     currency: detected.currency,
+    flow: detected.flow,
+    flowConfident: detected.flowConfident,
+    servicePeriodStart: isoOrNull(detected.servicePeriodStart),
+    servicePeriodEnd: isoOrNull(detected.servicePeriodEnd),
+    paymentDate: isoOrNull(detected.paymentDate),
+    advanceOrPrepaid: detected.advanceOrPrepaid,
   };
 
   // Compute the FX conversion from the same extraction (no extra AI call).

@@ -13,6 +13,8 @@ import { convertToMarkdown, getFileType, type FileType } from "./converter.js";
 import { findByHash, insertDocument } from "./database.js";
 import { extractDocument } from "./extraction.js";
 import { recordExtractionReviews } from "./reviews.js";
+import { deriveAccountingHint } from "./accounting.js";
+import { financialYearKey, getFinancePrefs } from "./preferences.js";
 
 export function getVaultRoot(): string {
   return path.join(app.getPath("documents"), "Quick2Afvault");
@@ -152,6 +154,14 @@ export async function processIntake(job: ProcessJob): Promise<IngestResult> {
     // currency) and computes the foreign-currency conversion. Best-effort.
     const { currency, extraction } = await extractDocument(markdown, filename);
 
+    // Classify the document into a financial-year bucket as early as possible
+    // (from its document date + the user's FY start month) and derive the
+    // advisory accounting hint — both first-class, before deeper analysis.
+    const fyStartMonth = getFinancePrefs().fyStartMonth;
+    const documentDate = extraction.docDate.value;
+    const financialYear = financialYearKey(documentDate, fyStartMonth);
+    const accounting = deriveAccountingHint(extraction, fyStartMonth);
+
     const record = insertDocument({
       hash,
       originalFilename: filename,
@@ -162,6 +172,9 @@ export async function processIntake(job: ProcessJob): Promise<IngestResult> {
       rawPath: rawDest,
       markdownPath: mdDest,
       currency,
+      documentDate,
+      financialYear,
+      accounting,
     });
 
     // Route any uncertain / missing / conflicting fields to the Review Queue.
@@ -170,6 +183,9 @@ export async function processIntake(job: ProcessJob): Promise<IngestResult> {
       filename,
       extraction,
       currency,
+      financialYear,
+      fyStartMonth,
+      accounting,
       haystack: `${filename}\n${markdown}`,
     });
 

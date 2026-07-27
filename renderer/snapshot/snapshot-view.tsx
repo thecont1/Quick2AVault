@@ -7,6 +7,7 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowRight,
+  CalendarClock,
   CalendarRange,
   ChevronRight,
   ClipboardList,
@@ -105,10 +106,17 @@ interface NeedsReviewSummary {
   documents: NeedsReviewDoc[];
 }
 
+interface FinancialYearSummary {
+  key: string;
+  label: string;
+  documentCount: number;
+}
+
 interface SnapshotData {
   people: PersonSummary[];
   unidentified: UnidentifiedSummary | null;
   needsReview: NeedsReviewSummary | null;
+  financialYears: FinancialYearSummary[];
 }
 
 interface FallbackStats {
@@ -658,6 +666,25 @@ export function SnapshotView() {
                 <Text variant="small" color="secondary">
                   Reading your documents…
                 </Text>
+              </div>
+            ) : null}
+
+            {/* Financial-year breakdown — a calm organizing lens. */}
+            {snapshot && snapshot.financialYears.length > 0 ? (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-1.5 text-secondary">
+                  <CalendarClock className="size-3.5 shrink-0" />
+                  <Text variant="small" color="secondary" className="flex-1">
+                    By financial year
+                  </Text>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {snapshot.financialYears.map((fy) => (
+                    <Badge key={fy.key} color="secondary" className="tabular-nums">
+                      {fy.label} · {fy.documentCount}
+                    </Badge>
+                  ))}
+                </div>
               </div>
             ) : null}
 
