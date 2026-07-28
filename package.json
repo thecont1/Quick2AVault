@@ -1,9 +1,9 @@
 {
   "id": "v18ju915",
-  "name": "quick2afvault",
+  "name": "quick2avault",
   "version": "1.0.0",
-  "productName": "Quick2Afvault",
-  "description": "Organize financial documents with",
+  "productName": "Quick2AVault",
+  "description": "Who’s boss of your cash? You are!",
   "iconDescription": "A macOS desktop utility that helps users archive and organize personal financial documents (bank statements, tax forms, receipts) by automatically storing them in organized folders and converting them to searchable markdown. The app runs as a small, always-visible floating orb widget that accepts drag-and-drop files, processes them silently in the background, and maintains a local database of all ingested documents. Think of a safe deposit box, a filing cabinet, a vault door, or a protective circular shield. Aesthetic: minimal, unobtrusive, quiet utility.",
   "private": true,
   "type": "module",
@@ -41,7 +41,7 @@
     "@typescript-eslint/parser": "^8.18.0",
     "@vitejs/plugin-react": "^6.0.1",
     "babel-plugin-react-compiler": "^1.0.0",
-    "esbuild": "^0.27.4",
+    "esbuild": "^0.28.1",
     "eslint": "^9.39.2",
     "eslint-plugin-import": "^2.31.0",
     "globals": "^17.3.0",
@@ -53,6 +53,9 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "overrides": {
+    "brace-expansion": "^5.0.8"
   },
   "packageManager": "npm@11.11.0+sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
   "appConfig": {
@@ -76,6 +79,6 @@
     "host": {
       "minVersion": "0.11.1.0"
     },
-    "updatedAt": 1785196706058
+    "updatedAt": 1785209256046
   }
 }
