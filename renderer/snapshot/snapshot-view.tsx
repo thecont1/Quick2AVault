@@ -18,6 +18,8 @@ import {
   Vault,
 } from "lucide-react";
 
+import { trainingControlPresentation } from "./training-control-model.js";
+
 type SnapshotPeriod = "month" | "financial_year";
 
 interface SnapshotTotals {
@@ -156,75 +158,62 @@ function HeroStat({
 }
 
 function SnapshotMenu({
-  open,
-  setOpen,
   trainingOn,
   pendingReviews,
   toggleTraining,
 }: {
-  open: boolean;
-  setOpen: (value: boolean) => void;
   trainingOn: boolean;
   pendingReviews: number;
   toggleTraining: () => void;
 }) {
+  const training = trainingControlPresentation(trainingOn);
   return (
-    <div className="relative">
+    <div className="flex items-center gap-1">
       <button
         type="button"
-        onClick={() => setOpen(!open)}
-        aria-label="Snapshot actions"
+        onClick={toggleTraining}
+        aria-label={training.ariaLabel}
+        title={training.title}
         className={cn(
           "flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20",
-          open && "bg-white/20",
+          trainingOn && "bg-white/20",
         )}
+      >
+        <GraduationCap className="size-4" />
+      </button>
+      <button
+        type="button"
+        onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings")}
+        aria-label="Open Settings"
+        className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
       >
         <Settings className="size-4" />
       </button>
-      {open ? (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1.5 z-50 w-56 rounded-xl border border-panel bg-popover text-primary shadow-2xl p-1 flex flex-col">
-            <button
-              type="button"
-              onClick={toggleTraining}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 hover:bg-control-subtle text-left"
-            >
-              <GraduationCap className="size-4 text-secondary" />
-              <span className="flex-1 text-sm">Training Mode</span>
-              <span className="text-[11px] font-semibold">{trainingOn ? "On" : "Off"}</span>
-            </button>
-            <div className="h-px bg-panel my-1" />
-            <button
-              type="button"
-              onClick={() =>
-                window.glazeAPI.glaze.ipc.invoke("window:openSettings", "review-queue")
-              }
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 hover:bg-control-subtle text-left"
-            >
-              <ClipboardList className="size-4 text-secondary" />
-              <span className="flex-1 text-sm">Review Queue</span>
-              {pendingReviews > 0 ? <span className="text-[11px]">{pendingReviews}</span> : null}
-            </button>
-            <button
-              type="button"
-              onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 hover:bg-control-subtle text-left"
-            >
-              <FileSearch className="size-4 text-secondary" />
-              <span className="text-sm">Browse Documents</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings")}
-              className="flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 hover:bg-control-subtle text-left"
-            >
-              <Settings className="size-4 text-secondary" />
-              <span className="text-sm">Open Settings</span>
-            </button>
-          </div>
-        </>
-      ) : null}
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
+          aria-label="Browse Documents"
+          className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
+        >
+          <FileSearch className="size-4" />
+        </button>
+      </div>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings", "review-queue")}
+          aria-label="Review Queue"
+          className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
+        >
+          <ClipboardList className="size-4" />
+        </button>
+        {pendingReviews > 0 ? (
+          <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-semibold text-destructive-foreground">
+            {pendingReviews}
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -233,18 +222,16 @@ export function SnapshotView() {
   useTheme();
   const queryClient = useQueryClient();
   const [period, setPeriod] = useState<SnapshotPeriod>("month");
-  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
-      if (menuOpen) setMenuOpen(false);
-      else void window.glazeAPI.glaze.ipc.invoke("snapshot:close");
+      void window.glazeAPI.glaze.ipc.invoke("snapshot:close");
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [menuOpen]);
+  }, []);
 
   const cached = useQuery({
     queryKey: ["snapshot"],
@@ -258,6 +245,12 @@ export function SnapshotView() {
     queryKey: ["trainingMode"],
     queryFn: () => window.glazeAPI.glaze.ipc.invoke<boolean>("training:getMode"),
   });
+  useEffect(() => {
+    const unsubscribe = window.glazeAPI.glaze.ipc.on("training:changed", () => {
+      queryClient.invalidateQueries({ queryKey: ["trainingMode"] });
+    });
+    return () => unsubscribe();
+  }, [queryClient]);
   const recentDocuments = useQuery({
     queryKey: ["documents", "recent"],
     queryFn: () => window.glazeAPI.glaze.ipc.invoke<RecentDocument[]>("documents:list"),
@@ -356,8 +349,6 @@ export function SnapshotView() {
             <FileSearch className="size-4" />
           </button>
           <SnapshotMenu
-            open={menuOpen}
-            setOpen={setMenuOpen}
             trainingOn={trainingMode.data ?? false}
             pendingReviews={pendingReviews}
             toggleTraining={() => setTrainingMode.mutate(!(trainingMode.data ?? false))}
