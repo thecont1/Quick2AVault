@@ -82,6 +82,7 @@ import {
   type FinancePrefs,
   type ImpactBucket,
 } from "../finance";
+import type { PurgeDocumentsResult } from "../../main/services/document-purge-model.js";
 
 interface GmailStatus {
   localPart: string | null;
@@ -2288,7 +2289,7 @@ function GmailMailboxSection() {
           </Label>
           <Button
             variant="accent"
-            disabled={busy || !localPart.trim() || status?.oauthConfigured === false}
+            disabled={busy || !localPart.trim()}
             onClick={() => connect.mutate()}
           >
             Connect Gmail
@@ -2589,6 +2590,23 @@ export function SettingsView() {
       window.glazeAPI.glaze.ipc.invoke<{ total: number; converted: number }>("vault:getStats"),
   });
 
+  const purge = useMutation({
+    mutationFn: () => window.glazeAPI.glaze.ipc.invoke<PurgeDocumentsResult>("documents:purgeAll"),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["vaultStats"] });
+      queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["reviewCount"] });
+      if (result.ok) {
+        toast.success("Vault cleared — all documents and derived data removed.");
+      } else if (result.message) {
+        toast.error(result.message);
+      }
+    },
+    onError: (error) => toast.error(`Couldn't purge vault: ${error}`),
+  });
+
+  const [confirmPurge, setConfirmPurge] = useState(false);
+
   const documentsQuery = useQuery({
     queryKey: ["vaultDocuments"],
     queryFn: () => window.glazeAPI.glaze.ipc.invoke<DocumentRecord[]>("vault:listDocuments"),
@@ -2842,6 +2860,35 @@ export function SettingsView() {
               Open Vault Folder
             </Button>
           </div>
+          {stats && stats.total > 0 ? (
+            confirmPurge ? (
+              <div className="flex items-center gap-2 rounded-card border border-destructive/30 bg-destructive/10 px-3 py-2">
+                <Text variant="small">This removes all documents and derived data. Settings and learned rules are kept.</Text>
+                <div className="ml-auto flex gap-1">
+                  <Button size="small" variant="transparent" onClick={() => setConfirmPurge(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="filled"
+                    disabled={purge.isPending}
+                    onClick={() => purge.mutate()}
+                  >
+                    Clear vault
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button
+                variant="outline"
+                disabled={purge.isPending}
+                onClick={() => setConfirmPurge(true)}
+              >
+                <Trash2 className="size-4" />
+                Start afresh
+              </Button>
+            )
+          ) : null}
         </section>
       </Zone>
       <Zone>
