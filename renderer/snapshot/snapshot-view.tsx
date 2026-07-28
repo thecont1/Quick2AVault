@@ -15,7 +15,6 @@ import {
   Settings,
   TrendingDown,
   TrendingUp,
-  Vault,
 } from "lucide-react";
 
 import { trainingControlPresentation } from "./training-control-model.js";
@@ -325,29 +324,7 @@ export function SnapshotView() {
     <div className="h-full w-full p-2.5">
       <div className="h-full w-full flex flex-col overflow-hidden rounded-2xl bg-popover border border-panel shadow-2xl">
         <header className="flex items-center gap-2 px-4 py-3 bg-accent text-accent-contrast shrink-0">
-          <Vault className="size-4" />
-          <span className="font-semibold text-sm flex-1">Money Snapshot</span>
-          {pendingReviews > 0 ? (
-            <button
-              type="button"
-              onClick={() =>
-                window.glazeAPI.glaze.ipc.invoke("window:openSettings", "review-queue")
-              }
-              className="flex items-center gap-1 rounded-full bg-white/20 hover:bg-white/30 px-2 py-0.5 text-[11px] font-medium tabular-nums"
-              title={`${pendingReviews} item${pendingReviews === 1 ? "" : "s"} need review`}
-            >
-              <ClipboardList className="size-3" /> {pendingReviews}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => openDocuments()}
-            aria-label="Open Document Browser"
-            title="Document Browser"
-            className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
-          >
-            <FileSearch className="size-4" />
-          </button>
+          <span className="font-semibold text-sm flex-1">Your Money</span>
           <SnapshotMenu
             trainingOn={trainingMode.data ?? false}
             pendingReviews={pendingReviews}
