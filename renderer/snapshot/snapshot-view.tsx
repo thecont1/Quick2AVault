@@ -6,12 +6,12 @@ import { cn } from "@glaze/core/utils";
 import {
   AlertCircle,
   CalendarClock,
+  CheckCircle2,
   ClipboardList,
   FileSearch,
   GraduationCap,
   Loader2,
   RefreshCw,
-  Repeat,
   Settings,
   TrendingDown,
   TrendingUp,
@@ -25,7 +25,6 @@ interface SnapshotTotals {
   householdExpenses: number;
   businessExpenses: number;
   investments: number;
-  recurringMonthlyOutflow: number;
   reviewCount: number;
   documentCount: number;
   undatedDocumentCount: number;
@@ -38,6 +37,12 @@ interface WatchCategorySummary {
   documentCount: number;
 }
 
+interface SnapshotDrilldownIds {
+  income: number[];
+  spending: number[];
+  investments: number[];
+}
+
 interface PeriodSnapshot {
   period: SnapshotPeriod;
   label: string;
@@ -45,6 +50,19 @@ interface PeriodSnapshot {
   endDate: string;
   totals: SnapshotTotals;
   watchCategories: WatchCategorySummary[];
+  drilldownIds: SnapshotDrilldownIds;
+}
+
+interface RecentDocument {
+  docId: number;
+  filename: string;
+  dateIngested: string;
+  docDate: string | null;
+  personName: string | null;
+  category: string | null;
+  lifecycleState: string;
+  reviewStatus: "conflict" | "missing" | "low_confidence" | "ok";
+  impact: { bucket: string; amountInr: number | null } | null;
 }
 
 interface SnapshotData {
@@ -92,39 +110,47 @@ function HeroStat({
   amount,
   tone,
   supporting,
+  onOpen,
 }: {
   label: string;
   amount: number;
   tone: "positive" | "warning" | "neutral";
   supporting?: string;
+  onOpen: () => void;
 }) {
   return (
-    <div
+    <button
+      type="button"
+      onClick={onOpen}
       className={cn(
-        "min-w-0 rounded-xl border px-3 py-3 flex flex-col gap-1",
+        "group min-w-0 rounded-xl border px-4 py-4 flex flex-col gap-1.5 text-left transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
         tone === "positive"
           ? "border-green-9/30 bg-green-9/10"
           : tone === "warning"
             ? "border-orange-9/30 bg-orange-9/10"
             : "border-panel bg-control-subtle",
       )}
+      aria-label={`Inspect documents contributing to ${label}`}
     >
-      <Text variant="mini" color="tertiary" className="uppercase tracking-[0.12em]">
-        {label}
-      </Text>
-      <Text
-        variant="heading2"
-        className="tabular-nums leading-none truncate"
+      <span className="flex items-center justify-between w-full">
+        <Text variant="mini" color="tertiary" className="uppercase tracking-[0.14em] font-semibold">
+          {label}
+        </Text>
+        <FileSearch className="size-3.5 text-tertiary opacity-50 transition-opacity group-hover:opacity-100" />
+      </span>
+      <span
+        className="block w-full truncate text-[clamp(1.75rem,5vw,2.8rem)] font-black leading-none tracking-[-0.055em] tabular-nums"
+        style={{ fontFamily: "Unbounded, 'Arial Black', ui-sans-serif, system-ui" }}
         title={formatInr(amount)}
       >
         {formatInr(amount)}
-      </Text>
+      </span>
       {supporting ? (
         <Text variant="mini" color="tertiary" className="truncate">
           {supporting}
         </Text>
       ) : null}
-    </div>
+    </button>
   );
 }
 
@@ -231,6 +257,10 @@ export function SnapshotView() {
     queryKey: ["trainingMode"],
     queryFn: () => window.glazeAPI.glaze.ipc.invoke<boolean>("training:getMode"),
   });
+  const recentDocuments = useQuery({
+    queryKey: ["documents", "recent"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<RecentDocument[]>("documents:list"),
+  });
   const setTrainingMode = useMutation({
     mutationFn: (value: boolean) =>
       window.glazeAPI.glaze.ipc.invoke<boolean>("training:setMode", value),
@@ -259,9 +289,14 @@ export function SnapshotView() {
     const offWatch = window.glazeAPI.glaze.ipc.on("watchCategories:changed", () => {
       queryClient.invalidateQueries({ queryKey: ["snapshot"] });
     });
+    const offDocuments = window.glazeAPI.glaze.ipc.on("documents:changed", () => {
+      queryClient.invalidateQueries({ queryKey: ["documents", "recent"] });
+      queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    });
     return () => {
       offReview();
       offWatch();
+      offDocuments();
     };
   }, [queryClient]);
 
@@ -276,6 +311,21 @@ export function SnapshotView() {
   const incomeMessage = totals?.income
     ? `${formatInr(totals.income)} came in during ${active?.label ?? "this period"}.`
     : "No recognized income in this period yet.";
+  const openDocuments = (metric?: "income" | "spending" | "investments", docId?: number) => {
+    if (!metric || !active) {
+      void window.glazeAPI.glaze.ipc.invoke("window:openDocuments", docId ?? null);
+      return;
+    }
+    void window.glazeAPI.glaze.ipc.invoke("window:openDocuments", null, {
+      metric,
+      period,
+      label: active.label,
+      startDate: active.startDate,
+      endDate: active.endDate,
+      docIds: active.drilldownIds[metric],
+    });
+  };
+  const recent = (recentDocuments.data ?? []).slice(0, 30);
 
   return (
     <div className="h-full w-full p-2.5">
@@ -295,6 +345,15 @@ export function SnapshotView() {
               <ClipboardList className="size-3" /> {pendingReviews}
             </button>
           ) : null}
+          <button
+            type="button"
+            onClick={() => openDocuments()}
+            aria-label="Open Document Browser"
+            title="Document Browser"
+            className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
+          >
+            <FileSearch className="size-4" />
+          </button>
           <SnapshotMenu
             open={menuOpen}
             setOpen={setMenuOpen}
@@ -360,6 +419,7 @@ export function SnapshotView() {
                     amount={totals.income}
                     tone="positive"
                     supporting={incomeMessage}
+                    onOpen={() => openDocuments("income")}
                   />
                   <div className="grid grid-cols-2 gap-2">
                     <HeroStat
@@ -367,6 +427,7 @@ export function SnapshotView() {
                       amount={totals.householdExpenses}
                       tone="warning"
                       supporting="Investments excluded"
+                      onOpen={() => openDocuments("spending")}
                     />
                     <HeroStat
                       label="Investments"
@@ -381,21 +442,9 @@ export function SnapshotView() {
                           ? "Put into markets this month"
                           : "Put into markets this FY"
                       }
+                      onOpen={() => openDocuments("investments")}
                     />
                   </div>
-                  {totals.recurringMonthlyOutflow > 0 ? (
-                    <div className="flex items-center justify-between rounded-xl bg-control-subtle px-3 py-2.5">
-                      <div className="flex items-center gap-1.5 text-secondary">
-                        <Repeat className="size-3.5" />
-                        <Text variant="small" color="secondary">
-                          Recurring monthly outflow
-                        </Text>
-                      </div>
-                      <Text variant="large-strong" className="tabular-nums">
-                        {formatInr(totals.recurringMonthlyOutflow)}
-                      </Text>
-                    </div>
-                  ) : null}
                 </section>
 
                 <section className="flex flex-col gap-2">
@@ -454,19 +503,60 @@ export function SnapshotView() {
                   </button>
                 ) : null}
 
-                <section className="grid grid-cols-2 gap-2">
-                  <Button
-                    variant="filled"
-                    onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
-                  >
-                    <FileSearch className="size-4" /> Documents
-                  </Button>
-                  <Button
-                    variant="transparent"
-                    onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings")}
-                  >
-                    <Settings className="size-4" /> Settings
-                  </Button>
+                <section className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <Text variant="strong" className="flex-1">
+                      Recent documents
+                    </Text>
+                    <Text variant="mini" color="tertiary">
+                      Newest first
+                    </Text>
+                  </div>
+                  {recent.length ? (
+                    <div className="overflow-hidden rounded-xl border border-panel bg-control-subtle/40">
+                      {recent.map((document) => {
+                        const needsReview = document.reviewStatus !== "ok";
+                        const status =
+                          document.lifecycleState !== "active"
+                            ? document.lifecycleState.replace(/_/g, " ")
+                            : needsReview
+                              ? "needs review"
+                              : "processed";
+                        return (
+                          <button
+                            key={document.docId}
+                            type="button"
+                            onClick={() => openDocuments(undefined, document.docId)}
+                            className="flex w-full items-center gap-2 border-b border-panel/70 px-3 py-2 text-left last:border-b-0 hover:bg-control-subtle"
+                          >
+                            {needsReview ? (
+                              <AlertCircle className="size-3.5 shrink-0 text-orange-9" />
+                            ) : (
+                              <CheckCircle2 className="size-3.5 shrink-0 text-green-9" />
+                            )}
+                            <span className="min-w-0 flex-1">
+                              <Text variant="small-strong" className="block truncate">
+                                {document.filename}
+                              </Text>
+                              <Text variant="mini" color="tertiary" className="block truncate">
+                                {document.personName ? `👤 ${document.personName} · ` : ""}
+                                {document.category ??
+                                  document.impact?.bucket?.replace(/_/g, " ") ??
+                                  "Uncategorized"}
+                              </Text>
+                            </span>
+                            <span className="rounded-full bg-popover px-2 py-0.5 text-[10px] capitalize text-secondary">
+                              {status}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <Text variant="small" color="secondary">
+                      Recent drops will appear here.
+                    </Text>
+                  )}
                 </section>
               </>
             ) : refresh.isPending || cached.isPending ? (

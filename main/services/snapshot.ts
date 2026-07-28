@@ -43,6 +43,7 @@ import { isActiveNow, monthlyEquivalent } from "./recurring.js";
 import { fyLabel, getFinancePrefs } from "./preferences.js";
 import {
   documentIsInPeriod,
+  recurringContributionForPeriod,
   rollupMoneyForPeriod,
   snapshotPeriodInfo,
   type SnapshotPeriod,
@@ -123,8 +124,6 @@ export interface SnapshotTotals {
   businessExpenses: number;
   /** Money put into investments (document-derived purchases). */
   investments: number;
-  /** Estimated recurring outflow per month (from manual recurring entries). */
-  recurringMonthlyOutflow: number;
   /** Documents still awaiting review. */
   reviewCount: number;
   /** How many active documents contributed a monetary impact. */
@@ -140,6 +139,12 @@ export interface WatchCategorySummary {
   documentCount: number;
 }
 
+export interface SnapshotDrilldownIds {
+  income: number[];
+  spending: number[];
+  investments: number[];
+}
+
 export interface PeriodSnapshot {
   period: SnapshotPeriod;
   label: string;
@@ -147,6 +152,7 @@ export interface PeriodSnapshot {
   endDate: string;
   totals: SnapshotTotals;
   watchCategories: WatchCategorySummary[];
+  drilldownIds: SnapshotDrilldownIds;
 }
 
 /** One impact bucket's rolled-up total across all active documents. */
@@ -516,7 +522,7 @@ function buildFinancialLayers(
   const reviewCount = countDocsNeedingReview();
   const financePrefs = getFinancePrefs();
   const watchPrefs = getWatchCategories();
-  const recurringOutflow = recurringMonthlyOutflow(financePrefs.currency);
+  const recurringEntries = listRecurringEntries();
   const periodFor = (period: SnapshotPeriod): PeriodSnapshot => {
     const info = snapshotPeriodInfo(period, new Date(), financePrefs.fyStartMonth);
     const scopedDocs = new Map(
@@ -536,9 +542,37 @@ function buildFinancialLayers(
     money.totals.householdExpenses = periodTotals.spending;
     money.totals.investments = periodTotals.investments;
     money.totals.documentCount = periodTotals.documentCount;
-    money.totals.recurringMonthlyOutflow = recurringOutflow;
     money.totals.undatedDocumentCount = periodTotals.undatedDocumentCount;
-    return { ...info, totals: money.totals, watchCategories: money.watchCategories };
+
+    const recurringImpacts = recurringEntries.flatMap((entry) => {
+      if (entry.currency.toUpperCase() !== financePrefs.currency.toUpperCase()) return [];
+      const amountInr = round2(recurringContributionForPeriod(entry, info));
+      if (amountInr === 0) return [];
+      const direction = directionFor(entry.impactBucket);
+      if (entry.impactBucket === "income") money.totals.income += amountInr;
+      if (entry.impactBucket === "investment_purchase") money.totals.investments += amountInr;
+      else if (direction === "out") money.totals.householdExpenses += amountInr;
+      return [
+        {
+          amountInr,
+          spendCategory: entry.category,
+          watchCategory: entry.category,
+          impactBucket: entry.impactBucket,
+        },
+      ];
+    });
+    money.totals.income = round2(money.totals.income);
+    money.totals.householdExpenses = round2(money.totals.householdExpenses);
+    money.totals.investments = round2(money.totals.investments);
+    return {
+      ...info,
+      totals: money.totals,
+      watchCategories: rollupWatchCategories(
+        [...money.impactsForWatch, ...recurringImpacts],
+        watchPrefs,
+      ),
+      drilldownIds: money.drilldownIds,
+    };
   };
   const periods: Record<SnapshotPeriod, PeriodSnapshot> = {
     month: periodFor("month"),
@@ -685,7 +719,6 @@ function buildFinancialLayers(
         bucketTotal("business_expense") + bucketTotal("software_utility_expense"),
       ),
       investments: bucketTotal("investment_purchase"),
-      recurringMonthlyOutflow: recurring.monthlyOutflow,
       documentCount: contributing,
       undatedDocumentCount: Array.from(docMeta.values()).filter(
         (document) => document.impact?.amountInr != null && !document.documentDate,
@@ -698,27 +731,26 @@ function buildFinancialLayers(
   };
 }
 
-function recurringMonthlyOutflow(reportingCurrency: string): number {
-  const currency = reportingCurrency.toUpperCase();
-  let total = 0;
-  for (const entry of listRecurringEntries()) {
-    if (!isActiveNow(entry) || entry.currency.toUpperCase() !== currency) continue;
-    if (directionFor(entry.impactBucket) === "out") total += monthlyEquivalent(entry);
-  }
-  return round2(total);
-}
-
 function rollupMoney(
   docs: Map<number, DocumentRecord>,
   watchPrefs: WatchCategoryPreference[],
   reviewCount: number,
-): { totals: SnapshotTotals; watchCategories: WatchCategorySummary[] } {
+): {
+  totals: SnapshotTotals;
+  watchCategories: WatchCategorySummary[];
+  impactsForWatch: Array<{
+    amountInr: number | null;
+    spendCategory: string | null;
+    watchCategory: string | null;
+    impactBucket: string | null;
+  }>;
+  drilldownIds: SnapshotDrilldownIds;
+} {
   const totals: SnapshotTotals = {
     income: 0,
     householdExpenses: 0,
     businessExpenses: 0,
     investments: 0,
-    recurringMonthlyOutflow: 0,
     reviewCount,
     documentCount: 0,
     undatedDocumentCount: 0,
@@ -729,20 +761,28 @@ function rollupMoney(
     watchCategory: string | null;
     impactBucket: string | null;
   }> = [];
+  const drilldownIds: SnapshotDrilldownIds = { income: [], spending: [], investments: [] };
 
   for (const document of docs.values()) {
     const impact = document.impact;
     if (!impact || impact.amountInr == null) continue;
     const amount = Math.abs(impact.amountInr);
     totals.documentCount += 1;
-    if (impact.bucket === "income") totals.income += amount;
+    if (impact.bucket === "income") {
+      totals.income += amount;
+      drilldownIds.income.push(document.id);
+    }
     if (impact.direction === "out" && impact.bucket !== "investment_purchase") {
       totals.householdExpenses += amount;
+      drilldownIds.spending.push(document.id);
     }
     if (impact.bucket === "business_expense" || impact.bucket === "software_utility_expense") {
       totals.businessExpenses += amount;
     }
-    if (impact.bucket === "investment_purchase") totals.investments += amount;
+    if (impact.bucket === "investment_purchase") {
+      totals.investments += amount;
+      drilldownIds.investments.push(document.id);
+    }
 
     impactsForWatch.push({
       amountInr: impact.amountInr,
@@ -756,7 +796,7 @@ function rollupMoney(
   totals.businessExpenses = round2(totals.businessExpenses);
   totals.investments = round2(totals.investments);
   const watchCategories = rollupWatchCategories(impactsForWatch, watchPrefs);
-  return { totals, watchCategories };
+  return { totals, watchCategories, impactsForWatch, drilldownIds };
 }
 
 function parseCache(json: string): Attribution[] | null {
