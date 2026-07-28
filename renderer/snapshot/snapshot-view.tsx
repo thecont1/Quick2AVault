@@ -207,7 +207,7 @@ function SnapshotMenu({
       </button>
       <button
         type="button"
-        onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings")}
+        onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings", "settings")}
         aria-label="Open Settings"
         className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
       >

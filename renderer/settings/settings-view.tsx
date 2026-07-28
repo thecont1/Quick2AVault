@@ -2555,6 +2555,7 @@ export function SettingsView() {
   useEffect(() => {
     const focusSection = (section: string | null) => {
       if (section === "review-queue") setView("review");
+      else if (section === "settings") setView("settings");
       else if (section === "finance") setView("settings");
     };
     void window.glazeAPI.glaze.ipc
