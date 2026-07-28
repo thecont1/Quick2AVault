@@ -422,8 +422,8 @@ function exposeGlazeAPI(): void {
 
 // `process.env.GLAZE_DEV_HARNESS` is a build-time define (build-renderer replaces it
 // with "1"/"0"), not a runtime browser global — hence the no-undef disable.
-// eslint-disable-next-line no-undef
 if (
+  // eslint-disable-next-line no-undef
   process.env.GLAZE_DEV_HARNESS === "1" &&
   preloadURL.searchParams.get("glazeParityDefaultPendingStub") === "1"
 ) {
