@@ -6,7 +6,7 @@
  * right. Hovering a row updates the preview + summary (fast browsing); clicking
  * pins the document and opens the full, editable Evidence Card (stable study).
  */
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
@@ -41,6 +41,7 @@ import {
   Trash2,
   TrendingUp,
   User,
+  ZoomIn,
 } from "lucide-react";
 import { EvidenceCard } from "./evidence-card";
 import { impactSummary, useFinancePrefs, type FinancePrefs } from "../finance";
@@ -75,17 +76,36 @@ const LANE_OPTIONS: { value: Lane; label: string }[] = [
 
 // ── Contact-sheet preview ─────────────────────────────────────────────────
 
+// How much the hover magnifier enlarges the document under the cursor.
+const PREVIEW_ZOOM = 2.6;
+const clampPct = (n: number) => Math.min(100, Math.max(0, n));
+
+/**
+ * Recognizable preview with a hover magnifier: while the pointer is over the
+ * image it enlarges the region under the cursor and pans as the pointer moves,
+ * so fine print can be inspected without opening the file. A higher-resolution
+ * thumbnail is loaded so the zoom stays sharp; clicking still opens the original.
+ */
 function Preview({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
-  const src = getFileThumbnailUrl(row.rawPath, { size: 400, scaleFactor: 2, fallback: "icon" });
+  const [zooming, setZooming] = useState(false);
+  const [origin, setOrigin] = useState({ x: 50, y: 50 });
+  // The image's on-screen box, captured (unscaled) on enter so pointer→origin
+  // math stays stable while the image is transformed.
+  const rectRef = useRef<DOMRect | null>(null);
+  const src = getFileThumbnailUrl(row.rawPath, { size: 1000, scaleFactor: 2, fallback: "icon" });
+  const canZoom = !errored && loaded;
 
   return (
     <button
       type="button"
       onClick={onOpen}
       title="Open the original file"
-      className="group relative flex h-[300px] w-full items-center justify-center overflow-hidden rounded-card border border-separator bg-well"
+      className={cn(
+        "group relative flex h-[300px] w-full items-center justify-center overflow-hidden rounded-card border border-separator bg-well",
+        canZoom && "cursor-zoom-in",
+      )}
     >
       {!errored ? (
         <img
@@ -96,8 +116,28 @@ function Preview({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void 
           decoding="async"
           onLoad={() => setLoaded(true)}
           onError={() => setErrored(true)}
+          onMouseEnter={(e) => {
+            if (!canZoom) return;
+            rectRef.current = e.currentTarget.getBoundingClientRect();
+            setZooming(true);
+          }}
+          onMouseMove={(e) => {
+            if (!canZoom) return;
+            const rect = rectRef.current;
+            if (!rect) return;
+            setOrigin({
+              x: clampPct(((e.clientX - rect.left) / rect.width) * 100),
+              y: clampPct(((e.clientY - rect.top) / rect.height) * 100),
+            });
+          }}
+          onMouseLeave={() => setZooming(false)}
+          style={{
+            transform: zooming ? `scale(${PREVIEW_ZOOM})` : "scale(1)",
+            transformOrigin: `${origin.x}% ${origin.y}%`,
+            transition: "transform 220ms ease-out, opacity 400ms ease-out",
+          }}
           className={cn(
-            "max-h-full max-w-full object-contain transition-opacity duration-500 ease-out",
+            "max-h-full max-w-full object-contain will-change-transform",
             loaded ? "opacity-100" : "opacity-0",
           )}
         />
@@ -109,6 +149,22 @@ function Preview({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void 
           </Text>
         </div>
       )}
+
+      {/* Magnifier hint — appears while the zoom is active. */}
+      {canZoom ? (
+        <span
+          className={cn(
+            "pointer-events-none absolute left-2 top-2 flex items-center gap-1 rounded-pill bg-popover/90 px-2 py-1 shadow-sm transition-opacity",
+            zooming ? "opacity-100" : "opacity-0",
+          )}
+        >
+          <ZoomIn className="size-3 text-secondary" />
+          <Text variant="small" color="secondary">
+            Move to inspect
+          </Text>
+        </span>
+      ) : null}
+
       <span className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded-pill bg-popover/90 px-2 py-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
         <ExternalLink className="size-3 text-secondary" />
         <Text variant="small" color="secondary">
