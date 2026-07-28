@@ -2,7 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import { Button, ScrollArea, Separator, Text } from "@glaze/core/components";
 import { useTheme } from "@glaze/core/hooks";
 import { cn } from "@glaze/core/utils";
-import { CheckCircle2, FileText, GraduationCap, Loader2, PowerOff, SkipForward } from "lucide-react";
+import {
+  CheckCircle2,
+  FileText,
+  GraduationCap,
+  Loader2,
+  PowerOff,
+  SkipForward,
+} from "lucide-react";
 
 type QuestionKind = "single" | "yesno" | "chips" | "text";
 
@@ -94,7 +101,12 @@ function QuestionControl({
     return (
       <div className="flex flex-wrap gap-1.5">
         {question.options.map((opt) => (
-          <Chip key={opt} label={opt} selected={current.includes(opt)} onClick={() => toggle(opt)} />
+          <Chip
+            key={opt}
+            label={opt}
+            selected={current.includes(opt)}
+            onClick={() => toggle(opt)}
+          />
         ))}
       </div>
     );
@@ -157,7 +169,8 @@ export function TrainingView() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const setAnswer = (id: string, value: AnswerValue) => setAnswers((prev) => ({ ...prev, [id]: value }));
+  const setAnswer = (id: string, value: AnswerValue) =>
+    setAnswers((prev) => ({ ...prev, [id]: value }));
 
   const handleSave = async () => {
     if (!review || saving) return;
@@ -243,7 +256,11 @@ export function TrainingView() {
                       </span>
                       <div className="flex flex-col gap-0.5 flex-1">
                         {q.theme ? (
-                          <Text variant="small" color="tertiary" className="uppercase tracking-wide text-[10px] font-semibold">
+                          <Text
+                            variant="small"
+                            color="tertiary"
+                            className="uppercase tracking-wide text-[10px] font-semibold"
+                          >
                             {q.theme}
                           </Text>
                         ) : null}
@@ -270,10 +287,19 @@ export function TrainingView() {
             <div className="px-4 py-3 flex flex-col gap-2 shrink-0">
               <div className="flex items-center gap-2">
                 <Button variant="accent" onClick={handleSave} disabled={saving} className="flex-1">
-                  {saving ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                  {saving ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <CheckCircle2 className="size-4" />
+                  )}
                   Save Answers
                 </Button>
-                <Button variant="transparent" onClick={handleSkip} disabled={saving} title="Skip this document">
+                <Button
+                  variant="transparent"
+                  onClick={handleSkip}
+                  disabled={saving}
+                  title="Skip this document"
+                >
                   <SkipForward className="size-4" />
                   Skip
                 </Button>

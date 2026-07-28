@@ -56,7 +56,8 @@ export function excludeDocument(docId: number): LifecycleResult {
 export function restoreDocument(docId: number): LifecycleResult {
   const doc = findDocumentById(docId);
   if (!doc) return { ok: false, message: "Document not found." };
-  const neverProcessed = doc.lifecycleState === "irrelevant" || !doc.markdownPath || !doc.markdownSuccess;
+  const neverProcessed =
+    doc.lifecycleState === "irrelevant" || !doc.markdownPath || !doc.markdownSuccess;
   if (neverProcessed) {
     void enqueueReprocess([docId]);
     return { ok: true, message: "Restoring and processing…" };
@@ -71,7 +72,11 @@ export function requestReprocess(docId: number, when: "now" | "later"): Lifecycl
   const doc = findDocumentById(docId);
   if (!doc) return { ok: false, message: "Document not found." };
   if (when === "later") {
-    setDocumentLifecycle(docId, "reprocess_requested", "Reprocess requested — will run on next launch.");
+    setDocumentLifecycle(
+      docId,
+      "reprocess_requested",
+      "Reprocess requested — will run on next launch.",
+    );
     broadcastChanges();
     return { ok: true, message: "Marked for reprocessing." };
   }
@@ -92,7 +97,10 @@ export async function deleteDocumentPermanently(docId: number): Promise<Lifecycl
 }
 
 /** Acknowledge (keep ignored) or delete a logged exact-duplicate event. */
-export function resolveDuplicate(eventId: number, action: "acknowledge" | "delete"): LifecycleResult {
+export function resolveDuplicate(
+  eventId: number,
+  action: "acknowledge" | "delete",
+): LifecycleResult {
   if (action === "acknowledge") {
     setDuplicateEventStatus(eventId, "acknowledged");
   } else {

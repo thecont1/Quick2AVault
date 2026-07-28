@@ -14,13 +14,21 @@ import { generateObject, glaze, z, GlazeAIError } from "@glaze/core/ai";
 import { logger } from "@glaze/core/backend";
 
 import {
+  countDocsNeedingReview,
   getSnapshotCache,
   listActiveDocuments,
+  listAllContractNoteTrades,
   listDocumentOverrides,
   listDocuments,
   listPersons,
+  listRecurringEntries,
   saveSnapshotCache,
+  type DocumentRecord,
+  type EntryScope,
+  type ImpactBucket,
+  type ImpactDirection,
   type PersonRole,
+  type RecurringFrequency,
 } from "./database.js";
 import {
   buildAliasIndex,
@@ -30,7 +38,9 @@ import {
   seedPeopleFromExisting,
 } from "./people.js";
 import { recordPersonReview } from "./reviews.js";
-import { fyLabel } from "./preferences.js";
+import { directionFor, IMPACT_LABEL } from "./impact.js";
+import { isActiveNow, monthlyEquivalent } from "./recurring.js";
+import { fyLabel, getFinancePrefs } from "./preferences.js";
 
 export interface DocRef {
   docId: number;
@@ -92,7 +102,94 @@ export interface FinancialYearSummary {
   documentCount: number;
 }
 
+/** The big, life-defining numbers shown first on the snapshot. All in INR. */
+export interface SnapshotTotals {
+  /** Money coming in (document-derived income). */
+  income: number;
+  /** Household + shared-family expenses. */
+  householdExpenses: number;
+  /** Business + software/utility expenses. */
+  businessExpenses: number;
+  /** Money put into investments (document-derived purchases). */
+  investments: number;
+  /** Estimated recurring outflow per month (from manual recurring entries). */
+  recurringMonthlyOutflow: number;
+  /** Documents still awaiting review. */
+  reviewCount: number;
+  /** How many active documents contributed a monetary impact. */
+  documentCount: number;
+}
+
+/** One impact bucket's rolled-up total across all active documents. */
+export interface ImpactBucketSummary {
+  bucket: ImpactBucket;
+  label: string;
+  direction: ImpactDirection;
+  totalInr: number;
+  documentCount: number;
+}
+
+/** One security's aggregated trade activity across contract notes. */
+export interface InvestmentSecurity {
+  name: string;
+  symbol: string | null;
+  isin: string | null;
+  buyQuantity: number;
+  sellQuantity: number;
+  buyAmount: number;
+  sellAmount: number;
+}
+
+export interface InvestmentByPerson {
+  name: string;
+  buyAmount: number;
+  sellAmount: number;
+  documentCount: number;
+}
+
+/** Document-driven securities trade activity (never portfolio valuation). */
+export interface InvestmentActivity {
+  totalBuy: number;
+  totalSell: number;
+  documentCount: number;
+  tradeCount: number;
+  securities: InvestmentSecurity[];
+  byPerson: InvestmentByPerson[];
+}
+
+/** A manual recurring entry as surfaced in the snapshot (with derived fields). */
+export interface RecurringEntryView {
+  id: number;
+  name: string;
+  amount: number;
+  currency: string;
+  frequency: RecurringFrequency;
+  person: string | null;
+  bucket: ImpactBucket;
+  bucketLabel: string;
+  scope: EntryScope;
+  direction: ImpactDirection;
+  monthlyEquivalent: number;
+  active: boolean;
+}
+
+export interface RecurringSummary {
+  entries: RecurringEntryView[];
+  monthlyOutflow: number;
+  monthlyInflow: number;
+  /** Set when some entries are in a currency other than the reporting one. */
+  hasOtherCurrencies: boolean;
+}
+
 export interface SnapshotData {
+  /** Big-number-first hero totals — the primary purpose of the surface. */
+  totals: SnapshotTotals;
+  /** Per-bucket rolled-up impact totals (secondary breakdown). */
+  impactBuckets: ImpactBucketSummary[];
+  /** Document-driven investment (securities trade) activity. */
+  investments: InvestmentActivity | null;
+  /** Manual recurring entries + their monthly normalization. */
+  recurring: RecurringSummary;
   people: PersonSummary[];
   unidentified: UnidentifiedSummary | null;
   needsReview: NeedsReviewSummary | null;
@@ -159,15 +256,21 @@ const snapshotSchema = z.object({
           ),
         category: z
           .string()
-          .describe("Document category, e.g. 'bank statement', 'tax document', 'insurance', 'credit card'"),
+          .describe(
+            "Document category, e.g. 'bank statement', 'tax document', 'insurance', 'credit card'",
+          ),
         periodStart: z
           .string()
           .nullable()
-          .describe("Earliest date the document covers, as YYYY, YYYY-MM, or YYYY-MM-DD; null if unclear"),
+          .describe(
+            "Earliest date the document covers, as YYYY, YYYY-MM, or YYYY-MM-DD; null if unclear",
+          ),
         periodEnd: z
           .string()
           .nullable()
-          .describe("Latest date the document covers, as YYYY, YYYY-MM, or YYYY-MM-DD; null if unclear"),
+          .describe(
+            "Latest date the document covers, as YYYY, YYYY-MM, or YYYY-MM-DD; null if unclear",
+          ),
       }),
     )
     .describe("Exactly one entry per provided document"),
@@ -215,13 +318,20 @@ function aggregate(attributions: Attribution[]): SnapshotData {
     foreignTotalInr: number;
   };
   const people = new Map<string, Bucket>();
-  const unidentified: { categories: Set<string>; documents: DocRef[]; foreignInvoices: ForeignInvoice[]; foreignTotalInr: number } = {
+  const unidentified: {
+    categories: Set<string>;
+    documents: DocRef[];
+    foreignInvoices: ForeignInvoice[];
+    foreignTotalInr: number;
+  } = {
     categories: new Set<string>(),
     documents: [],
     foreignInvoices: [],
     foreignTotalInr: 0,
   };
   const needsReview: NeedsReviewDoc[] = [];
+  // docId → effective (canonical/raw) person name, for the investment breakdown.
+  const docPersonName = new Map<number, string | null>();
 
   for (const attr of attributions) {
     // A manual per-document pin wins over the AI's attribution.
@@ -230,6 +340,7 @@ function aggregate(attributions: Attribution[]): SnapshotData {
     const person = personId != null ? personById.get(personId) : undefined;
     // Display: canonical person name when resolved; else the raw name (transient).
     const effective = person ? person.displayName : rawName;
+    docPersonName.set(attr.docId, effective ?? null);
 
     const ref: DocRef = { docId: attr.docId, filename: attr.filename };
     const category = attr.category?.trim();
@@ -268,7 +379,12 @@ function aggregate(attributions: Attribution[]): SnapshotData {
     // Attach foreign-currency conversion (or flag for review) to the same bucket.
     const meta = docMeta.get(attr.docId);
     if (meta?.currencyStatus === "needs_review") {
-      needsReview.push({ docId: attr.docId, filename: attr.filename, currency: meta.foreignCurrency, amount: meta.foreignAmount });
+      needsReview.push({
+        docId: attr.docId,
+        filename: attr.filename,
+        currency: meta.foreignCurrency,
+        amount: meta.foreignAmount,
+      });
     } else if (
       meta?.currencyStatus === "converted" &&
       meta.inrValue != null &&
@@ -308,7 +424,12 @@ function aggregate(attributions: Attribution[]): SnapshotData {
         foreignTotalInr: Math.round(b.foreignTotalInr * 100) / 100,
       };
     })
-    .sort((a, b) => Number(b.isSelf) - Number(a.isSelf) || b.documentCount - a.documentCount || a.name.localeCompare(b.name));
+    .sort(
+      (a, b) =>
+        Number(b.isSelf) - Number(a.isSelf) ||
+        b.documentCount - a.documentCount ||
+        a.name.localeCompare(b.name),
+    );
 
   // Financial-year breakdown across all documents (a natural organizing lens).
   const fyCounts = new Map<string, number>();
@@ -319,7 +440,13 @@ function aggregate(attributions: Attribution[]): SnapshotData {
     .sort((a, b) => b[0].localeCompare(a[0]))
     .map(([key, documentCount]) => ({ key, label: fyLabel(key), documentCount }));
 
+  const layers = buildFinancialLayers(docMeta, docPersonName);
+
   return {
+    totals: { ...layers.totals, reviewCount: countDocsNeedingReview() },
+    impactBuckets: layers.impactBuckets,
+    investments: layers.investments,
+    recurring: layers.recurring,
     people: peopleList,
     unidentified:
       unidentified.documents.length > 0
@@ -331,8 +458,174 @@ function aggregate(attributions: Attribution[]): SnapshotData {
             foreignTotalInr: Math.round(unidentified.foreignTotalInr * 100) / 100,
           }
         : null,
-    needsReview: needsReview.length > 0 ? { documentCount: needsReview.length, documents: needsReview } : null,
+    needsReview:
+      needsReview.length > 0 ? { documentCount: needsReview.length, documents: needsReview } : null,
     financialYears,
+  };
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Roll up the financial-impact buckets, document-driven investment activity, and
+ * manual recurring entries into the summary layers. Pure read-time aggregation
+ * over the active documents already loaded — no AI.
+ */
+function buildFinancialLayers(
+  docMeta: Map<number, DocumentRecord>,
+  docPersonName: Map<number, string | null>,
+): {
+  totals: Omit<SnapshotTotals, "reviewCount">;
+  impactBuckets: ImpactBucketSummary[];
+  investments: InvestmentActivity | null;
+  recurring: RecurringSummary;
+} {
+  // ── Impact buckets ──
+  const bucketTotals = new Map<ImpactBucket, { totalInr: number; count: number }>();
+  let contributing = 0;
+  for (const d of docMeta.values()) {
+    const imp = d.impact;
+    if (!imp) continue;
+    const e = bucketTotals.get(imp.bucket) ?? { totalInr: 0, count: 0 };
+    e.count += 1;
+    if (imp.amountInr != null) {
+      e.totalInr += imp.amountInr;
+      contributing += 1;
+    }
+    bucketTotals.set(imp.bucket, e);
+  }
+  const bucketTotal = (b: ImpactBucket) => round2(bucketTotals.get(b)?.totalInr ?? 0);
+  const impactBuckets: ImpactBucketSummary[] = Array.from(bucketTotals.entries())
+    .map(([bucket, v]) => ({
+      bucket,
+      label: IMPACT_LABEL[bucket],
+      direction: directionFor(bucket),
+      totalInr: round2(v.totalInr),
+      documentCount: v.count,
+    }))
+    .sort((a, b) => b.totalInr - a.totalInr || b.documentCount - a.documentCount);
+
+  // ── Investment activity (contract-note trades, active docs only) ──
+  const trades = listAllContractNoteTrades().filter((t) => docMeta.has(t.docId));
+  let investments: InvestmentActivity | null = null;
+  if (trades.length > 0) {
+    const secMap = new Map<string, InvestmentSecurity>();
+    const personMap = new Map<string, InvestmentByPerson>();
+    const personDocs = new Map<string, Set<number>>();
+    const docIds = new Set<number>();
+    let totalBuy = 0;
+    let totalSell = 0;
+    for (const t of trades) {
+      docIds.add(t.docId);
+      const amt = t.netAmount ?? 0;
+      const qty = t.quantity ?? 0;
+      const secKey = (t.isin || t.securityName).toLowerCase();
+      let s = secMap.get(secKey);
+      if (!s) {
+        s = {
+          name: t.securityName,
+          symbol: t.symbol,
+          isin: t.isin,
+          buyQuantity: 0,
+          sellQuantity: 0,
+          buyAmount: 0,
+          sellAmount: 0,
+        };
+        secMap.set(secKey, s);
+      }
+      const pname = docPersonName.get(t.docId) ?? "Unattributed";
+      const pKey = pname.toLowerCase();
+      let p = personMap.get(pKey);
+      if (!p) {
+        p = { name: pname, buyAmount: 0, sellAmount: 0, documentCount: 0 };
+        personMap.set(pKey, p);
+      }
+      if (!personDocs.has(pKey)) personDocs.set(pKey, new Set());
+      personDocs.get(pKey)!.add(t.docId);
+      if (t.side === "sell") {
+        s.sellQuantity += qty;
+        s.sellAmount += amt;
+        p.sellAmount += amt;
+        totalSell += amt;
+      } else {
+        s.buyQuantity += qty;
+        s.buyAmount += amt;
+        p.buyAmount += amt;
+        totalBuy += amt;
+      }
+    }
+    for (const [pKey, p] of personMap) {
+      p.documentCount = personDocs.get(pKey)?.size ?? 0;
+      p.buyAmount = round2(p.buyAmount);
+      p.sellAmount = round2(p.sellAmount);
+    }
+    investments = {
+      totalBuy: round2(totalBuy),
+      totalSell: round2(totalSell),
+      documentCount: docIds.size,
+      tradeCount: trades.length,
+      securities: Array.from(secMap.values())
+        .map((s) => ({ ...s, buyAmount: round2(s.buyAmount), sellAmount: round2(s.sellAmount) }))
+        .sort((a, b) => b.buyAmount + b.sellAmount - (a.buyAmount + a.sellAmount)),
+      byPerson: Array.from(personMap.values()).sort(
+        (a, b) => b.buyAmount + b.sellAmount - (a.buyAmount + a.sellAmount),
+      ),
+    };
+  }
+
+  // ── Manual recurring entries ──
+  const reportingCurrency = getFinancePrefs().currency.toUpperCase();
+  let monthlyOutflow = 0;
+  let monthlyInflow = 0;
+  let hasOtherCurrencies = false;
+  const entryViews: RecurringEntryView[] = listRecurringEntries().map((e) => {
+    const active = isActiveNow(e);
+    const monthly = monthlyEquivalent(e);
+    const direction = directionFor(e.impactBucket);
+    const sameCurrency = e.currency.toUpperCase() === reportingCurrency;
+    if (!sameCurrency) hasOtherCurrencies = true;
+    if (active && sameCurrency) {
+      if (direction === "out") monthlyOutflow += monthly;
+      else if (direction === "in") monthlyInflow += monthly;
+    }
+    return {
+      id: e.id,
+      name: e.name,
+      amount: e.amount,
+      currency: e.currency,
+      frequency: e.frequency,
+      person: e.person,
+      bucket: e.impactBucket,
+      bucketLabel: IMPACT_LABEL[e.impactBucket],
+      scope: e.scope,
+      direction,
+      monthlyEquivalent: round2(monthly),
+      active,
+    };
+  });
+  const recurring: RecurringSummary = {
+    entries: entryViews,
+    monthlyOutflow: round2(monthlyOutflow),
+    monthlyInflow: round2(monthlyInflow),
+    hasOtherCurrencies,
+  };
+
+  return {
+    totals: {
+      income: bucketTotal("income"),
+      householdExpenses: round2(
+        bucketTotal("household_expense") + bucketTotal("shared_family_expense"),
+      ),
+      businessExpenses: round2(
+        bucketTotal("business_expense") + bucketTotal("software_utility_expense"),
+      ),
+      investments: bucketTotal("investment_purchase"),
+      recurringMonthlyOutflow: recurring.monthlyOutflow,
+      documentCount: contributing,
+    },
+    impactBuckets,
+    investments,
+    recurring,
   };
 }
 
@@ -426,11 +719,16 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
   const cache = getSnapshotCache();
   const previous = cache ? parseCache(cache.json) : null;
 
-  // Empty vault: nothing to summarize — don't spend AI credits.
+  // Empty vault: nothing to attribute — don't spend AI credits, but still build
+  // the (zeroed) totals + any manual recurring entries so the big-number
+  // skeleton stays intact.
   if (fallback.totalDocuments === 0) {
     const now = new Date().toISOString();
-    saveSnapshotCache(JSON.stringify({ version: 2, attributions: [] } satisfies CachedAttributions), now);
-    return { snapshot: { people: [], unidentified: null, needsReview: null, financialYears: [] }, generatedAt: now, fallback };
+    saveSnapshotCache(
+      JSON.stringify({ version: 2, attributions: [] } satisfies CachedAttributions),
+      now,
+    );
+    return { snapshot: aggregate([]), generatedAt: now, fallback };
   }
 
   const { text: documentsText, docs } = await buildAiInput();
@@ -488,7 +786,14 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
             reason: res.uncertain.reason,
           });
         } else {
-          recordPersonReview({ docId: a.docId, extracted: a.person, suggested: a.person, confidence: 0.9, status: "confirmed", reason: "" });
+          recordPersonReview({
+            docId: a.docId,
+            extracted: a.person,
+            suggested: a.person,
+            confidence: 0.9,
+            status: "confirmed",
+            reason: "",
+          });
         }
       } else {
         // The AI couldn't attribute this document to a named person.
@@ -505,7 +810,10 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
     consolidateCandidateDuplicates();
 
     const now = new Date().toISOString();
-    saveSnapshotCache(JSON.stringify({ version: 2, attributions } satisfies CachedAttributions), now);
+    saveSnapshotCache(
+      JSON.stringify({ version: 2, attributions } satisfies CachedAttributions),
+      now,
+    );
     const snapshot = aggregate(attributions);
     logger.info("snapshot", "Generated financial snapshot", {
       people: snapshot.people.length,
@@ -524,6 +832,11 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
       };
     }
     logger.warn("snapshot", "AI snapshot failed", { error: String(error) });
-    return { snapshot: previousSnapshot, generatedAt: cache?.generatedAt ?? null, error: String(error), fallback };
+    return {
+      snapshot: previousSnapshot,
+      generatedAt: cache?.generatedAt ?? null,
+      error: String(error),
+      fallback,
+    };
   }
 }

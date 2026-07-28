@@ -89,7 +89,8 @@ export function deriveAccountingHint(
     if (isIso(invoiceDate) && isIso(spStart) && spStart > invoiceDate) {
       treatment = "deferred_revenue";
       confidence = 0.55;
-      reason = "This looks billed before the service period begins — suggested as deferred revenue until it's earned.";
+      reason =
+        "This looks billed before the service period begins — suggested as deferred revenue until it's earned.";
     } else {
       treatment = "recognized_revenue";
       confidence = extraction.flowConfident ? 0.75 : 0.5;
@@ -105,7 +106,8 @@ export function deriveAccountingHint(
     } else if (isIso(paymentDate) && isIso(invoiceDate) && paymentDate < invoiceDate) {
       treatment = "prepaid_expense";
       confidence = 0.45;
-      reason = "Payment appears to have been made before the document date — it may be a prepaid / advance expense.";
+      reason =
+        "Payment appears to have been made before the document date — it may be a prepaid / advance expense.";
     } else {
       treatment = "current_period_expense";
       confidence = extraction.flowConfident ? 0.75 : 0.5;

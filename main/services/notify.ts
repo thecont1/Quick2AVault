@@ -41,16 +41,28 @@ export function notifyIngestOutcome(results: IngestResult[]): void {
   if (ingested.length > 0) {
     title = `Added ${pluralize(ingested.length, "document")} to your vault`;
     const parts: string[] = [];
+    // For a single document, lead with the plain-language "what this means".
+    const singleImpact = ingested.length === 1 ? ingested[0].impactSummary : undefined;
+    if (singleImpact) {
+      const s = singleImpact.trim();
+      parts.push(s.charAt(0).toUpperCase() + s.slice(1));
+    }
     if (blocked) {
       parts.push(AI_BLOCKED_MESSAGE[blocked] ?? "Saved without Markdown conversion.");
-    } else {
+    } else if (!singleImpact) {
       const converted = ingested.filter((r) => r.markdownSuccess).length;
       parts.push(`Converted ${pluralize(converted, "file")} to Markdown.`);
     }
     if (duplicates.length > 0) parts.push(`Skipped ${pluralize(duplicates.length, "duplicate")}.`);
-    if (irrelevant.length > 0) parts.push(`Filed ${pluralize(irrelevant.length, "file")} as not financial.`);
+    if (irrelevant.length > 0)
+      parts.push(`Filed ${pluralize(irrelevant.length, "file")} as not financial.`);
     body = parts.join(" ");
-  } else if (irrelevant.length > 0 && duplicates.length === 0 && unsupported.length === 0 && errored.length === 0) {
+  } else if (
+    irrelevant.length > 0 &&
+    duplicates.length === 0 &&
+    unsupported.length === 0 &&
+    errored.length === 0
+  ) {
     title = "Filed as not financial";
     body =
       irrelevant.length === 1
@@ -85,7 +97,9 @@ export function notifyIngestOutcome(results: IngestResult[]): void {
  * processing didn't, and the document may need a look.
  */
 export function toastConversionFailures(results: IngestResult[]): void {
-  const failed = results.filter((r) => r.status === "ingested" && r.markdownSuccess === false && !r.aiBlocked);
+  const failed = results.filter(
+    (r) => r.status === "ingested" && r.markdownSuccess === false && !r.aiBlocked,
+  );
   if (failed.length === 0) return;
   const n = failed.length;
   void showToast(

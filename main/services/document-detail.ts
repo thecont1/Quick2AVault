@@ -18,6 +18,7 @@ import { logger, shell } from "@glaze/core/backend";
 
 import {
   findDocumentById,
+  getContractNote,
   listDocuments,
   listDocumentOverrides,
   listFieldReviews,
@@ -25,9 +26,11 @@ import {
   listReviewAudit,
   REVIEW_FIELDS,
   type AccountingHint,
+  type ContractNoteRecord,
   type CurrencyFields,
   type DocumentFieldReview,
   type FieldSource,
+  type FinancialImpact,
   type LifecycleState,
   type PersonRole,
   type ReviewAuditEntry,
@@ -50,6 +53,7 @@ export const FIELD_LABEL: Record<ReviewField, string> = {
   amount: "Amount",
   fx: "Currency conversion",
   accounting: "Accounting hint",
+  impact: "Financial impact",
 };
 
 /** Compact status used for the browser list's overall review badge. */
@@ -84,6 +88,10 @@ export interface DocumentBrowserRow {
   foreignCurrency: string | null;
   inrValue: number | null;
   currencyStatus: CurrencyFields["currencyStatus"];
+  /** Plain-language financial impact (bucket + amount), or null. */
+  impact: FinancialImpact | null;
+  /** True when this is a broker contract note (securities trade). */
+  isContractNote: boolean;
   /** Intake triage lane / lifecycle state. */
   lifecycleState: LifecycleState;
   /** One-line explanation of the triage decision, or null. */
@@ -142,6 +150,10 @@ export interface DocumentDetail {
   currency: CurrencyFields;
   /** Advisory accounting treatment hint, or null when not applicable. */
   accounting: AccountingHint | null;
+  /** Plain-language financial impact (bucket + amount), or null. */
+  impact: FinancialImpact | null;
+  /** Broker contract-note header + trades, when this is a contract note. */
+  contractNote: ContractNoteRecord | null;
   fields: DetailField[];
   audit: ReviewAuditEntry[];
   /** A short excerpt of the converted Markdown, for evidence context. */
@@ -172,7 +184,10 @@ function toDetailField(r: DocumentFieldReview): DetailField {
 }
 
 /** Worst pending state wins for the list badge; resolved fields don't count. */
-function overallStatus(reviews: DocumentFieldReview[]): { status: OverallReviewStatus; pending: number } {
+function overallStatus(reviews: DocumentFieldReview[]): {
+  status: OverallReviewStatus;
+  pending: number;
+} {
   let conflict = false;
   let missing = false;
   let low = false;
@@ -189,7 +204,13 @@ function overallStatus(reviews: DocumentFieldReview[]): { status: OverallReviewS
       pending++;
     }
   }
-  const status: OverallReviewStatus = conflict ? "conflict" : missing ? "missing" : low ? "low_confidence" : "ok";
+  const status: OverallReviewStatus = conflict
+    ? "conflict"
+    : missing
+      ? "missing"
+      : low
+        ? "low_confidence"
+        : "ok";
   return { status, pending };
 }
 
@@ -197,7 +218,9 @@ function overallStatus(reviews: DocumentFieldReview[]): { status: OverallReviewS
  * Best-effort business/personal classification: a learned `source_scope` rule
  * whose match key appears in the document's vendor / filename / category.
  */
-function detectScope(haystack: string): { scope: "business" | "personal"; matchKey: string } | null {
+function detectScope(
+  haystack: string,
+): { scope: "business" | "personal"; matchKey: string } | null {
   const h = haystack.toLowerCase();
   for (const r of listLearnedRules()) {
     if (r.ruleType !== "source_scope" || r.matchKey.length < 2) continue;
@@ -230,12 +253,15 @@ export function listDocumentBrowser(): DocumentBrowserRow[] {
     const { status, pending } = overallStatus(reviews);
 
     // Person: a manual pin beats the AI attribution; resolve to canonical.
-    const rawName = overrides.has(doc.id) ? overrides.get(doc.id)! : (attribution.get(doc.id)?.person ?? null);
+    const rawName = overrides.has(doc.id)
+      ? overrides.get(doc.id)!
+      : (attribution.get(doc.id)?.person ?? null);
     const personId = resolveNameToPersonId(rawName, aliasIndex);
     const entity = personId != null ? peopleById.get(personId) : undefined;
 
     const hasManualOverride =
-      overrides.has(doc.id) || reviews.some((r) => r.source === "user_confirmed" || r.source === "manual");
+      overrides.has(doc.id) ||
+      reviews.some((r) => r.source === "user_confirmed" || r.source === "manual");
 
     return {
       docId: doc.id,
@@ -249,7 +275,11 @@ export function listDocumentBrowser(): DocumentBrowserRow[] {
       personRoles: entity?.roles ?? [],
       docType: fieldValue(reviews, "doc_type"),
       vendor: fieldValue(reviews, "vendor"),
-      docDate: doc.documentDate ?? fieldValue(reviews, "doc_date") ?? attribution.get(doc.id)?.periodStart ?? null,
+      docDate:
+        doc.documentDate ??
+        fieldValue(reviews, "doc_date") ??
+        attribution.get(doc.id)?.periodStart ??
+        null,
       financialYear: doc.financialYear,
       category: attribution.get(doc.id)?.category ?? null,
       reviewStatus: status,
@@ -260,6 +290,8 @@ export function listDocumentBrowser(): DocumentBrowserRow[] {
       foreignCurrency: doc.foreignCurrency,
       inrValue: doc.inrValue,
       currencyStatus: doc.currencyStatus,
+      impact: doc.impact,
+      isContractNote: doc.isContractNote,
       lifecycleState: doc.lifecycleState,
       triageReason: doc.triageReason,
     };
@@ -275,7 +307,9 @@ function buildPersonContext(
   aliasIndex: Map<string, number>,
   entities: PersonEntity[],
 ): PersonContext {
-  const rawName = overrides.has(doc.id) ? overrides.get(doc.id)! : (attribution.get(doc.id)?.person ?? null);
+  const rawName = overrides.has(doc.id)
+    ? overrides.get(doc.id)!
+    : (attribution.get(doc.id)?.person ?? null);
   const personId = resolveNameToPersonId(rawName, aliasIndex);
   const entity = personId != null ? entities.find((e) => e.id === personId) : undefined;
   if (!entity) {
@@ -337,7 +371,11 @@ export async function getDocumentDetail(docId: number): Promise<DocumentDetail |
   const person = buildPersonContext(doc, overrides, attribution, aliasIndex, entities);
   const docType = fieldValue(reviews, "doc_type");
   const vendor = fieldValue(reviews, "vendor");
-  const docDate = doc.documentDate ?? fieldValue(reviews, "doc_date") ?? attribution.get(docId)?.periodStart ?? null;
+  const docDate =
+    doc.documentDate ??
+    fieldValue(reviews, "doc_date") ??
+    attribution.get(docId)?.periodStart ??
+    null;
   const category = attribution.get(docId)?.category ?? null;
 
   const scopeHit = detectScope([vendor ?? "", doc.originalFilename, category ?? ""].join(" "));
@@ -370,6 +408,8 @@ export async function getDocumentDetail(docId: number): Promise<DocumentDetail |
       currencyStatus: doc.currencyStatus,
     },
     accounting: doc.accounting,
+    impact: doc.impact,
+    contractNote: doc.isContractNote ? getContractNote(docId) : null,
     fields: reviews.map(toDetailField),
     audit: listReviewAudit(docId),
     markdownExcerpt: await readExcerpt(doc.markdownPath),
@@ -398,7 +438,10 @@ export async function openDocumentMarkdown(docId: number): Promise<string> {
   try {
     return await shell.openPath(doc.markdownPath);
   } catch (error) {
-    logger.error("document-detail", "Failed to open markdown file", { docId, error: String(error) });
+    logger.error("document-detail", "Failed to open markdown file", {
+      docId,
+      error: String(error),
+    });
     return "Couldn't open the file.";
   }
 }

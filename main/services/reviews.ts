@@ -31,6 +31,7 @@ import {
   upsertConfirmedRule,
   upsertFieldReview,
   ACCOUNTING_TREATMENTS,
+  IMPACT_BUCKETS,
   PENDING_REVIEW_STATUSES,
   REVIEW_FIELDS,
   type AccountingHint,
@@ -39,6 +40,8 @@ import {
   type DocumentFieldReview,
   type DocumentRecord,
   type FieldSource,
+  type FinancialImpact,
+  type ImpactBucket,
   type ReviewAuditEntry,
   type ReviewField,
   type ReviewStatus,
@@ -46,6 +49,7 @@ import {
 import { convertToInr, CURRENCY_NONE } from "./currency.js";
 import type { DocumentExtraction } from "./extraction.js";
 import { TREATMENT_LABEL } from "./accounting.js";
+import { directionFor, IMPACT_LABEL } from "./impact.js";
 import { confirmNameForPerson, ensurePerson } from "./people.js";
 import { financialYearKey, fyLabel, getFinancePrefs } from "./preferences.js";
 import { writeRulesMarkdown } from "./training.js";
@@ -89,11 +93,17 @@ function fieldConfidence(present: boolean, confident: boolean): number {
 }
 
 /** A keyword→doc-type rule that contradicts the extracted type, if any. */
-function docTypeConflict(docType: string, haystack: string): { matchKey: string; value: string } | null {
+function docTypeConflict(
+  docType: string,
+  haystack: string,
+): { matchKey: string; value: string } | null {
   for (const r of listLearnedRules()) {
     if (r.ruleType !== "keyword_doctype") continue;
     if (r.matchKey.length < 2) continue;
-    if (haystack.includes(r.matchKey) && r.value.trim().toLowerCase() !== docType.trim().toLowerCase()) {
+    if (
+      haystack.includes(r.matchKey) &&
+      r.value.trim().toLowerCase() !== docType.trim().toLowerCase()
+    ) {
       return { matchKey: r.matchKey, value: r.value };
     }
   }
@@ -101,7 +111,11 @@ function docTypeConflict(docType: string, haystack: string): { matchKey: string;
 }
 
 function describeFx(currency: CurrencyFields): string {
-  if (currency.currencyStatus === "converted" && currency.inrValue != null && currency.foreignAmount != null) {
+  if (
+    currency.currencyStatus === "converted" &&
+    currency.inrValue != null &&
+    currency.foreignAmount != null
+  ) {
     return `${currency.foreignAmount} ${currency.foreignCurrency} → ₹${currency.inrValue}`;
   }
   const parts: string[] = [];
@@ -125,9 +139,10 @@ export function recordExtractionReviews(input: {
   financialYear: string | null;
   fyStartMonth: number;
   accounting: AccountingHint | null;
+  impact: FinancialImpact | null;
   haystack: string;
 }): void {
-  const { docId, extraction, currency, financialYear, accounting, haystack } = input;
+  const { docId, extraction, currency, financialYear, accounting, impact, haystack } = input;
   const put = (
     field: ReviewField,
     value: string | null,
@@ -168,7 +183,15 @@ export function recordExtractionReviews(input: {
         CONFLICTING,
       );
     } else if (!dt.confident) {
-      put("doc_type", dt.value, true, false, "low_confidence", `Not fully sure this is a “${dt.value}”.`, dt.value);
+      put(
+        "doc_type",
+        dt.value,
+        true,
+        false,
+        "low_confidence",
+        `Not fully sure this is a “${dt.value}”.`,
+        dt.value,
+      );
     } else {
       put("doc_type", dt.value, true, true, "confirmed", "", dt.value);
     }
@@ -177,9 +200,25 @@ export function recordExtractionReviews(input: {
   // Vendor / institution.
   const vn = extraction.vendor;
   if (!vn.present) {
-    put("vendor", null, false, false, "missing", "No issuing vendor or institution was found.", null);
+    put(
+      "vendor",
+      null,
+      false,
+      false,
+      "missing",
+      "No issuing vendor or institution was found.",
+      null,
+    );
   } else if (!vn.confident) {
-    put("vendor", vn.value, true, false, "low_confidence", `The vendor “${vn.value}” may be misread.`, vn.value);
+    put(
+      "vendor",
+      vn.value,
+      true,
+      false,
+      "low_confidence",
+      `The vendor “${vn.value}” may be misread.`,
+      vn.value,
+    );
   } else {
     put("vendor", vn.value, true, true, "confirmed", "", vn.value);
   }
@@ -189,7 +228,15 @@ export function recordExtractionReviews(input: {
   if (!dd.present) {
     put("doc_date", null, false, false, "missing", "No clear document date was found.", null);
   } else if (!dd.confident) {
-    put("doc_date", dd.value, true, false, "low_confidence", "The document date is ambiguous.", dd.value);
+    put(
+      "doc_date",
+      dd.value,
+      true,
+      false,
+      "low_confidence",
+      "The document date is ambiguous.",
+      dd.value,
+    );
   } else {
     put("doc_date", dd.value, true, true, "confirmed", "", dd.value);
   }
@@ -200,26 +247,76 @@ export function recordExtractionReviews(input: {
   const fyText = fyLabel(financialYear);
   if (!financialYear) {
     if (!dd.present) {
-      put("fin_year", null, false, false, "missing", "Can't assign a financial year — no clear document date was found.", null);
+      put(
+        "fin_year",
+        null,
+        false,
+        false,
+        "missing",
+        "Can't assign a financial year — no clear document date was found.",
+        null,
+      );
     } else {
-      put("fin_year", null, true, false, "low_confidence", "The document date is unclear, so its financial year can't be determined confidently.", null, UNSURE);
+      put(
+        "fin_year",
+        null,
+        true,
+        false,
+        "low_confidence",
+        "The document date is unclear, so its financial year can't be determined confidently.",
+        null,
+        UNSURE,
+      );
     }
   } else if (!dd.confident) {
-    put("fin_year", fyText, true, false, "low_confidence", `Assigned to ${fyText} from an unconfident document date — please confirm the period.`, fyText, UNSURE);
+    put(
+      "fin_year",
+      fyText,
+      true,
+      false,
+      "low_confidence",
+      `Assigned to ${fyText} from an unconfident document date — please confirm the period.`,
+      fyText,
+      UNSURE,
+    );
   } else {
-    put("fin_year", fyText, true, true, "confirmed", `Classified into ${fyText} from the document date.`, fyText);
+    put(
+      "fin_year",
+      fyText,
+      true,
+      true,
+      "confirmed",
+      `Classified into ${fyText} from the document date.`,
+      fyText,
+    );
   }
 
   // Primary amount — only track when relevant (present, or a currency implies one).
   const am = extraction.amount;
   if (am.present) {
     if (!am.confident) {
-      put("amount", am.value, true, false, "low_confidence", "The primary amount may be ambiguous.", am.value);
+      put(
+        "amount",
+        am.value,
+        true,
+        false,
+        "low_confidence",
+        "The primary amount may be ambiguous.",
+        am.value,
+      );
     } else {
       put("amount", am.value, true, true, "confirmed", "", am.value);
     }
   } else if (extraction.currency !== "NONE") {
-    put("amount", null, false, false, "missing", "A currency was detected but no clear primary amount.", null);
+    put(
+      "amount",
+      null,
+      false,
+      false,
+      "missing",
+      "A currency was detected but no clear primary amount.",
+      null,
+    );
   }
 
   // Foreign-currency conversion inputs.
@@ -247,11 +344,77 @@ export function recordExtractionReviews(input: {
       accounting.treatment === "accrued_expense" ||
       accounting.treatment === "deferred_revenue";
     if (accounting.treatment === "needs_accounting_review") {
-      put("accounting", accounting.treatment, true, false, "conflict", accounting.reason, accounting.treatment, accounting.confidence);
+      put(
+        "accounting",
+        accounting.treatment,
+        true,
+        false,
+        "conflict",
+        accounting.reason,
+        accounting.treatment,
+        accounting.confidence,
+      );
     } else if (routeToReview || accounting.confidence < 0.6) {
-      put("accounting", accounting.treatment, true, false, "low_confidence", accounting.reason, accounting.treatment, accounting.confidence);
+      put(
+        "accounting",
+        accounting.treatment,
+        true,
+        false,
+        "low_confidence",
+        accounting.reason,
+        accounting.treatment,
+        accounting.confidence,
+      );
     } else {
-      put("accounting", accounting.treatment, true, true, "confirmed", accounting.reason, accounting.treatment, accounting.confidence);
+      put(
+        "accounting",
+        accounting.treatment,
+        true,
+        true,
+        "confirmed",
+        accounting.reason,
+        accounting.treatment,
+        accounting.confidence,
+      );
+    }
+  }
+
+  // Financial impact — the plain-language "what changed" bucket. Surface it for
+  // review when the app is unsure or explicitly needs a decision.
+  if (impact) {
+    if (impact.bucket === "needs_review") {
+      put(
+        "impact",
+        impact.bucket,
+        true,
+        false,
+        "conflict",
+        impact.reason,
+        impact.bucket,
+        impact.confidence,
+      );
+    } else if (impact.confidence < 0.6) {
+      put(
+        "impact",
+        impact.bucket,
+        true,
+        false,
+        "low_confidence",
+        impact.reason,
+        impact.bucket,
+        impact.confidence,
+      );
+    } else {
+      put(
+        "impact",
+        impact.bucket,
+        true,
+        true,
+        "confirmed",
+        impact.reason,
+        impact.bucket,
+        impact.confidence,
+      );
     }
   }
 
@@ -356,8 +519,7 @@ export function reconcileReviews(): number {
     const amountText = amountReview?.finalValue ?? amountReview?.extractedValue;
     const amountNum = amountText != null && amountText.trim() !== "" ? Number(amountText) : NaN;
     const doc = findDocumentById(docId);
-    const isZeroValue =
-      (Number.isFinite(amountNum) && amountNum === 0) || doc?.foreignAmount === 0;
+    const isZeroValue = (Number.isFinite(amountNum) && amountNum === 0) || doc?.foreignAmount === 0;
     if (!isZeroValue) continue;
 
     // Clear the stale FX flag: a zero-value invoice converts to ₹0 and needs no
@@ -399,7 +561,10 @@ export function backfillFinancialYears(): number {
     const dateVal = doc.documentDate ?? dd?.finalValue ?? dd?.extractedValue ?? null;
     const key = financialYearKey(dateVal, startMonth);
     if (!key) continue;
-    updateDocumentClassification(doc.id, { documentDate: doc.documentDate ?? dateVal, financialYear: key });
+    updateDocumentClassification(doc.id, {
+      documentDate: doc.documentDate ?? dateVal,
+      financialYear: key,
+    });
     if (!getFieldReview(doc.id, "fin_year")) {
       upsertFieldReview({
         docId: doc.id,
@@ -445,7 +610,12 @@ function applyPersonResolution(
       value: finalValue,
       evidence: [{ filename, docId, phrase: extracted }],
     });
-    return { ok: true, ruleLearned: isNew, ruleReinforced: !isNew, ruleAutoApplies: rule.autoApply };
+    return {
+      ok: true,
+      ruleLearned: isNew,
+      ruleReinforced: !isNew,
+      ruleAutoApplies: rule.autoApply,
+    };
   }
   return { ok: true };
 }
@@ -467,7 +637,12 @@ function applyDocTypeResolution(
       value: finalValue,
       evidence: [{ filename, docId, phrase: vendor }],
     });
-    return { ok: true, ruleLearned: isNew, ruleReinforced: !isNew, ruleAutoApplies: rule.autoApply };
+    return {
+      ok: true,
+      ruleLearned: isNew,
+      ruleReinforced: !isNew,
+      ruleAutoApplies: rule.autoApply,
+    };
   }
   return { ok: true };
 }
@@ -484,7 +659,10 @@ async function applyFxResolution(
     return { ok: true, message: "Noted. Enter a numeric amount to re-convert to INR." };
   }
   if (!doc.foreignCurrency || !doc.invoiceDate) {
-    return { ok: true, message: "Noted, but the currency or date is unknown, so it can’t be re-converted." };
+    return {
+      ok: true,
+      message: "Noted, but the currency or date is unknown, so it can’t be re-converted.",
+    };
   }
   const c = await convertToInr({
     currency: doc.foreignCurrency,
@@ -496,7 +674,10 @@ async function applyFxResolution(
   updateDocumentCurrency(docId, c);
   return {
     ok: true,
-    message: c.currencyStatus === "converted" ? "Re-converted to INR." : "Couldn’t fetch a rate for that date.",
+    message:
+      c.currencyStatus === "converted"
+        ? "Re-converted to INR."
+        : "Couldn’t fetch a rate for that date.",
   };
 }
 
@@ -519,7 +700,9 @@ function applyDocDateResolution(docId: number, finalValue: string): ResolveResul
       extractedValue: key ? fyLabel(key) : null,
       confidence: key ? CONFIDENT : 0,
       source: "ai_inferred",
-      reason: key ? `Reclassified into ${fyLabel(key)} from the corrected document date.` : "No financial year — the corrected date is unclear.",
+      reason: key
+        ? `Reclassified into ${fyLabel(key)} from the corrected document date.`
+        : "No financial year — the corrected date is unclear.",
       suggestedValue: key ? fyLabel(key) : null,
       status: key ? "confirmed" : "missing",
     });
@@ -553,7 +736,13 @@ function applyAccountingResolution(
   const source: FieldSource = action === "confirm" ? "user_confirmed" : "manual";
   const current = doc?.accounting ?? null;
   const updated: AccountingHint = current
-    ? { ...current, treatment, source, reason: action === "correct" ? `You set this to ${TREATMENT_LABEL[treatment]}.` : current.reason }
+    ? {
+        ...current,
+        treatment,
+        source,
+        reason:
+          action === "correct" ? `You set this to ${TREATMENT_LABEL[treatment]}.` : current.reason,
+      }
     : {
         flow: "unknown",
         treatment,
@@ -576,7 +765,65 @@ function applyAccountingResolution(
         value: treatment,
         evidence: [{ filename, docId, phrase: vendor }],
       });
-      return { ok: true, ruleLearned: isNew, ruleReinforced: !isNew, ruleAutoApplies: rule.autoApply };
+      return {
+        ok: true,
+        ruleLearned: isNew,
+        ruleReinforced: !isNew,
+        ruleAutoApplies: rule.autoApply,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * Persist a confirmed/corrected financial-impact bucket onto the record and — on
+ * a correction with a known vendor — teach a reusable vendor→bucket rule so
+ * future documents from that vendor land in the right bucket.
+ */
+function applyImpactResolution(
+  docId: number,
+  doc: DocumentRecord | null,
+  finalValue: string,
+  action: "confirm" | "correct",
+  filename: string,
+): ResolveResult {
+  const bucket = (IMPACT_BUCKETS as string[]).includes(finalValue)
+    ? (finalValue as ImpactBucket)
+    : null;
+  if (!bucket) return { ok: true };
+
+  const source: FieldSource = action === "confirm" ? "user_confirmed" : "manual";
+  const current = doc?.impact ?? null;
+  const updated: FinancialImpact = {
+    bucket,
+    confidence: 1,
+    direction: directionFor(bucket),
+    amountInr: current?.amountInr ?? null,
+    reason:
+      action === "correct"
+        ? `You set this to ${IMPACT_LABEL[bucket].toLowerCase()}.`
+        : (current?.reason ?? `Confirmed as ${IMPACT_LABEL[bucket].toLowerCase()}.`),
+    source,
+  };
+  updateDocumentClassification(docId, { impact: updated });
+
+  if (action === "correct") {
+    const vendorReview = getFieldReview(docId, "vendor");
+    const vendor = (vendorReview?.finalValue ?? vendorReview?.extractedValue)?.trim();
+    if (vendor) {
+      const { rule, isNew } = upsertConfirmedRule({
+        ruleType: "impact_bucket",
+        matchKey: vendor,
+        value: bucket,
+        evidence: [{ filename, docId, phrase: vendor }],
+      });
+      return {
+        ok: true,
+        ruleLearned: isNew,
+        ruleReinforced: !isNew,
+        ruleAutoApplies: rule.autoApply,
+      };
     }
   }
   return { ok: true };
@@ -611,17 +858,25 @@ export async function resolveField(
     return { ok: true, message: "Deferred for later." };
   }
 
-  const finalValue = action === "confirm" ? (review.suggestedValue ?? review.extractedValue ?? "") : (value?.trim() ?? "");
+  const finalValue =
+    action === "confirm"
+      ? (review.suggestedValue ?? review.extractedValue ?? "")
+      : (value?.trim() ?? "");
   const status: ReviewStatus = action === "confirm" ? "confirmed" : "corrected";
   const source: FieldSource = action === "confirm" ? "user_confirmed" : "manual";
 
   let result: ResolveResult = { ok: true };
-  if (field === "person") result = applyPersonResolution(docId, review, finalValue, action, filename);
-  else if (field === "doc_type") result = applyDocTypeResolution(docId, finalValue, action, filename);
+  if (field === "person")
+    result = applyPersonResolution(docId, review, finalValue, action, filename);
+  else if (field === "doc_type")
+    result = applyDocTypeResolution(docId, finalValue, action, filename);
   else if (field === "fx") result = await applyFxResolution(docId, doc, finalValue, action);
   else if (field === "doc_date") result = applyDocDateResolution(docId, finalValue);
   else if (field === "fin_year") result = applyFinYearResolution(docId, finalValue);
-  else if (field === "accounting") result = applyAccountingResolution(docId, doc, finalValue, action, filename);
+  else if (field === "accounting")
+    result = applyAccountingResolution(docId, doc, finalValue, action, filename);
+  else if (field === "impact")
+    result = applyImpactResolution(docId, doc, finalValue, action, filename);
 
   setFieldReviewResolution(docId, field, { status, finalValue: finalValue || null, source });
   addReviewAudit({

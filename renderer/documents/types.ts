@@ -8,9 +8,16 @@ import {
   formatDatePref,
   formatForeign as formatForeignPref,
   formatMoney,
+  IMPACT_BUCKETS,
+  IMPACT_LABEL,
   INDIA_DEFAULTS,
   type FinancePrefs,
+  type FinancialImpact,
+  type ImpactBucket,
 } from "../finance";
+
+export type { FinancialImpact, ImpactBucket };
+export { IMPACT_BUCKETS, IMPACT_LABEL };
 
 export type PersonRole =
   | "self"
@@ -37,7 +44,8 @@ export type ReviewField =
   | "fin_year"
   | "amount"
   | "fx"
-  | "accounting";
+  | "accounting"
+  | "impact";
 export type ReviewStatus = "low_confidence" | "conflict" | "missing" | "confirmed" | "corrected";
 
 export type AccountingFlow = "expense" | "income" | "unknown";
@@ -92,6 +100,31 @@ export interface CurrencyFields {
   currencyStatus: "none" | "converted" | "needs_review";
 }
 
+export interface ContractNoteTrade {
+  id: number;
+  docId: number;
+  securityName: string;
+  symbol: string | null;
+  isin: string | null;
+  side: "buy" | "sell";
+  quantity: number | null;
+  price: number | null;
+  netAmount: number | null;
+}
+
+export interface ContractNoteRecord {
+  docId: number;
+  broker: string | null;
+  client: string | null;
+  tradeDate: string | null;
+  settlementDate: string | null;
+  contractNoteNumber: string | null;
+  netAmount: number | null;
+  totalCharges: number | null;
+  side: "buy" | "sell" | "mixed";
+  trades: ContractNoteTrade[];
+}
+
 export interface DocumentBrowserRow {
   docId: number;
   filename: string;
@@ -115,6 +148,8 @@ export interface DocumentBrowserRow {
   foreignCurrency: string | null;
   inrValue: number | null;
   currencyStatus: CurrencyFields["currencyStatus"];
+  impact: FinancialImpact | null;
+  isContractNote: boolean;
   lifecycleState: LifecycleState;
   triageReason: string | null;
 }
@@ -175,6 +210,8 @@ export interface DocumentDetail {
   person: PersonContext;
   currency: CurrencyFields;
   accounting: AccountingHint | null;
+  impact: FinancialImpact | null;
+  contractNote: ContractNoteRecord | null;
   fields: DetailField[];
   audit: ReviewAuditEntry[];
   markdownExcerpt: string | null;
@@ -223,6 +260,7 @@ export const FIELD_LABEL: Record<ReviewField, string> = {
   amount: "Amount",
   fx: "Currency conversion",
   accounting: "Accounting hint",
+  impact: "Financial impact",
 };
 
 export const TREATMENT_LABEL: Record<AccountingTreatment, string> = {
@@ -286,7 +324,11 @@ export function formatInr(amount: number, prefs: FinancePrefs = INDIA_DEFAULTS):
   return formatMoney(amount, prefs);
 }
 
-export function formatForeign(amount: number, currency: string, prefs: FinancePrefs = INDIA_DEFAULTS): string {
+export function formatForeign(
+  amount: number,
+  currency: string,
+  prefs: FinancePrefs = INDIA_DEFAULTS,
+): string {
   return formatForeignPref(amount, currency, prefs);
 }
 

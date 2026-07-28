@@ -64,7 +64,12 @@ let runDone = 0;
 let runResults: IngestResult[] = [];
 
 function progress(): IngestProgress {
-  return { remaining: queue.length + (processing ? 1 : 0), done: runDone, total: runTotal, processing };
+  return {
+    remaining: queue.length + (processing ? 1 : 0),
+    done: runDone,
+    total: runTotal,
+    processing,
+  };
 }
 
 function broadcastProgress(): void {
@@ -186,5 +191,8 @@ async function prepareTrainingBatch(docIds: number[]): Promise<void> {
   } catch (error) {
     logger.warn("ingest-queue", "Training preparation failed", { error: String(error) });
   }
-  ipcMain.broadcast("training:changed", { pendingCount: getPendingReviewCount(), mode: isTrainingMode() });
+  ipcMain.broadcast("training:changed", {
+    pendingCount: getPendingReviewCount(),
+    mode: isTrainingMode(),
+  });
 }

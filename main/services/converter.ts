@@ -60,10 +60,17 @@ function rowsToMarkdownTable(rows: unknown[][]): string {
   if (clean.length === 0) return "_(empty)_";
 
   const colCount = clean.reduce((max, r) => Math.max(max, r.length), 0);
-  const cell = (v: unknown) => String(v ?? "").replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
+  const cell = (v: unknown) =>
+    String(v ?? "")
+      .replace(/\|/g, "\\|")
+      .replace(/\r?\n/g, " ")
+      .trim();
 
   const header = clean[0];
-  const headerCells = Array.from({ length: colCount }, (_, i) => cell(header[i]) || `Column ${i + 1}`);
+  const headerCells = Array.from(
+    { length: colCount },
+    (_, i) => cell(header[i]) || `Column ${i + 1}`,
+  );
   const lines = [
     `| ${headerCells.join(" | ")} |`,
     `| ${headerCells.map(() => "---").join(" | ")} |`,
@@ -164,14 +171,26 @@ export async function polishToMarkdown(
     const markdown = text.trim();
     if (!markdown) return { markdown: fallbackMarkdown(filename, representation), success: false };
 
-    const body = truncated ? `${markdown}\n\n_Note: source content was truncated during conversion._\n` : `${markdown}\n`;
+    const body = truncated
+      ? `${markdown}\n\n_Note: source content was truncated during conversion._\n`
+      : `${markdown}\n`;
     return { markdown: body, success: true };
   } catch (error) {
     if (error instanceof GlazeAIError) {
-      logger.info("converter", "AI conversion blocked, using fallback", { filename, state: error.state });
-      return { markdown: fallbackMarkdown(filename, representation), success: false, aiBlocked: error.state };
+      logger.info("converter", "AI conversion blocked, using fallback", {
+        filename,
+        state: error.state,
+      });
+      return {
+        markdown: fallbackMarkdown(filename, representation),
+        success: false,
+        aiBlocked: error.state,
+      };
     }
-    logger.warn("converter", "AI conversion failed, using fallback", { filename, error: String(error) });
+    logger.warn("converter", "AI conversion failed, using fallback", {
+      filename,
+      error: String(error),
+    });
     return { markdown: fallbackMarkdown(filename, representation), success: false };
   }
 }
@@ -181,7 +200,11 @@ export async function polishToMarkdown(
  * Retained for the legacy end-to-end ingest path; the queue path extracts once
  * (for triage) and then calls {@link polishToMarkdown} directly.
  */
-export async function convertToMarkdown(filePath: string, filename: string, type: FileType): Promise<ConversionResult> {
+export async function convertToMarkdown(
+  filePath: string,
+  filename: string,
+  type: FileType,
+): Promise<ConversionResult> {
   const representation = await extractText(filePath, type);
   if (!representation) return { markdown: fallbackMarkdown(filename, ""), success: false };
   return polishToMarkdown(representation, filename, type);

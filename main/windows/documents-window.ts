@@ -12,7 +12,8 @@ let pendingFocusDocId: number | null = null;
  * `documents:focus` so it can jump to the document immediately.
  */
 export async function openDocumentsWindow(focusDocId?: number | null): Promise<void> {
-  pendingFocusDocId = typeof focusDocId === "number" && Number.isFinite(focusDocId) ? focusDocId : null;
+  pendingFocusDocId =
+    typeof focusDocId === "number" && Number.isFinite(focusDocId) ? focusDocId : null;
 
   if (documentsWindow && !documentsWindow.isDestroyed()) {
     documentsWindow.show();

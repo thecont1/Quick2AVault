@@ -9,24 +9,42 @@ import { fileURLToPath } from "url";
 
 import { ipcMain, shell, logger } from "@glaze/core/backend";
 
-import { getSettingsWindow, openSettingsWindow, takePendingSettingsSection } from "../windows/settings-window.js";
+import {
+  getSettingsWindow,
+  openSettingsWindow,
+  takePendingSettingsSection,
+} from "../windows/settings-window.js";
 import { closeOnboardingWindow, openOnboardingWindow } from "../windows/onboarding-window.js";
 import { openDocumentsWindow, takeInitialFocusDocId } from "../windows/documents-window.js";
 import { showOrbMenu } from "../windows/orb-menu.js";
 import { beginOrbDrag, endOrbDrag, moveOrbBy } from "../windows/orb-window.js";
-import { closeSnapshotWindow, openSnapshotWindow, setSnapshotBusy } from "../windows/snapshot-window.js";
+import {
+  closeSnapshotWindow,
+  openSnapshotWindow,
+  setSnapshotBusy,
+} from "../windows/snapshot-window.js";
 import { closeTrainingWindow, openTrainingWindow } from "../windows/training-window.js";
 import { showToast } from "../windows/toast-window.js";
-import { ensureVaultDirs, getVaultRoot, ingestFile, ingestFiles, type IngestResult } from "../services/vault.js";
+import {
+  ensureVaultDirs,
+  getVaultRoot,
+  ingestFile,
+  ingestFiles,
+  type IngestResult,
+} from "../services/vault.js";
 import { enqueueDrop } from "../services/ingest-queue.js";
 import { notifyIngestOutcome, toastConversionFailures } from "../services/notify.js";
 import {
+  deleteRecurringEntry,
   getPendingReviewCount,
   getStats,
   getTrainingStats,
+  insertRecurringEntry,
   listDocuments,
+  listRecurringEntries,
   removeDocumentOverride,
   setDocumentOverride,
+  updateRecurringEntry,
   PERSON_ROLES,
   REVIEW_FIELDS,
   type PersonRole,
@@ -34,7 +52,14 @@ import {
   type RuleType,
 } from "../services/database.js";
 import { getCachedSnapshot, refreshSnapshot } from "../services/snapshot.js";
-import { getFinancePrefs, isFirstRun, setFinancePrefs, type FinancePrefs } from "../services/preferences.js";
+import { getImpactPrefs, setImpactPrefs, type ImpactPrefs } from "../services/impact.js";
+import { coerceRecurringInput } from "../services/recurring.js";
+import {
+  getFinancePrefs,
+  isFirstRun,
+  setFinancePrefs,
+  type FinancePrefs,
+} from "../services/preferences.js";
 import {
   confirmAllSuggestions,
   getDocumentReviewDetail,
@@ -95,6 +120,7 @@ const VALID_RULE_TYPES: RuleType[] = [
   "keyword_doctype",
   "source_scope",
   "accounting_treatment",
+  "impact_bucket",
 ];
 
 function isRuleType(value: unknown): value is RuleType {
@@ -109,13 +135,18 @@ function coercePrefsPatch(value: unknown): Partial<FinancePrefs> {
   if (!value || typeof value !== "object") return {};
   const v = value as Record<string, unknown>;
   const patch: Partial<FinancePrefs> = {};
-  if (typeof v.currency === "string" && v.currency.trim()) patch.currency = v.currency.trim().toUpperCase();
+  if (typeof v.currency === "string" && v.currency.trim())
+    patch.currency = v.currency.trim().toUpperCase();
   if (typeof v.locale === "string" && v.locale.trim()) patch.locale = v.locale.trim();
-  if (typeof v.dateFormat === "string" && VALID_DATE_FORMATS.has(v.dateFormat)) patch.dateFormat = v.dateFormat as FinancePrefs["dateFormat"];
-  if (typeof v.decimalSeparator === "string" && v.decimalSeparator) patch.decimalSeparator = v.decimalSeparator;
+  if (typeof v.dateFormat === "string" && VALID_DATE_FORMATS.has(v.dateFormat))
+    patch.dateFormat = v.dateFormat as FinancePrefs["dateFormat"];
+  if (typeof v.decimalSeparator === "string" && v.decimalSeparator)
+    patch.decimalSeparator = v.decimalSeparator;
   if (typeof v.thousandsSeparator === "string") patch.thousandsSeparator = v.thousandsSeparator;
-  if (typeof v.grouping === "string" && VALID_GROUPINGS.has(v.grouping)) patch.grouping = v.grouping as FinancePrefs["grouping"];
-  if (typeof v.fyStartMonth === "number" && Number.isInteger(v.fyStartMonth)) patch.fyStartMonth = v.fyStartMonth;
+  if (typeof v.grouping === "string" && VALID_GROUPINGS.has(v.grouping))
+    patch.grouping = v.grouping as FinancePrefs["grouping"];
+  if (typeof v.fyStartMonth === "number" && Number.isInteger(v.fyStartMonth))
+    patch.fyStartMonth = v.fyStartMonth;
   return patch;
 }
 
@@ -124,7 +155,8 @@ function toPersonRoles(value: unknown): PersonRole[] {
   if (!Array.isArray(value)) return [];
   const out: PersonRole[] = [];
   for (const item of value) {
-    if (typeof item === "string" && (PERSON_ROLES as string[]).includes(item)) out.push(item as PersonRole);
+    if (typeof item === "string" && (PERSON_ROLES as string[]).includes(item))
+      out.push(item as PersonRole);
   }
   return out;
 }
@@ -147,7 +179,10 @@ function toTrainingAnswers(value: unknown): TrainingAnswer[] {
 
 /** Tell the orb (and any listeners) how many training reviews are pending. */
 function broadcastTraining(): void {
-  ipcMain.broadcast("training:changed", { pendingCount: getPendingReviewCount(), mode: isTrainingMode() });
+  ipcMain.broadcast("training:changed", {
+    pendingCount: getPendingReviewCount(),
+    mode: isTrainingMode(),
+  });
 }
 
 /** Tell listeners (snapshot header, etc.) how many documents await review. */
@@ -209,6 +244,44 @@ export function registerHandlers(): void {
     await openOnboardingWindow();
   });
 
+  // ── Impact-mapping preferences ──────────────────────────────────────
+  ipcMain.handle("impactPrefs:get", async () => getImpactPrefs());
+
+  ipcMain.handle("impactPrefs:set", async (_event, patch: unknown) => {
+    const next = setImpactPrefs((patch ?? {}) as Partial<ImpactPrefs>);
+    ipcMain.broadcast("impactPrefs:changed", next);
+    return next;
+  });
+
+  // ── Manual recurring entries ────────────────────────────────────────
+  ipcMain.handle("recurring:list", async () => listRecurringEntries());
+
+  ipcMain.handle("recurring:add", async (_event, input: unknown) => {
+    const coerced = coerceRecurringInput(input);
+    if (!coerced) return null;
+    const entry = insertRecurringEntry(coerced);
+    ipcMain.broadcast("recurring:changed", {});
+    return entry;
+  });
+
+  ipcMain.handle("recurring:update", async (_event, id: unknown, patch: unknown) => {
+    const entryId = Number(id);
+    const coerced = coerceRecurringInput(patch);
+    if (!Number.isFinite(entryId) || !coerced) return { ok: false };
+    updateRecurringEntry(entryId, coerced);
+    ipcMain.broadcast("recurring:changed", {});
+    return { ok: true };
+  });
+
+  ipcMain.handle("recurring:delete", async (_event, id: unknown) => {
+    const entryId = Number(id);
+    if (Number.isFinite(entryId)) {
+      deleteRecurringEntry(entryId);
+      ipcMain.broadcast("recurring:changed", {});
+    }
+    return { ok: true };
+  });
+
   // ── Document Browser / evidence card ────────────────────────────────
   ipcMain.handle("window:openDocuments", async (_event, focusDocId?: unknown) => {
     const id = Number(focusDocId);
@@ -255,12 +328,16 @@ export function registerHandlers(): void {
   ipcMain.handle("documents:reprocess", async (_event, docId: unknown, when: unknown) => {
     const id = Number(docId);
     const w = when === "later" ? "later" : "now";
-    return Number.isFinite(id) ? requestReprocess(id, w) : { ok: false, message: "Invalid document." };
+    return Number.isFinite(id)
+      ? requestReprocess(id, w)
+      : { ok: false, message: "Invalid document." };
   });
 
   ipcMain.handle("documents:deletePermanently", async (_event, docId: unknown) => {
     const id = Number(docId);
-    return Number.isFinite(id) ? await deleteDocumentPermanently(id) : { ok: false, message: "Invalid document." };
+    return Number.isFinite(id)
+      ? await deleteDocumentPermanently(id)
+      : { ok: false, message: "Invalid document." };
   });
 
   // ── Duplicate events ──────────────────────────────────────────────────
@@ -271,7 +348,9 @@ export function registerHandlers(): void {
   ipcMain.handle("duplicates:resolve", async (_event, eventId: unknown, action: unknown) => {
     const id = Number(eventId);
     const a = action === "delete" ? "delete" : "acknowledge";
-    return Number.isFinite(id) ? resolveDuplicate(id, a) : { ok: false, message: "Invalid duplicate." };
+    return Number.isFinite(id)
+      ? resolveDuplicate(id, a)
+      : { ok: false, message: "Invalid duplicate." };
   });
 
   // ── Vault handlers ──────────────────────────────────────────────────
@@ -394,7 +473,8 @@ export function registerHandlers(): void {
 
   ipcMain.handle("people:addAlias", async (_event, id: number, alias: unknown) => {
     const pid = Number(id);
-    if (Number.isFinite(pid) && typeof alias === "string" && alias.trim()) addPersonAlias(pid, alias);
+    if (Number.isFinite(pid) && typeof alias === "string" && alias.trim())
+      addPersonAlias(pid, alias);
   });
 
   ipcMain.handle("people:removeAlias", async (_event, aliasId: number) => {
@@ -476,9 +556,17 @@ export function registerHandlers(): void {
     // Subtle near-orb confirmation of what was learned.
     const { learned, reinforced } = result;
     if (learned > 0) {
-      void showToast(`Learned ${learned} new rule${learned === 1 ? "" : "s"}`, "Training Mode is getting smarter.", "info");
+      void showToast(
+        `Learned ${learned} new rule${learned === 1 ? "" : "s"}`,
+        "Training Mode is getting smarter.",
+        "info",
+      );
     } else if (reinforced > 0) {
-      void showToast(`Reinforced ${reinforced} rule${reinforced === 1 ? "" : "s"}`, "Thanks — noted.", "info");
+      void showToast(
+        `Reinforced ${reinforced} rule${reinforced === 1 ? "" : "s"}`,
+        "Thanks — noted.",
+        "info",
+      );
     } else {
       void showToast("Answers saved", "Thanks — noted.", "info");
     }
@@ -507,13 +595,17 @@ export function registerHandlers(): void {
     return listRules();
   });
 
-  ipcMain.handle("training:addRule", async (_event, ruleType: unknown, matchKey: unknown, value: unknown) => {
-    if (!isRuleType(ruleType) || typeof matchKey !== "string" || typeof value !== "string") return null;
-    if (!matchKey.trim() || !value.trim()) return null;
-    const rule = await addRule({ ruleType, matchKey, value });
-    broadcastTraining();
-    return rule;
-  });
+  ipcMain.handle(
+    "training:addRule",
+    async (_event, ruleType: unknown, matchKey: unknown, value: unknown) => {
+      if (!isRuleType(ruleType) || typeof matchKey !== "string" || typeof value !== "string")
+        return null;
+      if (!matchKey.trim() || !value.trim()) return null;
+      const rule = await addRule({ ruleType, matchKey, value });
+      broadcastTraining();
+      return rule;
+    },
+  );
 
   ipcMain.handle("training:updateRule", async (_event, id: number, patch: unknown) => {
     const ruleId = Number(id);
@@ -551,25 +643,37 @@ export function registerHandlers(): void {
     return reviewCount();
   });
 
-  ipcMain.handle("reviews:resolve", async (_event, docId: number, field: unknown, action: unknown, value: unknown) => {
-    const id = Number(docId);
-    if (!Number.isFinite(id) || !isReviewField(field) || typeof action !== "string" || !REVIEW_ACTIONS.has(action)) {
-      return { ok: false, message: "Invalid review action." };
-    }
-    const result = await resolveField(
-      id,
-      field,
-      action as "confirm" | "correct" | "defer",
-      typeof value === "string" ? value : undefined,
-    );
-    broadcastReview();
-    if (result.ruleLearned || result.ruleReinforced) {
-      const verb = result.ruleLearned ? "Learned" : "Reinforced";
-      const tail = result.ruleAutoApplies ? " It will now auto-apply to future documents." : "";
-      void showToast(`${verb} a rule from your correction`, `Training Mode is getting smarter.${tail}`, "info");
-    }
-    return result;
-  });
+  ipcMain.handle(
+    "reviews:resolve",
+    async (_event, docId: number, field: unknown, action: unknown, value: unknown) => {
+      const id = Number(docId);
+      if (
+        !Number.isFinite(id) ||
+        !isReviewField(field) ||
+        typeof action !== "string" ||
+        !REVIEW_ACTIONS.has(action)
+      ) {
+        return { ok: false, message: "Invalid review action." };
+      }
+      const result = await resolveField(
+        id,
+        field,
+        action as "confirm" | "correct" | "defer",
+        typeof value === "string" ? value : undefined,
+      );
+      broadcastReview();
+      if (result.ruleLearned || result.ruleReinforced) {
+        const verb = result.ruleLearned ? "Learned" : "Reinforced";
+        const tail = result.ruleAutoApplies ? " It will now auto-apply to future documents." : "";
+        void showToast(
+          `${verb} a rule from your correction`,
+          `Training Mode is getting smarter.${tail}`,
+          "info",
+        );
+      }
+      return result;
+    },
+  );
 
   ipcMain.handle("reviews:confirmAll", async (_event, docId: number) => {
     const id = Number(docId);

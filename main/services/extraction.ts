@@ -14,9 +14,45 @@ import { generateObject, glaze, z, GlazeAIError } from "@glaze/core/ai";
 import { logger } from "@glaze/core/backend";
 
 import { convertToInr } from "./currency.js";
-import type { AccountingFlow, CurrencyFields } from "./database.js";
+import {
+  IMPACT_BUCKETS,
+  type AccountingFlow,
+  type CurrencyFields,
+  type ImpactBucket,
+} from "./database.js";
 
 const MAX_AI_CHARS = 8000;
+
+/**
+ * A coarse spending category used to steer the financial-impact mapping. It's
+ * intentionally small — the buckets these map to are user-configurable.
+ */
+export type SpendCategory =
+  | "grocery"
+  | "software_saas"
+  | "marketplace"
+  | "insurance"
+  | "utilities"
+  | "rent"
+  | "salary"
+  | "tax"
+  | "credit_card"
+  | "investment"
+  | "none";
+
+const SPEND_CATEGORIES: [SpendCategory, ...SpendCategory[]] = [
+  "grocery",
+  "software_saas",
+  "marketplace",
+  "insurance",
+  "utilities",
+  "rent",
+  "salary",
+  "tax",
+  "credit_card",
+  "investment",
+  "none",
+];
 
 /** One extracted field: its value (null when absent) and whether the AI was sure. */
 export interface ExtractedField {
@@ -44,6 +80,14 @@ export interface DocumentExtraction {
   paymentDate: string | null;
   /** Looks like an advance / deposit / prepaid or annual-up-front payment. */
   advanceOrPrepaid: boolean;
+  // ── Financial-impact facts (feed the plain-language impact layer) ──
+  /** The AI's best guess of which impact bucket this document feeds, or null. */
+  impactBucket: ImpactBucket | null;
+  impactConfident: boolean;
+  /** A coarse spending category used to apply user impact-mapping preferences. */
+  spendCategory: SpendCategory;
+  /** The AI thinks this is a stock-broker contract note / securities trade confirmation. */
+  isContractNote: boolean;
 }
 
 export interface ExtractionResult {
@@ -69,6 +113,10 @@ const EMPTY_EXTRACTION: DocumentExtraction = {
   servicePeriodEnd: null,
   paymentDate: null,
   advanceOrPrepaid: false,
+  impactBucket: null,
+  impactConfident: false,
+  spendCategory: "none",
+  isContractNote: false,
 };
 
 const schema = z.object({
@@ -79,7 +127,9 @@ const schema = z.object({
       "The kind of document, e.g. 'bank statement', 'invoice', 'tax document', 'insurance policy', " +
         "'credit card statement', 'receipt', 'salary slip'. Null if genuinely unclear.",
     ),
-  documentTypeConfident: z.boolean().describe("true only if the document type is clearly identifiable"),
+  documentTypeConfident: z
+    .boolean()
+    .describe("true only if the document type is clearly identifiable"),
   vendor: z
     .string()
     .nullable()
@@ -91,8 +141,12 @@ const schema = z.object({
   documentDate: z
     .string()
     .nullable()
-    .describe("The primary document/statement/invoice date as YYYY-MM-DD. Null if no clear date is present."),
-  documentDateConfident: z.boolean().describe("true only if a single clear document date was found"),
+    .describe(
+      "The primary document/statement/invoice date as YYYY-MM-DD. Null if no clear date is present.",
+    ),
+  documentDateConfident: z
+    .boolean()
+    .describe("true only if a single clear document date was found"),
   amount: z
     .number()
     .nullable()
@@ -125,12 +179,39 @@ const schema = z.object({
   paymentDate: z
     .string()
     .nullable()
-    .describe("The date payment was actually made, as YYYY-MM-DD, if stated separately from the document date. Null otherwise."),
+    .describe(
+      "The date payment was actually made, as YYYY-MM-DD, if stated separately from the document date. Null otherwise.",
+    ),
   advanceOrPrepaid: z
     .boolean()
     .describe(
       "true if this looks like an advance payment, deposit, retainer, or a prepaid / annual subscription paid " +
         "up front for a future period",
+    ),
+  impactBucket: z
+    .enum(IMPACT_BUCKETS as [ImpactBucket, ...ImpactBucket[]])
+    .nullable()
+    .describe(
+      "Which financial bucket this document most likely feeds. Use 'income' for money received (sales invoice, " +
+        "salary, interest), 'household_expense' for groceries/home bills, 'business_expense' for work costs, " +
+        "'software_utility_expense' for SaaS/AI/utility bills, 'investment_purchase'/'investment_sale' for " +
+        "securities/mutual-fund trades, 'liability_dues' for credit-card statements/loans due, 'tax_statutory' " +
+        "for tax/GST/statutory payments, 'transfer_neutral' for internal transfers, 'needs_review' if unclear. " +
+        "Null if it isn't a financial transaction.",
+    ),
+  impactBucketConfident: z.boolean().describe("true only if the impact bucket is clear"),
+  spendCategory: z
+    .enum(SPEND_CATEGORIES)
+    .describe(
+      "A coarse category of what this is, used to apply the user's preferences: 'grocery', 'software_saas' " +
+        "(SaaS / AI / software subscription), 'marketplace' (Amazon/Flipkart-style shopping), 'insurance', " +
+        "'utilities', 'rent', 'salary', 'tax', 'credit_card', 'investment', or 'none' if it fits none of these.",
+    ),
+  isContractNote: z
+    .boolean()
+    .describe(
+      "true if this is a stock-broker contract note / securities trade confirmation / 'contract note cum tax " +
+        "invoice' listing traded shares with ISINs — NOT a generic invoice.",
     ),
 });
 
@@ -146,7 +227,16 @@ function trimField(value: string | null, confident: boolean): ExtractedField {
 export async function extractDocument(text: string, filename: string): Promise<ExtractionResult> {
   const excerpt = text.slice(0, MAX_AI_CHARS).trim();
   if (!excerpt) {
-    return { currency: (await convertToInr({ currency: null, amount: null, invoiceDate: null, confident: false })), extraction: EMPTY_EXTRACTION, aiBlocked: false };
+    return {
+      currency: await convertToInr({
+        currency: null,
+        amount: null,
+        invoiceDate: null,
+        confident: false,
+      }),
+      extraction: EMPTY_EXTRACTION,
+      aiBlocked: false,
+    };
   }
 
   let detected: z.infer<typeof schema>;
@@ -167,7 +257,12 @@ export async function extractDocument(text: string, filename: string): Promise<E
     } else {
       logger.warn("extraction", "AI extraction failed", { filename, error: String(error) });
     }
-    const currency = await convertToInr({ currency: null, amount: null, invoiceDate: null, confident: false });
+    const currency = await convertToInr({
+      currency: null,
+      amount: null,
+      invoiceDate: null,
+      confident: false,
+    });
     return { currency, extraction: EMPTY_EXTRACTION, aiBlocked: true };
   }
 
@@ -195,6 +290,10 @@ export async function extractDocument(text: string, filename: string): Promise<E
     servicePeriodEnd: isoOrNull(detected.servicePeriodEnd),
     paymentDate: isoOrNull(detected.paymentDate),
     advanceOrPrepaid: detected.advanceOrPrepaid,
+    impactBucket: detected.impactBucket,
+    impactConfident: detected.impactBucket != null && detected.impactBucketConfident,
+    spendCategory: detected.spendCategory,
+    isContractNote: detected.isContractNote,
   };
 
   // Compute the FX conversion from the same extraction (no extra AI call).

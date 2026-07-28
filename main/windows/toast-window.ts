@@ -21,12 +21,13 @@ let dismissTimer: ReturnType<typeof setTimeout> | null = null;
 /** Position the toast beside the orb (preferring the left), clamped on-screen. */
 function computePosition(): { x: number; y: number } {
   const orb = getOrbWindow();
-  const wa = orb && !orb.isDestroyed()
-    ? screen.getDisplayNearestPoint({
-        x: orb.getBounds().x + Math.round(orb.getBounds().width / 2),
-        y: orb.getBounds().y + Math.round(orb.getBounds().height / 2),
-      }).workArea
-    : screen.getPrimaryDisplay().workArea;
+  const wa =
+    orb && !orb.isDestroyed()
+      ? screen.getDisplayNearestPoint({
+          x: orb.getBounds().x + Math.round(orb.getBounds().width / 2),
+          y: orb.getBounds().y + Math.round(orb.getBounds().height / 2),
+        }).workArea
+      : screen.getPrimaryDisplay().workArea;
 
   if (!orb || orb.isDestroyed()) {
     return {
@@ -55,7 +56,11 @@ function scheduleDismiss(): void {
   }, DISMISS_MS);
 }
 
-export async function showToast(title: string, body: string, tone: ToastTone = "info"): Promise<void> {
+export async function showToast(
+  title: string,
+  body: string,
+  tone: ToastTone = "info",
+): Promise<void> {
   const { x, y } = computePosition();
   const params = new URLSearchParams({ title, body, tone });
   const base = await getWindowUrl("toast-window.html");

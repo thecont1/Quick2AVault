@@ -8,8 +8,8 @@ import { BrowserWindow, screen, logger } from "@glaze/core/backend";
 import { getPreloadPath, getWindowUrl } from "./window-paths.js";
 import { getOrbWindow } from "./orb-window.js";
 
-const POPUP_WIDTH = 340;
-const POPUP_HEIGHT = 480;
+const POPUP_WIDTH = 380;
+const POPUP_HEIGHT = 640;
 const GAP = 10;
 
 let snapshotWindow: BrowserWindow | null = null;

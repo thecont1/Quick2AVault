@@ -35,7 +35,17 @@ const invoke = <T,>(channel: string, ...args: unknown[]): Promise<T> =>
 
 const DATE_FORMATS: DateFormat[] = ["DD-MM-YYYY", "DD MMM YYYY", "MM/DD/YYYY", "YYYY-MM-DD"];
 
-function Field({ icon, label, hint, children }: { icon: ReactNode; label: string; hint?: string; children: ReactNode }) {
+function Field({
+  icon,
+  label,
+  hint,
+  children,
+}: {
+  icon: ReactNode;
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-2">
@@ -54,7 +64,10 @@ function Field({ icon, label, hint, children }: { icon: ReactNode; label: string
 
 export function OnboardingView() {
   useTheme();
-  const prefsQuery = useQuery({ queryKey: ["financePrefs"], queryFn: () => invoke<FinancePrefs>("prefs:get") });
+  const prefsQuery = useQuery({
+    queryKey: ["financePrefs"],
+    queryFn: () => invoke<FinancePrefs>("prefs:get"),
+  });
   const base = prefsQuery.data ?? INDIA_DEFAULTS;
 
   const [currency, setCurrency] = useState(base.currency);
@@ -64,7 +77,13 @@ export function OnboardingView() {
   const [saving, setSaving] = useState(false);
 
   const month = Number(fyStartMonth) || 4;
-  const previewPrefs: FinancePrefs = { ...base, currency, dateFormat, grouping, fyStartMonth: month };
+  const previewPrefs: FinancePrefs = {
+    ...base,
+    currency,
+    dateFormat,
+    grouping,
+    fyStartMonth: month,
+  };
   const dateExample = formatDatePref("2026-03-31", previewPrefs);
   const fyMar = fyLabel(financialYearKey("2026-03-31", month));
   const fyApr = fyLabel(financialYearKey("2026-04-01", month));
@@ -97,15 +116,25 @@ export function OnboardingView() {
             <Text variant="heading2">Welcome to Quick2Afvault</Text>
           </div>
           <Text variant="small" color="secondary">
-            A few financial preferences so the app is grounded from the start. These are prefilled with India
-            defaults — review them and change anything you like. You can edit them again any time in Settings.
+            A few financial preferences so the app is grounded from the start. These are prefilled
+            with India defaults — review them and change anything you like. You can edit them again
+            any time in Settings.
           </Text>
         </div>
 
         <Separator />
 
-        <Field icon={<Coins className="size-4" />} label="Currency" hint="Your vault reports values in this currency.">
-          <Input value={currency} onChange={(e) => setCurrency(e.target.value)} placeholder="INR" className="w-32" />
+        <Field
+          icon={<Coins className="size-4" />}
+          label="Currency"
+          hint="Your vault reports values in this currency."
+        >
+          <Input
+            value={currency}
+            onChange={(e) => setCurrency(e.target.value)}
+            placeholder="INR"
+            className="w-32"
+          />
         </Field>
 
         <Field
@@ -127,7 +156,11 @@ export function OnboardingView() {
           </Select>
         </Field>
 
-        <Field icon={<CalendarClock className="size-4" />} label="Date format" hint={`Example: ${dateExample}`}>
+        <Field
+          icon={<CalendarClock className="size-4" />}
+          label="Date format"
+          hint={`Example: ${dateExample}`}
+        >
           <Select value={dateFormat} onValueChange={(v) => setDateFormat(v as DateFormat)}>
             <SelectTrigger variant="filled" className="w-48">
               <SelectValue />
@@ -145,9 +178,16 @@ export function OnboardingView() {
         <Field
           icon={<Hash className="size-4" />}
           label="Number format"
-          hint={grouping === "indian" ? "Indian grouping: 1,23,456.78" : "International grouping: 1,234,567.89"}
+          hint={
+            grouping === "indian"
+              ? "Indian grouping: 1,23,456.78"
+              : "International grouping: 1,234,567.89"
+          }
         >
-          <Select value={grouping} onValueChange={(v) => setGrouping(v as FinancePrefs["grouping"])}>
+          <Select
+            value={grouping}
+            onValueChange={(v) => setGrouping(v as FinancePrefs["grouping"])}
+          >
             <SelectTrigger variant="filled" className="w-56">
               <SelectValue />
             </SelectTrigger>
@@ -163,7 +203,8 @@ export function OnboardingView() {
         <div className="flex items-center gap-2">
           <Landmark className="size-3.5 text-tertiary shrink-0" />
           <Text variant="small" color="tertiary">
-            The financial year is a core classification — every dated document is filed into its FY bucket.
+            The financial year is a core classification — every dated document is filed into its FY
+            bucket.
           </Text>
         </div>
 

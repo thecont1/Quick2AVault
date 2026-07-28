@@ -30,6 +30,7 @@ import {
   Building2,
   Calendar,
   CalendarClock,
+  Camera,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -39,6 +40,7 @@ import {
   FileText,
   Info,
   Landmark,
+  LineChart,
   Pencil,
   RefreshCw,
   RotateCcw,
@@ -47,16 +49,19 @@ import {
   Star,
   Tag,
   Trash2,
+  TrendingUp,
   User,
   Wallet,
 } from "lucide-react";
-import { useFinancePrefs, type FinancePrefs } from "../finance";
+import { impactSummary, useFinancePrefs, type FinancePrefs } from "../finance";
 import {
   confidenceColor,
   formatDate,
   formatForeign,
   formatInr,
   fyLabel,
+  IMPACT_BUCKETS,
+  IMPACT_LABEL,
   isPending,
   LIFECYCLE_META,
   ROLE_LABEL,
@@ -65,8 +70,10 @@ import {
   TREATMENT_LABEL,
   TREATMENT_OPTIONS,
   type AccountingTreatment,
+  type ContractNoteRecord,
   type DetailField,
   type DocumentDetail,
+  type ImpactBucket,
   type LifecycleResult,
   type LifecycleState,
   type ResolveResult,
@@ -110,7 +117,9 @@ function SummaryRow({
 }) {
   return (
     <div className="flex items-start gap-2 py-1.5">
-      <span className={cn("mt-0.5 shrink-0", emphasize ? "text-orange-9" : "text-tertiary")}>{icon}</span>
+      <span className={cn("mt-0.5 shrink-0", emphasize ? "text-orange-9" : "text-tertiary")}>
+        {icon}
+      </span>
       <Text variant="small" color="tertiary" className="w-28 shrink-0 pt-px">
         {label}
       </Text>
@@ -120,7 +129,15 @@ function SummaryRow({
 }
 
 /** A reviewable field with confirm / correct / later actions. */
-function FieldRow({ docId, field, onChanged }: { docId: number; field: DetailField; onChanged: () => void }) {
+function FieldRow({
+  docId,
+  field,
+  onChanged,
+}: {
+  docId: number;
+  field: DetailField;
+  onChanged: () => void;
+}) {
   const [correcting, setCorrecting] = useState(false);
   const [draft, setDraft] = useState(field.value ?? field.suggestedValue ?? "");
   const [showWhy, setShowWhy] = useState(false);
@@ -185,7 +202,11 @@ function FieldRow({ docId, field, onChanged }: { docId: number; field: DetailFie
         </div>
       ) : (
         <div className="flex items-center gap-2">
-          <Text variant="small" color={field.value ? "primary" : "tertiary"} className="flex-1 min-w-0 break-words">
+          <Text
+            variant="small"
+            color={field.value ? "primary" : "tertiary"}
+            className="flex-1 min-w-0 break-words"
+          >
             {field.value ?? "Not detected"}
           </Text>
           <SourceMark source={field.source} />
@@ -215,7 +236,12 @@ function FieldRow({ docId, field, onChanged }: { docId: number; field: DetailFie
           <Button
             size="small"
             variant="accent"
-            onClick={() => resolve.mutate({ action: "confirm", value: field.suggestedValue ?? field.value ?? undefined })}
+            onClick={() =>
+              resolve.mutate({
+                action: "confirm",
+                value: field.suggestedValue ?? field.value ?? undefined,
+              })
+            }
             disabled={resolve.isPending}
           >
             <CheckCircle2 className="size-3.5" />
@@ -235,7 +261,12 @@ function FieldRow({ docId, field, onChanged }: { docId: number; field: DetailFie
           Correct
         </Button>
         {pending ? (
-          <Button size="small" variant="transparent" onClick={() => resolve.mutate({ action: "defer" })} disabled={resolve.isPending}>
+          <Button
+            size="small"
+            variant="transparent"
+            onClick={() => resolve.mutate({ action: "defer" })}
+            disabled={resolve.isPending}
+          >
             <Clock className="size-3.5" />
             Later
           </Button>
@@ -277,7 +308,9 @@ function AuditTrail({ audit }: { audit: DocumentDetail["audit"] }) {
               </div>
               {entry.oldValue || entry.newValue ? (
                 <Text variant="small" color="secondary" className="break-words">
-                  {entry.oldValue ? <span className="line-through text-tertiary">{entry.oldValue}</span> : null}
+                  {entry.oldValue ? (
+                    <span className="line-through text-tertiary">{entry.oldValue}</span>
+                  ) : null}
                   {entry.oldValue && entry.newValue ? " → " : null}
                   {entry.newValue ?? ""}
                 </Text>
@@ -325,11 +358,19 @@ function AccountingBlock({
   const queryClient = useQueryClient();
   const acc = detail.fields.find((f) => f.field === "accounting");
   const hint = detail.accounting;
-  const treatment = (hint?.treatment ?? (acc?.value as AccountingTreatment | null) ?? null) as AccountingTreatment | null;
+  const treatment = (hint?.treatment ??
+    (acc?.value as AccountingTreatment | null) ??
+    null) as AccountingTreatment | null;
 
   const resolve = useMutation({
     mutationFn: (input: { action: "confirm" | "correct" | "defer"; value?: string }) =>
-      invoke<ResolveResult>("reviews:resolve", detail.docId, "accounting", input.action, input.value),
+      invoke<ResolveResult>(
+        "reviews:resolve",
+        detail.docId,
+        "accounting",
+        input.action,
+        input.value,
+      ),
     onSuccess: (result) => {
       if (result?.ruleLearned) toast("Learned an accounting rule from your choice");
       else if (result?.ruleReinforced) toast("Reinforced your accounting rule");
@@ -354,7 +395,9 @@ function AccountingBlock({
             Accounting hint
           </Text>
           {userTouched ? <Badge color="blue">Edited by you</Badge> : null}
-          {acc ? <Badge color={STATUS_META[acc.status].color}>{STATUS_META[acc.status].label}</Badge> : null}
+          {acc ? (
+            <Badge color={STATUS_META[acc.status].color}>{STATUS_META[acc.status].label}</Badge>
+          ) : null}
           {confidence > 0 ? (
             <Badge color={confidenceColor(confidence)} className="tabular-nums">
               {Math.round(confidence * 100)}%
@@ -381,7 +424,8 @@ function AccountingBlock({
               <div className="flex items-center gap-1.5">
                 <CalendarClock className="size-3.5 text-tertiary shrink-0" />
                 <Text variant="small" color="secondary">
-                  Service period: {formatDate(hint.servicePeriodStart, prefs)} – {formatDate(hint.servicePeriodEnd, prefs)}
+                  Service period: {formatDate(hint.servicePeriodStart, prefs)} –{" "}
+                  {formatDate(hint.servicePeriodEnd, prefs)}
                 </Text>
               </div>
             ) : null}
@@ -406,7 +450,10 @@ function AccountingBlock({
           <Text variant="small" color="tertiary">
             Set treatment
           </Text>
-          <Select value={treatment ?? undefined} onValueChange={(v) => resolve.mutate({ action: "correct", value: v })}>
+          <Select
+            value={treatment ?? undefined}
+            onValueChange={(v) => resolve.mutate({ action: "correct", value: v })}
+          >
             <SelectTrigger size="small" variant="filled" className="w-56">
               <SelectValue placeholder="Choose a treatment…" />
             </SelectTrigger>
@@ -423,14 +470,24 @@ function AccountingBlock({
               size="small"
               variant="accent"
               disabled={resolve.isPending}
-              onClick={() => resolve.mutate({ action: "confirm", value: acc?.suggestedValue ?? treatment ?? undefined })}
+              onClick={() =>
+                resolve.mutate({
+                  action: "confirm",
+                  value: acc?.suggestedValue ?? treatment ?? undefined,
+                })
+              }
             >
               <CheckCircle2 className="size-3.5" />
               Confirm
             </Button>
           ) : null}
           {pending ? (
-            <Button size="small" variant="transparent" disabled={resolve.isPending} onClick={() => resolve.mutate({ action: "defer" })}>
+            <Button
+              size="small"
+              variant="transparent"
+              disabled={resolve.isPending}
+              onClick={() => resolve.mutate({ action: "defer" })}
+            >
               <Clock className="size-3.5" />
               Later
             </Button>
@@ -513,11 +570,21 @@ function LifecycleActions({
         <div className="flex flex-wrap items-center gap-1.5">
           {state === "active" ? (
             <>
-              <Button size="small" variant="transparent" disabled={busy} onClick={() => run("documents:reprocess", docId, "now")}>
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={busy}
+                onClick={() => run("documents:reprocess", docId, "now")}
+              >
                 <RefreshCw className="size-3.5" />
                 Reprocess
               </Button>
-              <Button size="small" variant="transparent" disabled={busy} onClick={() => run("documents:exclude", docId)}>
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={busy}
+                onClick={() => run("documents:exclude", docId)}
+              >
                 <Archive className="size-3.5" />
                 Remove from active
               </Button>
@@ -525,7 +592,12 @@ function LifecycleActions({
           ) : null}
 
           {state === "irrelevant" ? (
-            <Button size="small" variant="accent" disabled={busy} onClick={() => run("documents:restore", docId)}>
+            <Button
+              size="small"
+              variant="accent"
+              disabled={busy}
+              onClick={() => run("documents:restore", docId)}
+            >
               <RotateCcw className="size-3.5" />
               Restore &amp; process
             </Button>
@@ -533,11 +605,21 @@ function LifecycleActions({
 
           {state === "excluded" ? (
             <>
-              <Button size="small" variant="accent" disabled={busy} onClick={() => run("documents:restore", docId)}>
+              <Button
+                size="small"
+                variant="accent"
+                disabled={busy}
+                onClick={() => run("documents:restore", docId)}
+              >
                 <RotateCcw className="size-3.5" />
                 Restore to active
               </Button>
-              <Button size="small" variant="transparent" disabled={busy} onClick={() => run("documents:reprocess", docId, "now")}>
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={busy}
+                onClick={() => run("documents:reprocess", docId, "now")}
+              >
                 <RefreshCw className="size-3.5" />
                 Reprocess
               </Button>
@@ -546,11 +628,21 @@ function LifecycleActions({
 
           {state === "reprocess_requested" ? (
             <>
-              <Button size="small" variant="accent" disabled={busy} onClick={() => run("documents:reprocess", docId, "now")}>
+              <Button
+                size="small"
+                variant="accent"
+                disabled={busy}
+                onClick={() => run("documents:reprocess", docId, "now")}
+              >
                 <RefreshCw className="size-3.5" />
                 Reprocess now
               </Button>
-              <Button size="small" variant="transparent" disabled={busy} onClick={() => run("documents:restore", docId)}>
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={busy}
+                onClick={() => run("documents:restore", docId)}
+              >
                 Cancel request
               </Button>
             </>
@@ -558,16 +650,31 @@ function LifecycleActions({
 
           {confirmingDelete ? (
             <>
-              <Button size="small" variant="destructive" disabled={busy} onClick={() => run("documents:deletePermanently", docId)}>
+              <Button
+                size="small"
+                variant="destructive"
+                disabled={busy}
+                onClick={() => run("documents:deletePermanently", docId)}
+              >
                 <Trash2 className="size-3.5" />
                 Confirm delete
               </Button>
-              <Button size="small" variant="transparent" disabled={busy} onClick={() => setConfirmingDelete(false)}>
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={busy}
+                onClick={() => setConfirmingDelete(false)}
+              >
                 Cancel
               </Button>
             </>
           ) : (
-            <Button size="small" variant="transparent" disabled={busy} onClick={() => setConfirmingDelete(true)}>
+            <Button
+              size="small"
+              variant="transparent"
+              disabled={busy}
+              onClick={() => setConfirmingDelete(true)}
+            >
               <Trash2 className="size-3.5" />
               Delete permanently
             </Button>
@@ -579,7 +686,8 @@ function LifecycleActions({
           </Text>
         ) : (
           <Text variant="small" color="tertiary">
-            Removing from active keeps the original file safe — you can restore or reprocess it anytime.
+            Removing from active keeps the original file safe — you can restore or reprocess it
+            anytime.
           </Text>
         )}
       </div>
@@ -587,7 +695,206 @@ function LifecycleActions({
   );
 }
 
-export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; onChanged: () => void }) {
+/**
+ * The plain-language "what this means" financial-impact block — the first thing
+ * to read on a recognized document. Confidence-aware, and editable (correcting
+ * the bucket teaches a vendor→bucket rule).
+ */
+function ImpactBlock({
+  detail,
+  prefs,
+  onChanged,
+}: {
+  detail: DocumentDetail;
+  prefs: FinancePrefs;
+  onChanged: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const field = detail.fields.find((f) => f.field === "impact");
+  const impact = detail.impact;
+  if (!impact && !field) return null;
+
+  const bucket = (impact?.bucket ??
+    (field?.value as ImpactBucket | null) ??
+    null) as ImpactBucket | null;
+  const summary = impact ? impactSummary(impact, prefs) : (field?.reason ?? "");
+  const confidence = impact?.confidence ?? field?.confidence ?? 0;
+  const pending = field ? isPending(field.status) : false;
+  const userTouched = field?.userTouched ?? false;
+
+  const resolve = useMutation({
+    mutationFn: (input: { action: "confirm" | "correct" | "defer"; value?: string }) =>
+      invoke<ResolveResult>("reviews:resolve", detail.docId, "impact", input.action, input.value),
+    onSuccess: (result) => {
+      if (result?.ruleLearned) toast("Learned an impact rule from your choice");
+      else if (result?.ruleReinforced) toast("Reinforced your impact rule");
+      void queryClient.invalidateQueries({ queryKey: ["documents"] });
+      onChanged();
+    },
+  });
+
+  return (
+    <div className="flex flex-col gap-2 rounded-card border border-accent/30 bg-accent/10 px-3 py-3">
+      <div className="flex items-center gap-2">
+        <TrendingUp className="size-4 text-accent" />
+        <Text variant="small-strong" className="flex-1">
+          Financial impact
+        </Text>
+        {userTouched ? <Badge color="blue">Edited by you</Badge> : null}
+        {field ? (
+          <Badge color={STATUS_META[field.status].color}>{STATUS_META[field.status].label}</Badge>
+        ) : null}
+      </div>
+
+      <Text variant="large" className="break-words">
+        {summary || (bucket ? IMPACT_LABEL[bucket] : "Impact not determined.")}
+      </Text>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {bucket ? <Badge color="secondary">{IMPACT_LABEL[bucket]}</Badge> : null}
+        {confidence > 0 ? (
+          <Badge color={confidenceColor(confidence)} className="tabular-nums">
+            {Math.round(confidence * 100)}%
+          </Badge>
+        ) : null}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+        <Text variant="small" color="tertiary">
+          Set bucket
+        </Text>
+        <Select
+          value={bucket ?? undefined}
+          onValueChange={(v) => resolve.mutate({ action: "correct", value: v })}
+        >
+          <SelectTrigger size="small" variant="filled" className="w-56">
+            <SelectValue placeholder="Choose a bucket…" />
+          </SelectTrigger>
+          <SelectContent>
+            {IMPACT_BUCKETS.map((b) => (
+              <SelectItem key={b} value={b}>
+                {IMPACT_LABEL[b]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {pending ? (
+          <Button
+            size="small"
+            variant="accent"
+            disabled={resolve.isPending}
+            onClick={() =>
+              resolve.mutate({
+                action: "confirm",
+                value: field?.suggestedValue ?? bucket ?? undefined,
+              })
+            }
+          >
+            <CheckCircle2 className="size-3.5" />
+            Confirm
+          </Button>
+        ) : null}
+        {pending ? (
+          <Button
+            size="small"
+            variant="transparent"
+            disabled={resolve.isPending}
+            onClick={() => resolve.mutate({ action: "defer" })}
+          >
+            <Clock className="size-3.5" />
+            Later
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** A broker contract note's header + traded securities — a first-class doc class. */
+function ContractNoteBlock({ note, prefs }: { note: ContractNoteRecord; prefs: FinancePrefs }) {
+  return (
+    <>
+      <Separator />
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <LineChart className="size-4 text-tertiary" />
+          <Text variant="small-strong" className="flex-1">
+            Contract note
+          </Text>
+          {note.netAmount != null ? (
+            <Text variant="small-strong" className="tabular-nums">
+              {formatInr(note.netAmount, prefs)}
+            </Text>
+          ) : null}
+        </div>
+        <div className="flex flex-col gap-0.5">
+          {note.broker ? (
+            <Text variant="small" color="secondary">
+              Broker: {note.broker}
+            </Text>
+          ) : null}
+          {note.client ? (
+            <Text variant="small" color="secondary">
+              Client: {note.client}
+            </Text>
+          ) : null}
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+            {note.tradeDate ? (
+              <Text variant="small" color="tertiary" className="tabular-nums">
+                Trade date: {formatDate(note.tradeDate, prefs)}
+              </Text>
+            ) : null}
+            {note.contractNoteNumber ? (
+              <Text variant="small" color="tertiary">
+                No. {note.contractNoteNumber}
+              </Text>
+            ) : null}
+          </div>
+        </div>
+        {note.trades.length > 0 ? (
+          <div className="flex flex-col gap-1 rounded-lg bg-well px-3 py-2">
+            {note.trades.map((t) => (
+              <div key={t.id} className="flex items-center gap-2">
+                <Badge color={t.side === "sell" ? "orange" : "green"}>
+                  {t.side === "sell" ? "Sell" : "Buy"}
+                </Badge>
+                <div className="flex flex-col min-w-0 flex-1">
+                  <Text variant="small" className="truncate" title={t.securityName}>
+                    {t.securityName}
+                  </Text>
+                  <Text variant="mini" color="tertiary" className="tabular-nums truncate">
+                    {t.quantity != null ? `${t.quantity} @ ${t.price ?? "—"}` : ""}
+                    {t.isin ? ` · ${t.isin}` : ""}
+                  </Text>
+                </div>
+                {t.netAmount != null ? (
+                  <Text variant="small-strong" className="tabular-nums shrink-0">
+                    {formatInr(t.netAmount, prefs)}
+                  </Text>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="flex items-center gap-1 text-tertiary">
+          <Info className="size-3 shrink-0" />
+          <Text variant="small" color="tertiary">
+            Recognized as a broker contract note — mapped to investment activity, not a generic
+            expense.
+          </Text>
+        </div>
+      </div>
+    </>
+  );
+}
+
+export function EvidenceCard({
+  detail,
+  onChanged,
+}: {
+  detail: DocumentDetail;
+  onChanged: () => void;
+}) {
   const [showIdentity, setShowIdentity] = useState(false);
   const queryClient = useQueryClient();
   const prefs = useFinancePrefs();
@@ -596,7 +903,8 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
   const confirmAll = useMutation({
     mutationFn: () => invoke<{ confirmed: number }>("reviews:confirmAll", detail.docId),
     onSuccess: (result) => {
-      if (result?.confirmed > 0) toast(`Confirmed ${result.confirmed} suggestion${result.confirmed === 1 ? "" : "s"}`);
+      if (result?.confirmed > 0)
+        toast(`Confirmed ${result.confirmed} suggestion${result.confirmed === 1 ? "" : "s"}`);
       void queryClient.invalidateQueries({ queryKey: ["documents"] });
       onChanged();
     },
@@ -615,6 +923,24 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
     <div className="flex flex-col gap-3">
       {/* Lane / triage context */}
       <LifecycleBanner state={detail.lifecycleState} reason={detail.triageReason} />
+
+      {/* Photo source — explains any lower confidence on a captured image */}
+      {detail.fileType === "image" ? (
+        <div className="flex items-center gap-1.5 self-start">
+          <Badge color="secondary" title="This document came from a photo / scanned image">
+            <Camera className="size-3" /> Photo
+          </Badge>
+          <Text variant="small" color="tertiary">
+            Read from a photo — figures may be less certain.
+          </Text>
+        </div>
+      ) : null}
+
+      {/* Financial impact — the plain-language "what this means", first */}
+      <ImpactBlock detail={detail} prefs={prefs} onChanged={onChanged} />
+
+      {/* Contract note (securities trades) */}
+      {detail.contractNote ? <ContractNoteBlock note={detail.contractNote} prefs={prefs} /> : null}
 
       {/* Summary — scan in seconds */}
       <div className="flex flex-col divide-y divide-separator">
@@ -650,7 +976,11 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
         </SummaryRow>
 
         <SummaryRow icon={<Calendar className="size-4" />} label="Document date">
-          <Text variant="small" color={detail.docDate ? "primary" : "tertiary"} className="tabular-nums">
+          <Text
+            variant="small"
+            color={detail.docDate ? "primary" : "tertiary"}
+            className="tabular-nums"
+          >
             {formatDate(detail.docDate, prefs)}
           </Text>
         </SummaryRow>
@@ -660,8 +990,14 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
           label="Financial year"
           emphasize={!detail.financialYear}
         >
-          <Text variant="small" color={detail.financialYear ? "primary" : "tertiary"} className="tabular-nums">
-            {detail.financialYear ? fyLabel(detail.financialYear) : "Not determined — needs a document date"}
+          <Text
+            variant="small"
+            color={detail.financialYear ? "primary" : "tertiary"}
+            className="tabular-nums"
+          >
+            {detail.financialYear
+              ? fyLabel(detail.financialYear)
+              : "Not determined — needs a document date"}
           </Text>
         </SummaryRow>
 
@@ -671,7 +1007,10 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
               {detail.category ?? "Uncategorized"}
             </Text>
             {detail.scope ? (
-              <Badge color={detail.scope === "business" ? "purple" : "secondary"} title={detail.scopeEvidence ?? undefined}>
+              <Badge
+                color={detail.scope === "business" ? "purple" : "secondary"}
+                title={detail.scopeEvidence ?? undefined}
+              >
                 {detail.scope === "business" ? "Business" : "Personal"}
               </Badge>
             ) : null}
@@ -684,10 +1023,14 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
             label="Currency"
             emphasize={cur.currencyStatus === "needs_review"}
           >
-            {cur.currencyStatus === "converted" && cur.foreignAmount != null && cur.foreignCurrency && cur.inrValue != null ? (
+            {cur.currencyStatus === "converted" &&
+            cur.foreignAmount != null &&
+            cur.foreignCurrency &&
+            cur.inrValue != null ? (
               <div className="flex flex-col gap-0.5">
                 <Text variant="small" className="tabular-nums">
-                  {formatForeign(cur.foreignAmount, cur.foreignCurrency, prefs)} → {formatInr(cur.inrValue, prefs)}
+                  {formatForeign(cur.foreignAmount, cur.foreignCurrency, prefs)} →{" "}
+                  {formatInr(cur.inrValue, prefs)}
                 </Text>
                 {cur.rateUsed != null && cur.rateDate ? (
                   <Text variant="small" color="tertiary" className="tabular-nums">
@@ -709,7 +1052,7 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
       <AccountingBlock detail={detail} prefs={prefs} onChanged={onChanged} />
 
       {/* Identity reasoning */}
-      {(p.aliases.length > 0 || p.evidence.length > 0) ? (
+      {p.aliases.length > 0 || p.evidence.length > 0 ? (
         <>
           <Separator />
           <div className="flex flex-col gap-1.5">
@@ -718,7 +1061,9 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
               onClick={() => setShowIdentity((v) => !v)}
               className="flex items-center gap-1 self-start text-secondary hover:text-primary transition-colors"
             >
-              <ChevronRight className={cn("size-3.5 transition-transform", showIdentity && "rotate-90")} />
+              <ChevronRight
+                className={cn("size-3.5 transition-transform", showIdentity && "rotate-90")}
+              />
               <Text variant="small-strong" color="secondary">
                 Identity reasoning
               </Text>
@@ -755,7 +1100,12 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
           Fields & evidence
         </Text>
         {pendingCount > 0 ? (
-          <Button size="small" variant="transparent" onClick={() => confirmAll.mutate()} disabled={confirmAll.isPending}>
+          <Button
+            size="small"
+            variant="transparent"
+            onClick={() => confirmAll.mutate()}
+            disabled={confirmAll.isPending}
+          >
             <CheckCircle2 className="size-3.5" />
             Confirm all suggestions
           </Button>
@@ -775,8 +1125,10 @@ export function EvidenceCard({ detail, onChanged }: { detail: DocumentDetail; on
           </Text>
         ) : (
           detail.fields
-            .filter((f) => f.field !== "accounting")
-            .map((f) => <FieldRow key={f.field} docId={detail.docId} field={f} onChanged={onChanged} />)
+            .filter((f) => f.field !== "accounting" && f.field !== "impact")
+            .map((f) => (
+              <FieldRow key={f.field} docId={detail.docId} field={f} onChanged={onChanged} />
+            ))
         )}
       </div>
 

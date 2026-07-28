@@ -1,4 +1,10 @@
-import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { AlertCircle, ArrowDownToLine, Check, Loader2, Vault } from "lucide-react";
 import { cn } from "@glaze/core/utils";
 
@@ -58,7 +64,12 @@ export function HomeView() {
   }, [trainingPending]);
 
   // Custom drag: track the press so we can tell a click from a window drag.
-  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+  } | null>(null);
   const rafRef = useRef<number | null>(null);
   const pendingRef = useRef<{ dx: number; dy: number } | null>(null);
 
@@ -110,19 +121,24 @@ export function HomeView() {
   // the final result. Status transitions are gated so the "received" flash is
   // always seen first.
   useEffect(() => {
-    const onProgress = window.glazeAPI.glaze.ipc.on("ingest:progress", (_event, payload: unknown) => {
-      const p = payload as IngestProgress | undefined;
-      if (!p) return;
-      remainingRef.current = p.remaining;
-      setProgress({ done: p.done, total: p.total });
-      // If work remains and the received flash is over, keep the orb spinning.
-      if (p.remaining > 0 && statusRef.current !== "received") setStatus("processing");
-    });
+    const onProgress = window.glazeAPI.glaze.ipc.on(
+      "ingest:progress",
+      (_event, payload: unknown) => {
+        const p = payload as IngestProgress | undefined;
+        if (!p) return;
+        remainingRef.current = p.remaining;
+        setProgress({ done: p.done, total: p.total });
+        // If work remains and the received flash is over, keep the orb spinning.
+        if (p.remaining > 0 && statusRef.current !== "received") setStatus("processing");
+      },
+    );
     const onDone = window.glazeAPI.glaze.ipc.on("ingest:done", (_event, payload: unknown) => {
       const results = (payload as { results?: IngestResult[] } | undefined)?.results ?? [];
       remainingRef.current = 0;
       setProgress({ done: 0, total: 0 });
-      const hadHardFailure = results.some((r) => r.status === "error" || r.status === "unsupported");
+      const hadHardFailure = results.some(
+        (r) => r.status === "error" || r.status === "unsupported",
+      );
       const anyGood = results.some((r) => r.status === "ingested" || r.status === "duplicate");
       setStatus(anyGood && !hadHardFailure ? "success" : hadHardFailure ? "error" : "success");
     });
@@ -182,10 +198,13 @@ export function HomeView() {
         if (active) setTrainingPending(count);
       })
       .catch(() => {});
-    const unsubscribe = window.glazeAPI.glaze.ipc.on("training:changed", (_event, payload: unknown) => {
-      const count = (payload as { pendingCount?: number } | undefined)?.pendingCount;
-      if (typeof count === "number") setTrainingPending(count);
-    });
+    const unsubscribe = window.glazeAPI.glaze.ipc.on(
+      "training:changed",
+      (_event, payload: unknown) => {
+        const count = (payload as { pendingCount?: number } | undefined)?.pendingCount;
+        if (typeof count === "number") setTrainingPending(count);
+      },
+    );
     return () => {
       active = false;
       unsubscribe();
@@ -201,7 +220,12 @@ export function HomeView() {
   const onPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return; // left button only
     e.currentTarget.setPointerCapture(e.pointerId);
-    dragRef.current = { pointerId: e.pointerId, startX: e.screenX, startY: e.screenY, moved: false };
+    dragRef.current = {
+      pointerId: e.pointerId,
+      startX: e.screenX,
+      startY: e.screenY,
+      moved: false,
+    };
     window.glazeAPI.glaze.ipc.send("orb:dragStart");
   }, []);
 
@@ -227,7 +251,8 @@ export function HomeView() {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
     }
-    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId))
+      e.currentTarget.releasePointerCapture(e.pointerId);
     window.glazeAPI.glaze.ipc.send("orb:dragEnd");
     // A press with no meaningful travel, while idle, opens a popup: the pending
     // training questions take priority over the financial snapshot.
@@ -272,7 +297,10 @@ export function HomeView() {
             trainingGlow && "orb-training ring-white/60 dark:ring-white/70",
           )}
         >
-          <Icon className={cn("size-7", status === "processing" && "animate-spin")} strokeWidth={2} />
+          <Icon
+            className={cn("size-7", status === "processing" && "animate-spin")}
+            strokeWidth={2}
+          />
         </div>
 
         {/* Batch progress: how many files are left in a multi-file drop. */}

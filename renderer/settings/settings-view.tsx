@@ -52,10 +52,12 @@ import {
   Info,
   Pencil,
   Plus,
+  Repeat,
   RotateCcw,
   Scissors,
   Star,
   Trash2,
+  TrendingUp,
   Users,
   X,
 } from "lucide-react";
@@ -63,10 +65,13 @@ import {
   financialYearKey,
   formatDatePref,
   fyLabel,
+  IMPACT_BUCKETS,
+  IMPACT_LABEL,
   INDIA_DEFAULTS,
   MONTH_NAMES,
   type DateFormat,
   type FinancePrefs,
+  type ImpactBucket,
 } from "../finance";
 
 interface DocumentRecord {
@@ -142,7 +147,13 @@ function AppLogo() {
 
 // ── Training Mode ─────────────────────────────────────────────────────────
 
-type RuleType = "vendor_category" | "person_variant" | "keyword_doctype" | "source_scope" | "accounting_treatment";
+type RuleType =
+  | "vendor_category"
+  | "person_variant"
+  | "keyword_doctype"
+  | "source_scope"
+  | "accounting_treatment"
+  | "impact_bucket";
 
 interface RuleEvidence {
   filename: string;
@@ -175,6 +186,7 @@ const RULE_TYPE_LABEL: Record<RuleType, string> = {
   keyword_doctype: "Keyword → Doc type",
   source_scope: "Account → Business / Personal",
   accounting_treatment: "Vendor → Accounting treatment",
+  impact_bucket: "Vendor → Financial impact",
 };
 const RULE_TYPES = Object.keys(RULE_TYPE_LABEL) as RuleType[];
 
@@ -235,7 +247,13 @@ function RuleRow({
             <Check className="size-3.5" />
           </Button>
         ) : (
-          <Button size="small" variant="transparent" iconOnly onClick={() => setEditing(true)} title="Edit value">
+          <Button
+            size="small"
+            variant="transparent"
+            iconOnly
+            onClick={() => setEditing(true)}
+            title="Edit value"
+          >
             <Pencil className="size-3.5" />
           </Button>
         )}
@@ -256,7 +274,11 @@ function RuleRow({
               ? "bg-accent text-accent-contrast border-transparent"
               : "bg-control-subtle text-secondary border-panel hover:bg-control",
           )}
-          title={rule.autoApply ? "Applied automatically — click to require asking" : "Click to auto-apply"}
+          title={
+            rule.autoApply
+              ? "Applied automatically — click to require asking"
+              : "Click to auto-apply"
+          }
         >
           {rule.autoApply ? "Auto-applies" : "Ask first"}
         </button>
@@ -269,7 +291,9 @@ function RuleRow({
             onClick={() => setShowEvidence((v) => !v)}
             className="flex items-center gap-0.5 text-secondary hover:text-primary transition-colors"
           >
-            <ChevronRight className={cn("size-3.5 transition-transform", showEvidence && "rotate-90")} />
+            <ChevronRight
+              className={cn("size-3.5 transition-transform", showEvidence && "rotate-90")}
+            />
             <Text variant="small" color="secondary">
               {evidenceFiles.length} source{evidenceFiles.length === 1 ? "" : "s"}
             </Text>
@@ -317,7 +341,12 @@ function TrainingSection() {
   });
   const addRule = useMutation({
     mutationFn: (vars: { ruleType: RuleType; matchKey: string; value: string }) =>
-      window.glazeAPI.glaze.ipc.invoke("training:addRule", vars.ruleType, vars.matchKey, vars.value),
+      window.glazeAPI.glaze.ipc.invoke(
+        "training:addRule",
+        vars.ruleType,
+        vars.matchKey,
+        vars.value,
+      ),
     onSuccess: () => {
       setAddKey("");
       setAddValue("");
@@ -378,9 +407,10 @@ function TrainingSection() {
         </div>
       </div>
       <Text variant="small" color="tertiary">
-        When on, the orb asks a few quick questions about each new document and learns reusable rules. Confirmed
-        rules are applied automatically and won't be asked again. A readable summary is saved to RULES.md in your
-        vault. You can turn Training Mode off any time once the app has learned enough about your financial world.
+        When on, the orb asks a few quick questions about each new document and learns reusable
+        rules. Confirmed rules are applied automatically and won't be asked again. A readable
+        summary is saved to RULES.md in your vault. You can turn Training Mode off any time once the
+        app has learned enough about your financial world.
       </Text>
 
       {/* First-run note: explain why it's on by default, without feeling sneaky. */}
@@ -388,8 +418,8 @@ function TrainingSection() {
         <div className="flex items-start gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-2">
           <GraduationCap className="size-4 text-accent shrink-0 mt-0.5" />
           <Text variant="small" color="secondary">
-            Training Mode is on to help Quick2Afvault learn your financial world faster from your first documents.
-            Leave it on for a while, then turn it off here whenever you'd like.
+            Training Mode is on to help Quick2Afvault learn your financial world faster from your
+            first documents. Leave it on for a while, then turn it off here whenever you'd like.
           </Text>
         </div>
       ) : null}
@@ -484,7 +514,12 @@ function TrainingSection() {
             <Text variant="small" color="secondary" className="flex-1">
               Delete all learned rules and review history?
             </Text>
-            <Button size="small" variant="accent" onClick={() => reset.mutate()} disabled={reset.isPending}>
+            <Button
+              size="small"
+              variant="accent"
+              onClick={() => reset.mutate()}
+              disabled={reset.isPending}
+            >
               Confirm reset
             </Button>
             <Button size="small" variant="transparent" onClick={() => setConfirmReset(false)}>
@@ -613,7 +648,9 @@ function PersonCard({
     <div className="flex flex-col gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-2.5">
       {/* Header: name + primary badges */}
       <div className="flex items-center gap-2">
-        {person.isSelf ? <Star className="size-3.5 text-accent shrink-0" fill="currentColor" /> : null}
+        {person.isSelf ? (
+          <Star className="size-3.5 text-accent shrink-0" fill="currentColor" />
+        ) : null}
         {renaming ? (
           <>
             <Input
@@ -642,7 +679,13 @@ function PersonCard({
             <Badge color="secondary" className="tabular-nums shrink-0">
               {person.linkedDocumentCount} doc{person.linkedDocumentCount === 1 ? "" : "s"}
             </Badge>
-            <Button size="small" variant="transparent" iconOnly onClick={() => setRenaming(true)} title="Rename">
+            <Button
+              size="small"
+              variant="transparent"
+              iconOnly
+              onClick={() => setRenaming(true)}
+              title="Rename"
+            >
               <Pencil className="size-3.5" />
             </Button>
           </>
@@ -745,7 +788,14 @@ function PersonCard({
             placeholder="Add a name variant"
             className="flex-1"
           />
-          <Button size="small" variant="transparent" iconOnly onClick={commitAlias} disabled={!newAlias.trim()} title="Add variant">
+          <Button
+            size="small"
+            variant="transparent"
+            iconOnly
+            onClick={commitAlias}
+            disabled={!newAlias.trim()}
+            title="Add variant"
+          >
             <Plus className="size-3.5" />
           </Button>
         </div>
@@ -773,7 +823,12 @@ function PersonCard({
         ) : null}
         <div className="ml-auto flex items-center gap-1.5">
           {!person.isSelf ? (
-            <Button size="small" variant="transparent" onClick={onMarkSelf} title="Mark this person as yourself">
+            <Button
+              size="small"
+              variant="transparent"
+              onClick={onMarkSelf}
+              title="Mark this person as yourself"
+            >
               <Star className="size-3.5" />
               Self
             </Button>
@@ -797,12 +852,23 @@ function PersonCard({
               <Button size="small" variant="accent" onClick={onDelete}>
                 Delete
               </Button>
-              <Button size="small" variant="transparent" iconOnly onClick={() => setConfirmDelete(false)}>
+              <Button
+                size="small"
+                variant="transparent"
+                iconOnly
+                onClick={() => setConfirmDelete(false)}
+              >
                 <X className="size-3.5" />
               </Button>
             </>
           ) : (
-            <Button size="small" variant="transparent" iconOnly onClick={() => setConfirmDelete(true)} title="Delete person">
+            <Button
+              size="small"
+              variant="transparent"
+              iconOnly
+              onClick={() => setConfirmDelete(true)}
+              title="Delete person"
+            >
               <Trash2 className="size-3.5" />
             </Button>
           )}
@@ -834,12 +900,14 @@ function PeopleSection() {
   };
 
   const rename = useMutation({
-    mutationFn: (v: { id: number; name: string }) => window.glazeAPI.glaze.ipc.invoke("people:rename", v.id, v.name),
+    mutationFn: (v: { id: number; name: string }) =>
+      window.glazeAPI.glaze.ipc.invoke("people:rename", v.id, v.name),
     onSuccess: invalidate,
     onError: (e) => toast.error(`Couldn't rename: ${e}`),
   });
   const setRoles = useMutation({
-    mutationFn: (v: { id: number; roles: PersonRole[] }) => window.glazeAPI.glaze.ipc.invoke("people:setRoles", v.id, v.roles),
+    mutationFn: (v: { id: number; roles: PersonRole[] }) =>
+      window.glazeAPI.glaze.ipc.invoke("people:setRoles", v.id, v.roles),
     onSuccess: invalidate,
     onError: (e) => toast.error(`Couldn't set roles: ${e}`),
   });
@@ -849,22 +917,26 @@ function PeopleSection() {
     onError: (e) => toast.error(`Couldn't mark Self: ${e}`),
   });
   const addAlias = useMutation({
-    mutationFn: (v: { id: number; alias: string }) => window.glazeAPI.glaze.ipc.invoke("people:addAlias", v.id, v.alias),
+    mutationFn: (v: { id: number; alias: string }) =>
+      window.glazeAPI.glaze.ipc.invoke("people:addAlias", v.id, v.alias),
     onSuccess: invalidate,
     onError: (e) => toast.error(`Couldn't add variant: ${e}`),
   });
   const removeAlias = useMutation({
-    mutationFn: (aliasId: number) => window.glazeAPI.glaze.ipc.invoke("people:removeAlias", aliasId),
+    mutationFn: (aliasId: number) =>
+      window.glazeAPI.glaze.ipc.invoke("people:removeAlias", aliasId),
     onSuccess: invalidate,
     onError: (e) => toast.error(`Couldn't remove variant: ${e}`),
   });
   const splitAlias = useMutation({
-    mutationFn: (v: { id: number; aliasId: number }) => window.glazeAPI.glaze.ipc.invoke("people:split", v.id, [v.aliasId]),
+    mutationFn: (v: { id: number; aliasId: number }) =>
+      window.glazeAPI.glaze.ipc.invoke("people:split", v.id, [v.aliasId]),
     onSuccess: invalidate,
     onError: (e) => toast.error(`Couldn't split: ${e}`),
   });
   const merge = useMutation({
-    mutationFn: (v: { fromId: number; toId: number }) => window.glazeAPI.glaze.ipc.invoke("people:merge", v.fromId, v.toId),
+    mutationFn: (v: { fromId: number; toId: number }) =>
+      window.glazeAPI.glaze.ipc.invoke("people:merge", v.fromId, v.toId),
     onSuccess: invalidate,
     onError: (e) => toast.error(`Couldn't merge: ${e}`),
   });
@@ -885,13 +957,14 @@ function PeopleSection() {
         </Text>
       </div>
       <Text variant="small" color="tertiary">
-        Canonical people the app has discovered. Merge duplicates, split a mistaken merge, add name variants, assign
-        roles, and mark yourself as Self — used to resolve future documents. Changes apply to the Financial Snapshot
-        instantly.
+        Canonical people the app has discovered. Merge duplicates, split a mistaken merge, add name
+        variants, assign roles, and mark yourself as Self — used to resolve future documents.
+        Changes apply to the Financial Snapshot instantly.
       </Text>
       {people.length === 0 ? (
         <Text variant="small" color="secondary">
-          No people identified yet. Open the Financial Snapshot from the orb and tap Refresh to analyze your documents.
+          No people identified yet. Open the Financial Snapshot from the orb and tap Refresh to
+          analyze your documents.
         </Text>
       ) : (
         <div className="flex flex-col gap-1.5">
@@ -918,7 +991,15 @@ function PeopleSection() {
 
 // ── Review Queue ────────────────────────────────────────────────────────────
 
-type ReviewField = "person" | "doc_type" | "vendor" | "doc_date" | "fin_year" | "amount" | "fx" | "accounting";
+type ReviewField =
+  | "person"
+  | "doc_type"
+  | "vendor"
+  | "doc_date"
+  | "fin_year"
+  | "amount"
+  | "fx"
+  | "accounting";
 type ReviewStatus = "low_confidence" | "conflict" | "missing" | "confirmed" | "corrected";
 
 const TREATMENT_LABEL: Record<string, string> = {
@@ -995,7 +1076,10 @@ const FIELD_LABEL: Record<ReviewField, string> = {
   accounting: "Accounting hint",
 };
 
-const STATUS_META: Record<ReviewStatus, { label: string; color: "yellow" | "red" | "orange" | "green" | "blue" }> = {
+const STATUS_META: Record<
+  ReviewStatus,
+  { label: string; color: "yellow" | "red" | "orange" | "green" | "blue" }
+> = {
   low_confidence: { label: "Low confidence", color: "yellow" },
   conflict: { label: "Conflict", color: "red" },
   missing: { label: "Missing", color: "orange" },
@@ -1054,7 +1138,8 @@ function FieldReviewRow({
             Confidence
           </Text>
           <Text variant="small" color="secondary" className="tabular-nums">
-            {Math.round(review.confidence * 100)}% · {REVIEW_SOURCE_LABEL[review.source] ?? review.source}
+            {Math.round(review.confidence * 100)}% ·{" "}
+            {REVIEW_SOURCE_LABEL[review.source] ?? review.source}
           </Text>
         </div>
         {review.reason ? (
@@ -1086,7 +1171,9 @@ function FieldReviewRow({
             size="small"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={review.field === "person" ? "Correct name, or “Unidentified”" : "Correct value"}
+            placeholder={
+              review.field === "person" ? "Correct name, or “Unidentified”" : "Correct value"
+            }
             onKeyDown={(e) => {
               if (e.key === "Enter") commit();
               if (e.key === "Escape") setCorrecting(false);
@@ -1155,8 +1242,18 @@ function DocumentReviewCard({ docId }: { docId: number }) {
   };
 
   const resolve = useMutation({
-    mutationFn: (vars: { field: ReviewField; action: "confirm" | "correct" | "defer"; value?: string }) =>
-      window.glazeAPI.glaze.ipc.invoke<ResolveResult>("reviews:resolve", docId, vars.field, vars.action, vars.value),
+    mutationFn: (vars: {
+      field: ReviewField;
+      action: "confirm" | "correct" | "defer";
+      value?: string;
+    }) =>
+      window.glazeAPI.glaze.ipc.invoke<ResolveResult>(
+        "reviews:resolve",
+        docId,
+        vars.field,
+        vars.action,
+        vars.value,
+      ),
     onSuccess: (result) => {
       if (result?.message) toast(result.message);
       invalidate();
@@ -1165,9 +1262,11 @@ function DocumentReviewCard({ docId }: { docId: number }) {
   });
 
   const confirmAll = useMutation({
-    mutationFn: () => window.glazeAPI.glaze.ipc.invoke<{ confirmed: number }>("reviews:confirmAll", docId),
+    mutationFn: () =>
+      window.glazeAPI.glaze.ipc.invoke<{ confirmed: number }>("reviews:confirmAll", docId),
     onSuccess: (result) => {
-      if (result?.confirmed) toast(`Confirmed ${result.confirmed} field${result.confirmed === 1 ? "" : "s"}`);
+      if (result?.confirmed)
+        toast(`Confirmed ${result.confirmed} field${result.confirmed === 1 ? "" : "s"}`);
       invalidate();
     },
     onError: (error) => toast.error(`Couldn't confirm all: ${error}`),
@@ -1184,12 +1283,19 @@ function DocumentReviewCard({ docId }: { docId: number }) {
     );
   }
 
-  const pendingWithSuggestion = detail.fields.some((f) => PENDING.has(f.status) && f.suggestedValue);
+  const pendingWithSuggestion = detail.fields.some(
+    (f) => PENDING.has(f.status) && f.suggestedValue,
+  );
 
   return (
     <div className="flex flex-col gap-2 border-t border-panel bg-panel/40 px-3 py-3">
       {pendingWithSuggestion ? (
-        <Button size="small" variant="accent" className="self-start" onClick={() => confirmAll.mutate()}>
+        <Button
+          size="small"
+          variant="accent"
+          className="self-start"
+          onClick={() => confirmAll.mutate()}
+        >
           <CheckCheck className="size-3.5" />
           Confirm all suggestions
         </Button>
@@ -1234,7 +1340,9 @@ function DocumentReviewCard({ docId }: { docId: number }) {
             onClick={() => setShowAudit((v) => !v)}
             className="flex items-center gap-0.5 text-secondary hover:text-primary transition-colors self-start"
           >
-            <ChevronRight className={cn("size-3.5 transition-transform", showAudit && "rotate-90")} />
+            <ChevronRight
+              className={cn("size-3.5 transition-transform", showAudit && "rotate-90")}
+            />
             <Text variant="small" color="secondary">
               Audit trail ({detail.audit.length})
             </Text>
@@ -1289,10 +1397,17 @@ function DuplicatesReviewBlock() {
       </Text>
       <div className="flex flex-col gap-2">
         {events.map((e) => (
-          <div key={e.id} className="flex flex-col gap-2 rounded-lg border border-panel px-3 py-2.5">
+          <div
+            key={e.id}
+            className="flex flex-col gap-2 rounded-lg border border-panel px-3 py-2.5"
+          >
             <div className="flex items-center gap-2">
               <Copy className="size-4 shrink-0 text-secondary" />
-              <Text variant="small" className="flex-1 min-w-0 truncate font-medium" title={e.filename}>
+              <Text
+                variant="small"
+                className="flex-1 min-w-0 truncate font-medium"
+                title={e.filename}
+              >
                 {e.filename}
               </Text>
               {e.status === "acknowledged" ? (
@@ -1309,18 +1424,30 @@ function DuplicatesReviewBlock() {
                 <Button
                   size="small"
                   variant="transparent"
-                  onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments", e.duplicateOfDocId)}
+                  onClick={() =>
+                    window.glazeAPI.glaze.ipc.invoke("window:openDocuments", e.duplicateOfDocId)
+                  }
                 >
                   <ExternalLink className="size-3.5" />
                   Inspect original
                 </Button>
               ) : null}
               {e.status === "new" ? (
-                <Button size="small" variant="transparent" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: e.id, action: "acknowledge" })}>
+                <Button
+                  size="small"
+                  variant="transparent"
+                  disabled={resolve.isPending}
+                  onClick={() => resolve.mutate({ id: e.id, action: "acknowledge" })}
+                >
                   Keep ignored
                 </Button>
               ) : null}
-              <Button size="small" variant="transparent" disabled={resolve.isPending} onClick={() => resolve.mutate({ id: e.id, action: "delete" })}>
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={resolve.isPending}
+                onClick={() => resolve.mutate({ id: e.id, action: "delete" })}
+              >
                 <Trash2 className="size-3.5" />
                 Delete entry
               </Button>
@@ -1380,7 +1507,11 @@ function ReviewQueueSection() {
                     >
                       <ClipboardList className="size-4 text-secondary shrink-0" />
                       <div className="flex flex-col min-w-0 flex-1 gap-1">
-                        <Text variant="small" className="font-medium truncate" title={item.filename}>
+                        <Text
+                          variant="small"
+                          className="font-medium truncate"
+                          title={item.filename}
+                        >
                           {item.filename}
                         </Text>
                         <div className="flex flex-wrap gap-1">
@@ -1391,11 +1522,18 @@ function ReviewQueueSection() {
                           ))}
                         </div>
                       </div>
-                      <ChevronRight className={cn("size-4 text-tertiary shrink-0 transition-transform", open && "rotate-90")} />
+                      <ChevronRight
+                        className={cn(
+                          "size-4 text-tertiary shrink-0 transition-transform",
+                          open && "rotate-90",
+                        )}
+                      />
                     </button>
                     <button
                       type="button"
-                      onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments", item.docId)}
+                      onClick={() =>
+                        window.glazeAPI.glaze.ipc.invoke("window:openDocuments", item.docId)
+                      }
                       title="Open in Document Browser"
                       className="flex items-center px-3 border-l border-panel text-tertiary hover:text-primary hover:bg-control-subtle transition-colors"
                     >
@@ -1417,6 +1555,418 @@ function ReviewQueueSection() {
 
 const DATE_FORMATS: DateFormat[] = ["DD-MM-YYYY", "DD MMM YYYY", "MM/DD/YYYY", "YYYY-MM-DD"];
 
+// ── Impact mapping preferences ──────────────────────────────────────────────
+
+interface ImpactPrefs {
+  softwareInvoice: ImpactBucket;
+  grocery: ImpactBucket;
+  marketplace: ImpactBucket;
+}
+
+const SOFTWARE_CHOICES: ImpactBucket[] = [
+  "business_expense",
+  "software_utility_expense",
+  "personal_expense",
+];
+const GROCERY_CHOICES: ImpactBucket[] = [
+  "household_expense",
+  "shared_family_expense",
+  "personal_expense",
+];
+const MARKETPLACE_CHOICES: ImpactBucket[] = [
+  "shopping_discretionary",
+  "household_expense",
+  "business_expense",
+];
+
+function ImpactPreferencesSection() {
+  const queryClient = useQueryClient();
+  const prefsQuery = useQuery({
+    queryKey: ["impactPrefs"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<ImpactPrefs>("impactPrefs:get"),
+  });
+  const prefs = prefsQuery.data;
+
+  const update = useMutation({
+    mutationFn: (patch: Partial<ImpactPrefs>) =>
+      window.glazeAPI.glaze.ipc.invoke<ImpactPrefs>("impactPrefs:set", patch),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["impactPrefs"], next);
+      queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["documents"] });
+    },
+    onError: (error) => toast.error(`Couldn't save preferences: ${error}`),
+  });
+
+  if (!prefs) return null;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <TrendingUp className="size-4 text-secondary" />
+        <Text variant="strong" className="flex-1">
+          Impact mapping
+        </Text>
+      </div>
+      <Text variant="small" color="tertiary">
+        Some documents can map to different financial buckets depending on your household and
+        working life. These preferences steer how the app classifies them.
+      </Text>
+
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Software / AI provider invoices
+          </Text>
+          <Select
+            value={prefs.softwareInvoice}
+            onValueChange={(v) => update.mutate({ softwareInvoice: v as ImpactBucket })}
+          >
+            <SelectTrigger size="small" variant="filled" className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {SOFTWARE_CHOICES.map((b) => (
+                <SelectItem key={b} value={b}>
+                  {IMPACT_LABEL[b]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Grocery / supermarket bills
+          </Text>
+          <Select
+            value={prefs.grocery}
+            onValueChange={(v) => update.mutate({ grocery: v as ImpactBucket })}
+          >
+            <SelectTrigger size="small" variant="filled" className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {GROCERY_CHOICES.map((b) => (
+                <SelectItem key={b} value={b}>
+                  {IMPACT_LABEL[b]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Text variant="small" color="secondary">
+            Marketplace purchases (Amazon, Flipkart, …)
+          </Text>
+          <Select
+            value={prefs.marketplace}
+            onValueChange={(v) => update.mutate({ marketplace: v as ImpactBucket })}
+          >
+            <SelectTrigger size="small" variant="filled" className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MARKETPLACE_CHOICES.map((b) => (
+                <SelectItem key={b} value={b}>
+                  {IMPACT_LABEL[b]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ── Manual recurring entries ────────────────────────────────────────────────
+
+interface RecurringEntry {
+  id: number;
+  name: string;
+  amount: number;
+  currency: string;
+  frequency: string;
+  startDate: string | null;
+  endDate: string | null;
+  person: string | null;
+  impactBucket: ImpactBucket;
+  scope: string;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+const FREQUENCY_OPTIONS = ["monthly", "quarterly", "annually", "weekly", "custom"] as const;
+const SCOPE_OPTIONS = ["business", "personal", "shared"] as const;
+const SCOPE_LABEL: Record<string, string> = {
+  business: "Business",
+  personal: "Personal",
+  shared: "Shared",
+};
+const FREQUENCY_LABEL: Record<string, string> = {
+  monthly: "Monthly",
+  quarterly: "Quarterly",
+  annually: "Annually",
+  weekly: "Weekly",
+  custom: "Custom",
+};
+
+function RecurringEntriesSection() {
+  const queryClient = useQueryClient();
+  const entriesQuery = useQuery({
+    queryKey: ["recurring"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<RecurringEntry[]>("recurring:list"),
+  });
+  const entries = entriesQuery.data ?? [];
+
+  const addMutation = useMutation({
+    mutationFn: (input: unknown) => window.glazeAPI.glaze.ipc.invoke("recurring:add", input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["recurring"] });
+      queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    },
+    onError: (error) => toast.error(`Couldn't add entry: ${error}`),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => window.glazeAPI.glaze.ipc.invoke("recurring:delete", id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["recurring"] });
+      queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    },
+    onError: (error) => toast.error(`Couldn't delete entry: ${error}`),
+  });
+
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({
+    name: "",
+    amount: "",
+    currency: "INR",
+    frequency: "monthly" as (typeof FREQUENCY_OPTIONS)[number],
+    startDate: "",
+    endDate: "",
+    person: "",
+    impactBucket: "household_expense" as ImpactBucket,
+    scope: "personal" as (typeof SCOPE_OPTIONS)[number],
+    notes: "",
+  });
+
+  const resetDraft = () =>
+    setDraft({
+      name: "",
+      amount: "",
+      currency: "INR",
+      frequency: "monthly",
+      startDate: "",
+      endDate: "",
+      person: "",
+      impactBucket: "household_expense",
+      scope: "personal",
+      notes: "",
+    });
+
+  const commitAdd = () => {
+    if (!draft.name.trim() || !draft.amount) return;
+    addMutation.mutate({
+      name: draft.name.trim(),
+      amount: Number(draft.amount),
+      currency: draft.currency.trim().toUpperCase() || "INR",
+      frequency: draft.frequency,
+      startDate: draft.startDate || null,
+      endDate: draft.endDate || null,
+      person: draft.person.trim() || null,
+      impactBucket: draft.impactBucket,
+      scope: draft.scope,
+      notes: draft.notes.trim() || null,
+    });
+    setAdding(false);
+    resetDraft();
+  };
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Repeat className="size-4 text-secondary" />
+        <Text variant="strong" className="flex-1">
+          Recurring entries
+        </Text>
+        <Button size="small" variant="transparent" onClick={() => setAdding(!adding)}>
+          <Plus className="size-3.5" />
+          {adding ? "Cancel" : "Add"}
+        </Button>
+      </div>
+      <Text variant="small" color="tertiary">
+        Income and expenses that don't always arrive as documents (salary, rent, SIPs, school fees,
+        subscriptions, EMIs). These show up in your financial picture alongside document-derived
+        events, clearly marked as manual.
+      </Text>
+
+      {adding ? (
+        <div className="rounded-lg border border-panel bg-control-subtle p-3 flex flex-col gap-2.5">
+          <Input
+            size="small"
+            placeholder="Name (e.g. Salary, Rent)"
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          />
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Input
+              size="small"
+              type="number"
+              placeholder="Amount"
+              value={draft.amount}
+              onChange={(e) => setDraft({ ...draft, amount: e.target.value })}
+              className="w-24"
+            />
+            <Input
+              size="small"
+              placeholder="Currency"
+              value={draft.currency}
+              onChange={(e) => setDraft({ ...draft, currency: e.target.value })}
+              className="w-20"
+            />
+            <Select
+              value={draft.frequency}
+              onValueChange={(v) =>
+                setDraft({ ...draft, frequency: v as (typeof FREQUENCY_OPTIONS)[number] })
+              }
+            >
+              <SelectTrigger size="small" variant="filled" className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FREQUENCY_OPTIONS.map((f) => (
+                  <SelectItem key={f} value={f}>
+                    {FREQUENCY_LABEL[f]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Input
+              size="small"
+              type="date"
+              placeholder="Start date"
+              value={draft.startDate}
+              onChange={(e) => setDraft({ ...draft, startDate: e.target.value })}
+              className="w-40"
+            />
+            <Input
+              size="small"
+              type="date"
+              placeholder="End date (optional)"
+              value={draft.endDate}
+              onChange={(e) => setDraft({ ...draft, endDate: e.target.value })}
+              className="w-40"
+            />
+          </div>
+          <Input
+            size="small"
+            placeholder="Person (optional)"
+            value={draft.person}
+            onChange={(e) => setDraft({ ...draft, person: e.target.value })}
+          />
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Select
+              value={draft.impactBucket}
+              onValueChange={(v) => setDraft({ ...draft, impactBucket: v as ImpactBucket })}
+            >
+              <SelectTrigger size="small" variant="filled" className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {IMPACT_BUCKETS.map((b) => (
+                  <SelectItem key={b} value={b}>
+                    {IMPACT_LABEL[b]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={draft.scope}
+              onValueChange={(v) =>
+                setDraft({ ...draft, scope: v as (typeof SCOPE_OPTIONS)[number] })
+              }
+            >
+              <SelectTrigger size="small" variant="filled" className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {SCOPE_OPTIONS.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {SCOPE_LABEL[s]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Input
+            size="small"
+            placeholder="Notes (optional)"
+            value={draft.notes}
+            onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
+          />
+          <div className="flex gap-1.5">
+            <Button size="small" variant="accent" onClick={commitAdd}>
+              Save
+            </Button>
+            <Button
+              size="small"
+              variant="transparent"
+              onClick={() => {
+                setAdding(false);
+                resetDraft();
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {entries.length > 0 ? (
+        <div className="flex flex-col gap-1.5">
+          {entries.map((e) => (
+            <div
+              key={e.id}
+              className="flex items-center gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-2.5"
+            >
+              <div className="flex flex-col min-w-0 flex-1">
+                <Text variant="small-strong" className="truncate" title={e.name}>
+                  {e.name}
+                </Text>
+                <Text variant="small" color="tertiary" className="truncate">
+                  {e.amount} {e.currency} · {FREQUENCY_LABEL[e.frequency] ?? e.frequency} ·{" "}
+                  {IMPACT_LABEL[e.impactBucket]}
+                  {e.person ? ` · ${e.person}` : ""}
+                </Text>
+              </div>
+              <Button
+                size="small"
+                variant="transparent"
+                disabled={deleteMutation.isPending}
+                onClick={() => deleteMutation.mutate(e.id)}
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        !adding && (
+          <Text variant="small" color="secondary">
+            No recurring entries yet. Add salary, rent, SIPs, subscriptions, and other regular items
+            that don't always arrive as documents.
+          </Text>
+        )
+      )}
+    </section>
+  );
+}
+
 /** Editable finance / locale preferences (India defaults on first run). */
 function FinancePreferencesSection() {
   const queryClient = useQueryClient();
@@ -1427,7 +1977,8 @@ function FinancePreferencesSection() {
   const prefs = prefsQuery.data ?? INDIA_DEFAULTS;
 
   const update = useMutation({
-    mutationFn: (patch: Partial<FinancePrefs>) => window.glazeAPI.glaze.ipc.invoke<FinancePrefs>("prefs:set", patch),
+    mutationFn: (patch: Partial<FinancePrefs>) =>
+      window.glazeAPI.glaze.ipc.invoke<FinancePrefs>("prefs:set", patch),
     onSuccess: (next) => {
       queryClient.setQueryData(["financePrefs"], next);
       // FY / date / currency formatting is derived from prefs across the app.
@@ -1450,8 +2001,9 @@ function FinancePreferencesSection() {
         </Text>
       </div>
       <Text variant="small" color="tertiary">
-        How the app reads and shows money, dates, and financial years. Prefilled with India defaults; change them any
-        time — they drive display and the financial-year classification everywhere.
+        How the app reads and shows money, dates, and financial years. Prefilled with India
+        defaults; change them any time — they drive display and the financial-year classification
+        everywhere.
       </Text>
 
       <div className="flex flex-wrap gap-4">
@@ -1462,8 +2014,12 @@ function FinancePreferencesSection() {
           <Input
             size="small"
             value={prefs.currency}
-            onChange={(e) => queryClient.setQueryData(["financePrefs"], { ...prefs, currency: e.target.value })}
-            onBlur={(e) => update.mutate({ currency: e.target.value.trim().toUpperCase() || "INR" })}
+            onChange={(e) =>
+              queryClient.setQueryData(["financePrefs"], { ...prefs, currency: e.target.value })
+            }
+            onBlur={(e) =>
+              update.mutate({ currency: e.target.value.trim().toUpperCase() || "INR" })
+            }
             className="w-28"
           />
         </div>
@@ -1472,7 +2028,10 @@ function FinancePreferencesSection() {
           <Text variant="small" color="secondary">
             Financial year starts
           </Text>
-          <Select value={String(month)} onValueChange={(v) => update.mutate({ fyStartMonth: Number(v) })}>
+          <Select
+            value={String(month)}
+            onValueChange={(v) => update.mutate({ fyStartMonth: Number(v) })}
+          >
             <SelectTrigger size="small" variant="filled" className="w-40">
               <SelectValue />
             </SelectTrigger>
@@ -1490,7 +2049,10 @@ function FinancePreferencesSection() {
           <Text variant="small" color="secondary">
             Date format
           </Text>
-          <Select value={prefs.dateFormat} onValueChange={(v) => update.mutate({ dateFormat: v as DateFormat })}>
+          <Select
+            value={prefs.dateFormat}
+            onValueChange={(v) => update.mutate({ dateFormat: v as DateFormat })}
+          >
             <SelectTrigger size="small" variant="filled" className="w-40">
               <SelectValue />
             </SelectTrigger>
@@ -1511,7 +2073,11 @@ function FinancePreferencesSection() {
           <Select
             value={prefs.grouping}
             onValueChange={(v) =>
-              update.mutate({ grouping: v as FinancePrefs["grouping"], decimalSeparator: ".", thousandsSeparator: "," })
+              update.mutate({
+                grouping: v as FinancePrefs["grouping"],
+                decimalSeparator: ".",
+                thousandsSeparator: ",",
+              })
             }
           >
             <SelectTrigger size="small" variant="filled" className="w-52">
@@ -1574,14 +2140,22 @@ export function SettingsView() {
     const scrollToSection = (section: string | null) => {
       if (!section) return;
       window.setTimeout(() => {
-        document.getElementById(`settings-${section}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        document
+          .getElementById(`settings-${section}`)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
       }, 80);
     };
-    void window.glazeAPI.glaze.ipc.invoke<string | null>("settings:takeFocusSection").then(scrollToSection).catch(() => {});
-    const unsubscribe = window.glazeAPI.glaze.ipc.on("settings:focusSection", (_event, payload: unknown) => {
-      const section = (payload as { section?: string } | undefined)?.section;
-      if (typeof section === "string") scrollToSection(section);
-    });
+    void window.glazeAPI.glaze.ipc
+      .invoke<string | null>("settings:takeFocusSection")
+      .then(scrollToSection)
+      .catch(() => {});
+    const unsubscribe = window.glazeAPI.glaze.ipc.on(
+      "settings:focusSection",
+      (_event, payload: unknown) => {
+        const section = (payload as { section?: string } | undefined)?.section;
+        if (typeof section === "string") scrollToSection(section);
+      },
+    );
     return () => unsubscribe();
   }, []);
 
@@ -1592,7 +2166,8 @@ export function SettingsView() {
 
   const statsQuery = useQuery({
     queryKey: ["vaultStats"],
-    queryFn: () => window.glazeAPI.glaze.ipc.invoke<{ total: number; converted: number }>("vault:getStats"),
+    queryFn: () =>
+      window.glazeAPI.glaze.ipc.invoke<{ total: number; converted: number }>("vault:getStats"),
   });
 
   const documentsQuery = useQuery({
@@ -1689,6 +2264,16 @@ export function SettingsView() {
 
         <Separator />
 
+        {/* Impact mapping preferences */}
+        <ImpactPreferencesSection />
+
+        <Separator />
+
+        {/* Manual recurring entries */}
+        <RecurringEntriesSection />
+
+        <Separator />
+
         {/* Review Queue */}
         <div id="settings-review-queue" className="scroll-mt-4">
           <ReviewQueueSection />
@@ -1718,7 +2303,9 @@ export function SettingsView() {
           {documents.length === 0 ? (
             <EmptyState>
               <EmptyStateTitle>No documents yet</EmptyStateTitle>
-              <EmptyStateDescription>Drag files onto the orb to add them to your vault.</EmptyStateDescription>
+              <EmptyStateDescription>
+                Drag files onto the orb to add them to your vault.
+              </EmptyStateDescription>
             </EmptyState>
           ) : (
             <Table>
@@ -1789,7 +2376,9 @@ export function SettingsView() {
                           iconOnly
                           aria-label="Inspect document"
                           title="Open in Document Browser"
-                          onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments", doc.id)}
+                          onClick={() =>
+                            window.glazeAPI.glaze.ipc.invoke("window:openDocuments", doc.id)
+                          }
                         >
                           <FileSearch className="size-4" />
                         </Button>

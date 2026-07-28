@@ -17,9 +17,14 @@ import {
   findLatestByFilename,
   insertDocument,
   insertDuplicateEvent,
+  saveContractNote,
   updateDocumentProcessing,
+  type FinancialImpact,
 } from "./database.js";
 import { extractDocument } from "./extraction.js";
+import { extractContractNote } from "./contract-note.js";
+import { buildImpactSummary, deriveImpact, getImpactPrefs } from "./impact.js";
+import { ocrDocument } from "./ocr.js";
 import { recordExtractionReviews } from "./reviews.js";
 import { deriveAccountingHint } from "./accounting.js";
 import { financialYearKey, getFinancePrefs } from "./preferences.js";
@@ -91,6 +96,8 @@ export interface IngestResult {
   error?: string;
   /** Database id of the newly-ingested document (only on a fresh "ingested"). */
   docId?: number;
+  /** Plain-language "what this means" summary of the document's financial impact. */
+  impactSummary?: string;
 }
 
 /**
@@ -124,7 +131,10 @@ export interface IntakeResult {
  * AI processing runs. `inFlightHashes` guards against duplicate files within the
  * same burst of drops (before their records exist in the database). Never throws.
  */
-export async function intakeFile(sourcePath: string, inFlightHashes: Set<string>): Promise<IntakeResult> {
+export async function intakeFile(
+  sourcePath: string,
+  inFlightHashes: Set<string>,
+): Promise<IntakeResult> {
   const filename = path.basename(sourcePath);
   const type = getFileType(filename);
   if (!type) return { filename, status: "unsupported" };
@@ -146,7 +156,10 @@ export async function intakeFile(sourcePath: string, inFlightHashes: Set<string>
         duplicateOfDocId: existing.id,
         reason: `Exact duplicate of “${existing.originalFilename}” already ingested on ${when}.`,
       });
-      logger.info("vault", "Exact duplicate of an existing document", { filename, ofDocId: existing.id });
+      logger.info("vault", "Exact duplicate of an existing document", {
+        filename,
+        ofDocId: existing.id,
+      });
       return { filename, status: "duplicate", duplicateOfDocId: existing.id };
     }
     if (inFlightHashes.has(hash)) {
@@ -177,7 +190,11 @@ export async function intakeFile(sourcePath: string, inFlightHashes: Set<string>
     await fs.copyFile(sourcePath, rawDest);
 
     logger.info("vault", "Received file", { filename });
-    return { filename, status: "accepted", job: { filename, type, hash, rawDest, dateFolder, filenameNote } };
+    return {
+      filename,
+      status: "accepted",
+      job: { filename, type, hash, rawDest, dateFolder, filenameNote },
+    };
   } catch (error) {
     logger.error("vault", "Failed to receive file", { filename, error: String(error) });
     return { filename, status: "error", error: String(error) };
@@ -193,12 +210,11 @@ export async function intakeFile(sourcePath: string, inFlightHashes: Set<string>
 export async function processIntake(job: ProcessJob): Promise<IngestResult> {
   const { filename, type, hash, rawDest, dateFolder, filenameNote } = job;
   try {
-    // Cheap, deterministic first pass: pull the plain text once, then triage
-    // relevance before spending any AI credits. Clearly non-financial files are
-    // filed away into Irrelevant/ and recorded, but never deeply processed.
-    const representation = await extractText(rawDest, type);
-    const triage = classifyRelevance(type, filename, representation);
-    if (!triage.relevant) {
+    // Read the document's text. Photos (and scanned/image-based PDFs) are run
+    // through vision OCR — which also decides whether the image is a financial
+    // document at all, so a personal photo is filed as irrelevant, not analyzed.
+    const read = await readForProcessing(rawDest, type, filename);
+    if (!read.relevant) {
       const irrelevantDir = path.join(getIrrelevantRoot(), dateFolder);
       await fs.mkdir(irrelevantDir, { recursive: true });
       const irrelevantDest = await uniqueDest(irrelevantDir, path.basename(rawDest));
@@ -217,31 +233,30 @@ export async function processIntake(job: ProcessJob): Promise<IngestResult> {
         rawPath: irrelevantDest,
         markdownPath: "",
         lifecycleState: "irrelevant",
-        triageReason: triage.reason,
+        triageReason: read.reason,
       });
       logger.info("vault", "Filed irrelevant file", { filename });
       return { filename, status: "irrelevant", docId: record.id };
     }
 
-    // Convert to Markdown under Markdown/<date>/, mirroring the filename.
-    const { markdown, success, aiBlocked } = await polishToMarkdown(representation, filename, type);
+    // Convert to Markdown under Markdown/<date>/, mirroring the filename. OCR'd
+    // content is already clean text, so we skip a second AI polish pass for it.
+    const { markdown, success, aiBlocked } = read.usedOcr
+      ? {
+          markdown: `# ${filename}\n\n${read.representation}\n`,
+          success: read.legible && !!read.representation,
+          aiBlocked: undefined as string | undefined,
+        }
+      : await polishToMarkdown(read.representation, filename, type);
     const mdDir = path.join(getMarkdownRoot(), dateFolder);
     await fs.mkdir(mdDir, { recursive: true });
     const mdName = `${path.basename(rawDest, path.extname(rawDest))}.md`;
     const mdDest = path.join(mdDir, mdName);
     await fs.writeFile(mdDest, markdown, "utf-8");
 
-    // One AI pass extracts the document's fields (type, vendor, date, amount,
-    // currency) and computes the foreign-currency conversion. Best-effort.
-    const { currency, extraction } = await extractDocument(markdown, filename);
-
-    // Classify the document into a financial-year bucket as early as possible
-    // (from its document date + the user's FY start month) and derive the
-    // advisory accounting hint — both first-class, before deeper analysis.
-    const fyStartMonth = getFinancePrefs().fyStartMonth;
-    const documentDate = extraction.docDate.value;
-    const financialYear = financialYearKey(documentDate, fyStartMonth);
-    const accounting = deriveAccountingHint(extraction, fyStartMonth);
+    // Extract fields, classify FY, derive accounting hint + financial impact, and
+    // (for broker contract notes) pull the structured trades.
+    const analysis = await analyzeDocument(markdown, filename);
 
     const record = insertDocument({
       hash,
@@ -252,32 +267,159 @@ export async function processIntake(job: ProcessJob): Promise<IngestResult> {
       markdownSuccess: success,
       rawPath: rawDest,
       markdownPath: mdDest,
-      currency,
-      documentDate,
-      financialYear,
-      accounting,
+      currency: analysis.currency,
+      documentDate: analysis.documentDate,
+      financialYear: analysis.financialYear,
+      accounting: analysis.accounting,
+      impact: analysis.impact,
+      isContractNote: analysis.isContractNote,
       lifecycleState: "active",
-      triageReason: filenameNote ?? null,
+      triageReason: filenameNote ?? read.reason ?? null,
     });
+
+    if (analysis.contractNote) saveContractNote({ ...analysis.contractNote, docId: record.id });
 
     // Route any uncertain / missing / conflicting fields to the Review Queue.
     recordExtractionReviews({
       docId: record.id,
       filename,
-      extraction,
-      currency,
-      financialYear,
-      fyStartMonth,
-      accounting,
+      extraction: analysis.extraction,
+      currency: analysis.currency,
+      financialYear: analysis.financialYear,
+      fyStartMonth: getFinancePrefs().fyStartMonth,
+      accounting: analysis.accounting,
+      impact: analysis.impact,
       haystack: `${filename}\n${markdown}`,
     });
 
     logger.info("vault", "Processed file", { filename, markdownSuccess: success });
-    return { filename, status: "ingested", markdownSuccess: success, aiBlocked, docId: record.id };
+    return {
+      filename,
+      status: "ingested",
+      markdownSuccess: success,
+      aiBlocked,
+      docId: record.id,
+      impactSummary: analysis.impact ? buildImpactSummary(analysis.impact) : undefined,
+    };
   } catch (error) {
     logger.error("vault", "Failed to process file", { filename, error: String(error) });
     return { filename, status: "error", error: String(error) };
   }
+}
+
+/** How a file's text was obtained and whether it should be processed. */
+interface ReadResult {
+  representation: string;
+  relevant: boolean;
+  reason: string | null;
+  usedOcr: boolean;
+  legible: boolean;
+}
+
+/**
+ * Obtain a document's text for processing. For photos (and empty/scanned PDFs)
+ * this uses vision OCR, which also decides relevance; for text documents it uses
+ * the deterministic extractor plus the keyword triage.
+ */
+async function readForProcessing(
+  rawDest: string,
+  type: FileType,
+  filename: string,
+): Promise<ReadResult> {
+  if (type === "image") {
+    const ocr = await ocrDocument(rawDest, "image", filename);
+    if (ocr.aiBlocked) {
+      // Can't read the photo right now — keep it safe and active; review will flag it.
+      return {
+        representation: "",
+        relevant: true,
+        reason: "Photo received — it couldn’t be read automatically yet, so it’s kept for review.",
+        usedOcr: true,
+        legible: false,
+      };
+    }
+    if (!ocr.isFinancialDocument) {
+      return {
+        representation: ocr.text,
+        relevant: false,
+        reason: "Looks like a personal photo, not a financial document.",
+        usedOcr: true,
+        legible: ocr.legible,
+      };
+    }
+    return {
+      representation: ocr.text,
+      relevant: true,
+      reason: ocr.legible
+        ? "Read from a photo."
+        : "Read from a photo that was hard to read — some fields may need a quick check.",
+      usedOcr: true,
+      legible: ocr.legible,
+    };
+  }
+
+  let representation = await extractText(rawDest, type);
+  let usedOcr = false;
+  let legible = true;
+  // A scanned / image-based PDF yields no extractable text — try vision OCR.
+  if (type === "pdf" && !representation) {
+    const ocr = await ocrDocument(rawDest, "pdf", filename);
+    if (!ocr.aiBlocked && ocr.text) {
+      representation = ocr.text;
+      usedOcr = true;
+      legible = ocr.legible;
+    }
+  }
+  const triage = classifyRelevance(type, filename, representation);
+  return { representation, relevant: triage.relevant, reason: triage.reason, usedOcr, legible };
+}
+
+/** The classification results for a document's Markdown (shared by ingest + reprocess). */
+interface DocumentAnalysis {
+  currency: Awaited<ReturnType<typeof extractDocument>>["currency"];
+  extraction: Awaited<ReturnType<typeof extractDocument>>["extraction"];
+  documentDate: string | null;
+  financialYear: string | null;
+  accounting: ReturnType<typeof deriveAccountingHint>;
+  impact: FinancialImpact | null;
+  isContractNote: boolean;
+  contractNote: Awaited<ReturnType<typeof extractContractNote>>;
+}
+
+/**
+ * Run the full intelligence pass over a document's Markdown: field extraction,
+ * financial-year classification, accounting hint, financial-impact derivation,
+ * and (for broker contract notes) structured trade extraction.
+ */
+async function analyzeDocument(markdown: string, filename: string): Promise<DocumentAnalysis> {
+  const { currency, extraction } = await extractDocument(markdown, filename);
+  const fyStartMonth = getFinancePrefs().fyStartMonth;
+  const documentDate = extraction.docDate.value;
+  const financialYear = financialYearKey(documentDate, fyStartMonth);
+  const accounting = deriveAccountingHint(extraction, fyStartMonth);
+
+  const contractNote = extraction.isContractNote
+    ? await extractContractNote(markdown, filename, 0)
+    : null;
+  const impact = deriveImpact({
+    extraction,
+    currency,
+    contractNote: contractNote
+      ? { netAmount: contractNote.netAmount, side: contractNote.side }
+      : null,
+    impactPrefs: getImpactPrefs(),
+  });
+
+  return {
+    currency,
+    extraction,
+    documentDate,
+    financialYear,
+    accounting,
+    impact,
+    isContractNote: contractNote != null,
+    contractNote,
+  };
 }
 
 /**
@@ -312,43 +454,66 @@ export async function reprocessDocument(docId: number): Promise<IngestResult> {
       rawPath = rawDest;
     }
 
-    const representation = await extractText(rawPath, type);
-    const { markdown, success } = await polishToMarkdown(representation, filename, type);
+    // Rescue path: the user explicitly asked to (re)analyze this file, so read
+    // its text (via OCR for photos / scanned PDFs) without re-triaging it away.
+    let representation = "";
+    let usedOcr = false;
+    let legible = true;
+    if (type === "image") {
+      const ocr = await ocrDocument(rawPath, "image", filename);
+      representation = ocr.text;
+      usedOcr = true;
+      legible = ocr.legible;
+    } else {
+      representation = await extractText(rawPath, type);
+      if (type === "pdf" && !representation) {
+        const ocr = await ocrDocument(rawPath, "pdf", filename);
+        if (!ocr.aiBlocked && ocr.text) {
+          representation = ocr.text;
+          usedOcr = true;
+          legible = ocr.legible;
+        }
+      }
+    }
+    const { markdown, success } = usedOcr
+      ? { markdown: `# ${filename}\n\n${representation}\n`, success: legible && !!representation }
+      : await polishToMarkdown(representation, filename, type);
     const mdDir = path.join(getMarkdownRoot(), dateFolder);
     await fs.mkdir(mdDir, { recursive: true });
     const mdName = `${path.basename(rawPath, path.extname(rawPath))}.md`;
     const mdDest = path.join(mdDir, mdName);
     await fs.writeFile(mdDest, markdown, "utf-8");
 
-    const { currency, extraction } = await extractDocument(markdown, filename);
-    const fyStartMonth = getFinancePrefs().fyStartMonth;
-    const documentDate = extraction.docDate.value;
-    const financialYear = financialYearKey(documentDate, fyStartMonth);
-    const accounting = deriveAccountingHint(extraction, fyStartMonth);
+    const analysis = await analyzeDocument(markdown, filename);
 
     updateDocumentProcessing(docId, {
       markdownSuccess: success,
       markdownPath: mdDest,
       rawPath,
       dateFolder,
-      currency,
-      documentDate,
-      financialYear,
-      accounting,
+      currency: analysis.currency,
+      documentDate: analysis.documentDate,
+      financialYear: analysis.financialYear,
+      accounting: analysis.accounting,
+      impact: analysis.impact,
+      isContractNote: analysis.isContractNote,
       lifecycleState: "active",
       triageReason: null,
     });
+
+    if (analysis.contractNote) saveContractNote({ ...analysis.contractNote, docId });
 
     // Re-record field reviews from scratch (drop any that referenced the old pass).
     deleteFieldReviewsForDoc(docId);
     recordExtractionReviews({
       docId,
       filename,
-      extraction,
-      currency,
-      financialYear,
-      fyStartMonth,
-      accounting,
+      extraction: analysis.extraction,
+      currency: analysis.currency,
+      financialYear: analysis.financialYear,
+      fyStartMonth: getFinancePrefs().fyStartMonth,
+      accounting: analysis.accounting,
+      impact: analysis.impact,
       haystack: `${filename}\n${markdown}`,
     });
 
@@ -365,7 +530,11 @@ export async function ingestFile(sourcePath: string): Promise<IngestResult> {
   await ensureVaultDirs();
   const intake = await intakeFile(sourcePath, new Set());
   if (intake.status !== "accepted" || !intake.job) {
-    return { filename: intake.filename, status: intake.status === "accepted" ? "error" : intake.status, error: intake.error };
+    return {
+      filename: intake.filename,
+      status: intake.status === "accepted" ? "error" : intake.status,
+      error: intake.error,
+    };
   }
   return processIntake(intake.job);
 }

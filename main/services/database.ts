@@ -22,7 +22,12 @@ export type CurrencyStatus = "none" | "converted" | "needs_review";
  */
 export type LifecycleState = "active" | "irrelevant" | "excluded" | "reprocess_requested";
 
-export const LIFECYCLE_STATES: LifecycleState[] = ["active", "irrelevant", "excluded", "reprocess_requested"];
+export const LIFECYCLE_STATES: LifecycleState[] = [
+  "active",
+  "irrelevant",
+  "excluded",
+  "reprocess_requested",
+];
 
 /** Foreign-currency conversion fields stored alongside a document record. */
 export interface CurrencyFields {
@@ -79,6 +84,64 @@ export interface AccountingHint {
   source: FieldSource;
 }
 
+// ── Financial impact (what changed in the user's financial world) ─────────
+
+/**
+ * The meaningful "bucket" a recognized document (or a manual recurring entry)
+ * feeds into. This is a financial-organization signal, NOT a ledger account —
+ * it answers "what did this change in my money life?" in plain terms.
+ */
+export type ImpactBucket =
+  | "income"
+  | "household_expense"
+  | "shared_family_expense"
+  | "business_expense"
+  | "software_utility_expense"
+  | "personal_expense"
+  | "shopping_discretionary"
+  | "investment_purchase"
+  | "investment_sale"
+  | "liability_dues"
+  | "tax_statutory"
+  | "transfer_neutral"
+  | "needs_review";
+
+export const IMPACT_BUCKETS: ImpactBucket[] = [
+  "income",
+  "household_expense",
+  "shared_family_expense",
+  "business_expense",
+  "software_utility_expense",
+  "personal_expense",
+  "shopping_discretionary",
+  "investment_purchase",
+  "investment_sale",
+  "liability_dues",
+  "tax_statutory",
+  "transfer_neutral",
+  "needs_review",
+];
+
+/** Whether the impact adds money in, sends money out, or is a neutral movement. */
+export type ImpactDirection = "in" | "out" | "neutral";
+
+/**
+ * The app's plain-language financial interpretation of a document: which bucket
+ * it feeds, how confident we are, and the canonical INR amount it moves. Framed
+ * as a signal ("this looks like income"), never a booked accounting entry.
+ */
+export interface FinancialImpact {
+  bucket: ImpactBucket;
+  /** 0..1 confidence — low confidence renders as a suggestion ("Looks like…"). */
+  confidence: number;
+  direction: ImpactDirection;
+  /** Canonical INR amount this document moves (for summary totals), or null. */
+  amountInr: number | null;
+  /** Short human-readable reason for the bucket. */
+  reason: string;
+  source: FieldSource;
+}
+
 export interface DocumentRecord extends CurrencyFields {
   id: number;
   hash: string;
@@ -95,11 +158,84 @@ export interface DocumentRecord extends CurrencyFields {
   financialYear: string | null;
   /** Advisory accounting treatment hint, or null when not applicable. */
   accounting: AccountingHint | null;
+  /** Plain-language financial impact, or null when not a financial transaction. */
+  impact: FinancialImpact | null;
+  /** True when this document is a stock-broker contract note (securities trade). */
+  isContractNote: boolean;
   /** Intake triage lane / lifecycle state (defaults to "active"). */
   lifecycleState: LifecycleState;
   /** One-line human explanation of the triage decision, or null. */
   triageReason: string | null;
 }
+
+/** A securities trade line item extracted from a broker contract note. */
+export interface ContractNoteTrade {
+  id: number;
+  docId: number;
+  securityName: string;
+  symbol: string | null;
+  isin: string | null;
+  side: "buy" | "sell";
+  quantity: number | null;
+  price: number | null;
+  netAmount: number | null;
+}
+
+/** The header/summary of a broker contract note (one row per contract-note document). */
+export interface ContractNoteRecord {
+  docId: number;
+  broker: string | null;
+  client: string | null;
+  tradeDate: string | null;
+  settlementDate: string | null;
+  contractNoteNumber: string | null;
+  /** Net amount payable(+) / receivable(-) by the client, in INR. */
+  netAmount: number | null;
+  totalCharges: number | null;
+  /** Overall direction of the note: mostly buys (purchase) or sells (sale). */
+  side: "buy" | "sell" | "mixed";
+  trades: ContractNoteTrade[];
+}
+
+/** How often a manual recurring entry repeats. */
+export type RecurringFrequency = "monthly" | "quarterly" | "annually" | "weekly" | "custom";
+
+export const RECURRING_FREQUENCIES: RecurringFrequency[] = [
+  "monthly",
+  "quarterly",
+  "annually",
+  "weekly",
+  "custom",
+];
+
+/** Business / personal / shared classification for an entry. */
+export type EntryScope = "business" | "personal" | "shared";
+
+export const ENTRY_SCOPES: EntryScope[] = ["business", "personal", "shared"];
+
+/**
+ * A manually-entered recurring financial item (salary, rent, SIP, EMI, …). It
+ * participates in the financial picture alongside document-derived events, but
+ * is always clearly marked as manual / recurring — never pretends a document
+ * exists.
+ */
+export interface RecurringEntry {
+  id: number;
+  name: string;
+  amount: number;
+  currency: string;
+  frequency: RecurringFrequency;
+  startDate: string | null;
+  endDate: string | null;
+  person: string | null;
+  impactBucket: ImpactBucket;
+  scope: EntryScope;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NewRecurringEntry = Omit<RecurringEntry, "id" | "createdAt" | "updatedAt">;
 
 /** A logged exact-duplicate drop (same SHA-256 as an already-ingested document). */
 export interface DuplicateEvent {
@@ -123,7 +259,8 @@ export type RuleType =
   | "person_variant"
   | "keyword_doctype"
   | "source_scope"
-  | "accounting_treatment";
+  | "accounting_treatment"
+  | "impact_bucket";
 
 /** A piece of evidence explaining why a rule exists. */
 export interface RuleEvidence {
@@ -277,7 +414,8 @@ export type ReviewField =
   | "fin_year"
   | "amount"
   | "fx"
-  | "accounting";
+  | "accounting"
+  | "impact";
 
 export const REVIEW_FIELDS: ReviewField[] = [
   "person",
@@ -288,6 +426,7 @@ export const REVIEW_FIELDS: ReviewField[] = [
   "amount",
   "fx",
   "accounting",
+  "impact",
 ];
 
 /**
@@ -352,6 +491,10 @@ export interface NewDocument {
   financialYear?: string | null;
   /** Advisory accounting hint computed at ingestion. */
   accounting?: AccountingHint | null;
+  /** Plain-language financial impact computed at ingestion. */
+  impact?: FinancialImpact | null;
+  /** True when the document is a broker contract note. */
+  isContractNote?: boolean;
   /** Intake triage lane (defaults to "active"). */
   lifecycleState?: LifecycleState;
   /** One-line explanation of the triage decision. */
@@ -540,6 +683,54 @@ function getDb(): DatabaseSync {
       reason TEXT NOT NULL DEFAULT ''
     );
   `);
+  // Broker contract notes: one header row per contract-note document, plus one
+  // row per traded security. Kept as document-driven trade activity, not a
+  // portfolio ledger (no mark-to-market).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contract_notes (
+      doc_id INTEGER PRIMARY KEY,
+      broker TEXT,
+      client TEXT,
+      trade_date TEXT,
+      settlement_date TEXT,
+      contract_note_number TEXT,
+      net_amount REAL,
+      total_charges REAL,
+      side TEXT NOT NULL DEFAULT 'buy',
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS contract_note_trades (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      doc_id INTEGER NOT NULL,
+      security_name TEXT NOT NULL,
+      symbol TEXT,
+      isin TEXT,
+      side TEXT NOT NULL DEFAULT 'buy',
+      quantity REAL,
+      price REAL,
+      net_amount REAL
+    );
+  `);
+  // Manually-entered recurring income/expenses (salary, rent, SIP, EMI, …).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS recurring_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      amount REAL NOT NULL,
+      currency TEXT NOT NULL,
+      frequency TEXT NOT NULL,
+      start_date TEXT,
+      end_date TEXT,
+      person TEXT,
+      impact_bucket TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      notes TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
   ensureCurrencyColumns(db);
   logger.info("database", "Document database ready", { dbPath });
   return db;
@@ -565,6 +756,8 @@ function ensureCurrencyColumns(database: DatabaseSync): void {
     ["document_date", "TEXT"],
     ["financial_year", "TEXT"],
     ["accounting_json", "TEXT"],
+    ["impact_json", "TEXT"],
+    ["is_contract_note", "INTEGER"],
     ["lifecycle_state", "TEXT"],
     ["triage_reason", "TEXT"],
   ];
@@ -578,6 +771,16 @@ function parseAccounting(raw: unknown): AccountingHint | null {
   try {
     const parsed = JSON.parse(String(raw)) as AccountingHint;
     return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseImpact(raw: unknown): FinancialImpact | null {
+  if (raw == null) return null;
+  try {
+    const parsed = JSON.parse(String(raw)) as FinancialImpact;
+    return parsed && typeof parsed === "object" && "bucket" in parsed ? parsed : null;
   } catch {
     return null;
   }
@@ -603,18 +806,24 @@ function mapRow(row: Row): DocumentRecord {
     rateUsed: row.rate_used == null ? null : Number(row.rate_used),
     rateDate: row.rate_date == null ? null : String(row.rate_date),
     rateIsNearest: Number(row.rate_is_nearest) === 1,
-    currencyStatus: row.currency_status == null ? "none" : (String(row.currency_status) as CurrencyStatus),
+    currencyStatus:
+      row.currency_status == null ? "none" : (String(row.currency_status) as CurrencyStatus),
     documentDate: row.document_date == null ? null : String(row.document_date),
     financialYear: row.financial_year == null ? null : String(row.financial_year),
     accounting: parseAccounting(row.accounting_json),
-    lifecycleState: row.lifecycle_state == null ? "active" : (String(row.lifecycle_state) as LifecycleState),
+    impact: parseImpact(row.impact_json),
+    isContractNote: Number(row.is_contract_note) === 1,
+    lifecycleState:
+      row.lifecycle_state == null ? "active" : (String(row.lifecycle_state) as LifecycleState),
     triageReason: row.triage_reason == null ? null : String(row.triage_reason),
   };
 }
 
 /** Return an existing record for this content hash, or null if unseen. */
 export function findByHash(hash: string): DocumentRecord | null {
-  const row = getDb().prepare("SELECT * FROM documents WHERE hash = ?").get(hash) as Row | undefined;
+  const row = getDb().prepare("SELECT * FROM documents WHERE hash = ?").get(hash) as
+    | Row
+    | undefined;
   return row ? mapRow(row) : null;
 }
 
@@ -632,14 +841,16 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
   const documentDate = doc.documentDate ?? null;
   const financialYear = doc.financialYear ?? null;
   const accounting = doc.accounting ?? null;
+  const impact = doc.impact ?? null;
+  const isContractNote = doc.isContractNote ?? false;
   const lifecycleState = doc.lifecycleState ?? "active";
   const triageReason = doc.triageReason ?? null;
   const stmt = getDb().prepare(`
     INSERT INTO documents
       (hash, original_filename, file_type, date_ingested, date_folder, markdown_success, raw_path, markdown_path,
        foreign_amount, foreign_currency, invoice_date, inr_value, rate_used, rate_date, rate_is_nearest, currency_status,
-       document_date, financial_year, accounting_json, lifecycle_state, triage_reason)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       document_date, financial_year, accounting_json, impact_json, is_contract_note, lifecycle_state, triage_reason)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const info = stmt.run(
     doc.hash,
@@ -661,6 +872,8 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
     documentDate,
     financialYear,
     accounting ? JSON.stringify(accounting) : null,
+    impact ? JSON.stringify(impact) : null,
+    isContractNote ? 1 : 0,
     lifecycleState,
     triageReason,
   );
@@ -678,6 +891,8 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
     documentDate,
     financialYear,
     accounting,
+    impact,
+    isContractNote,
     lifecycleState,
     triageReason,
   };
@@ -686,7 +901,12 @@ export function insertDocument(doc: NewDocument): DocumentRecord {
 /** Update a document's classification fields (document date, FY, accounting hint) in place. */
 export function updateDocumentClassification(
   docId: number,
-  patch: { documentDate?: string | null; financialYear?: string | null; accounting?: AccountingHint | null },
+  patch: {
+    documentDate?: string | null;
+    financialYear?: string | null;
+    accounting?: AccountingHint | null;
+    impact?: FinancialImpact | null;
+  },
 ): void {
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -702,13 +922,23 @@ export function updateDocumentClassification(
     sets.push("accounting_json = ?");
     values.push(patch.accounting ? JSON.stringify(patch.accounting) : null);
   }
+  if ("impact" in patch) {
+    sets.push("impact_json = ?");
+    values.push(patch.impact ? JSON.stringify(patch.impact) : null);
+  }
   if (sets.length === 0) return;
   values.push(docId);
-  getDb().prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...(values as never[]));
+  getDb()
+    .prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`)
+    .run(...(values as never[]));
 }
 
 /** Set a document's lifecycle state and (optionally) the human triage reason. */
-export function setDocumentLifecycle(docId: number, state: LifecycleState, reason?: string | null): void {
+export function setDocumentLifecycle(
+  docId: number,
+  state: LifecycleState,
+  reason?: string | null,
+): void {
   if (reason === undefined) {
     getDb().prepare("UPDATE documents SET lifecycle_state = ? WHERE id = ?").run(state, docId);
   } else {
@@ -733,6 +963,8 @@ export function updateDocumentProcessing(
     documentDate?: string | null;
     financialYear?: string | null;
     accounting?: AccountingHint | null;
+    impact?: FinancialImpact | null;
+    isContractNote?: boolean;
     lifecycleState?: LifecycleState;
     triageReason?: string | null;
   },
@@ -760,12 +992,17 @@ export function updateDocumentProcessing(
   }
   if ("documentDate" in patch) push("document_date", patch.documentDate ?? null);
   if ("financialYear" in patch) push("financial_year", patch.financialYear ?? null);
-  if ("accounting" in patch) push("accounting_json", patch.accounting ? JSON.stringify(patch.accounting) : null);
+  if ("accounting" in patch)
+    push("accounting_json", patch.accounting ? JSON.stringify(patch.accounting) : null);
+  if ("impact" in patch) push("impact_json", patch.impact ? JSON.stringify(patch.impact) : null);
+  if (patch.isContractNote !== undefined) push("is_contract_note", patch.isContractNote ? 1 : 0);
   if (patch.lifecycleState !== undefined) push("lifecycle_state", patch.lifecycleState);
   if ("triageReason" in patch) push("triage_reason", patch.triageReason ?? null);
   if (sets.length === 0) return;
   values.push(docId);
-  getDb().prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`).run(...(values as never[]));
+  getDb()
+    .prepare(`UPDATE documents SET ${sets.join(", ")} WHERE id = ?`)
+    .run(...(values as never[]));
 }
 
 /** Most-recently-ingested document sharing this exact original filename, if any. */
@@ -783,13 +1020,17 @@ export function deleteDocumentRow(docId: number): void {
   d.prepare("DELETE FROM review_audit WHERE doc_id = ?").run(docId);
   d.prepare("DELETE FROM document_overrides WHERE doc_id = ?").run(docId);
   d.prepare("DELETE FROM training_reviews WHERE doc_id = ?").run(docId);
+  d.prepare("DELETE FROM contract_notes WHERE doc_id = ?").run(docId);
+  d.prepare("DELETE FROM contract_note_trades WHERE doc_id = ?").run(docId);
   d.prepare("DELETE FROM documents WHERE id = ?").run(docId);
 }
 
 /** Ids of documents currently waiting to be reprocessed (user requested "later"). */
 export function reprocessRequestedDocIds(): number[] {
   const rows = getDb()
-    .prepare("SELECT id FROM documents WHERE lifecycle_state = 'reprocess_requested' ORDER BY id ASC")
+    .prepare(
+      "SELECT id FROM documents WHERE lifecycle_state = 'reprocess_requested' ORDER BY id ASC",
+    )
     .all() as Row[];
   return rows.map((r) => Number(r.id));
 }
@@ -821,7 +1062,14 @@ export function insertDuplicateEvent(entry: {
       `INSERT INTO duplicate_events (hash, filename, source_path, duplicate_of_doc_id, detected_at, status, reason)
        VALUES (?, ?, ?, ?, ?, 'new', ?)`,
     )
-    .run(entry.hash, entry.filename, entry.sourcePath, entry.duplicateOfDocId, new Date().toISOString(), entry.reason);
+    .run(
+      entry.hash,
+      entry.filename,
+      entry.sourcePath,
+      entry.duplicateOfDocId,
+      new Date().toISOString(),
+      entry.reason,
+    );
   return {
     id: Number(info.lastInsertRowid),
     hash: entry.hash,
@@ -841,7 +1089,9 @@ export function listDuplicateEvents(): DuplicateEvent[] {
 
 /** How many duplicate events are still unacknowledged (drive the review badge). */
 export function countNewDuplicateEvents(): number {
-  const row = getDb().prepare("SELECT COUNT(*) AS n FROM duplicate_events WHERE status = 'new'").get() as Row;
+  const row = getDb()
+    .prepare("SELECT COUNT(*) AS n FROM duplicate_events WHERE status = 'new'")
+    .get() as Row;
   return Number(row.n);
 }
 
@@ -851,6 +1101,197 @@ export function setDuplicateEventStatus(id: number, status: DuplicateEvent["stat
 
 export function deleteDuplicateEvent(id: number): void {
   getDb().prepare("DELETE FROM duplicate_events WHERE id = ?").run(id);
+}
+
+// ── Contract notes (broker securities trades) ─────────────────────────────
+
+function mapTrade(row: Row): ContractNoteTrade {
+  return {
+    id: Number(row.id),
+    docId: Number(row.doc_id),
+    securityName: String(row.security_name),
+    symbol: row.symbol == null ? null : String(row.symbol),
+    isin: row.isin == null ? null : String(row.isin),
+    side: String(row.side) === "sell" ? "sell" : "buy",
+    quantity: row.quantity == null ? null : Number(row.quantity),
+    price: row.price == null ? null : Number(row.price),
+    netAmount: row.net_amount == null ? null : Number(row.net_amount),
+  };
+}
+
+export interface NewContractNote {
+  docId: number;
+  broker: string | null;
+  client: string | null;
+  tradeDate: string | null;
+  settlementDate: string | null;
+  contractNoteNumber: string | null;
+  netAmount: number | null;
+  totalCharges: number | null;
+  side: "buy" | "sell" | "mixed";
+  trades: Omit<ContractNoteTrade, "id" | "docId">[];
+}
+
+/** Persist a contract note's header + trades. Replaces any prior rows for the doc. */
+export function saveContractNote(note: NewContractNote): void {
+  const d = getDb();
+  d.prepare("DELETE FROM contract_notes WHERE doc_id = ?").run(note.docId);
+  d.prepare("DELETE FROM contract_note_trades WHERE doc_id = ?").run(note.docId);
+  d.prepare(
+    `INSERT INTO contract_notes
+       (doc_id, broker, client, trade_date, settlement_date, contract_note_number, net_amount, total_charges, side, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    note.docId,
+    note.broker,
+    note.client,
+    note.tradeDate,
+    note.settlementDate,
+    note.contractNoteNumber,
+    note.netAmount,
+    note.totalCharges,
+    note.side,
+    new Date().toISOString(),
+  );
+  const insert = d.prepare(
+    `INSERT INTO contract_note_trades (doc_id, security_name, symbol, isin, side, quantity, price, net_amount)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const t of note.trades) {
+    insert.run(
+      note.docId,
+      t.securityName,
+      t.symbol,
+      t.isin,
+      t.side,
+      t.quantity,
+      t.price,
+      t.netAmount,
+    );
+  }
+}
+
+/** The contract note (header + trades) for a document, or null when not one. */
+export function getContractNote(docId: number): ContractNoteRecord | null {
+  const row = getDb().prepare("SELECT * FROM contract_notes WHERE doc_id = ?").get(docId) as
+    | Row
+    | undefined;
+  if (!row) return null;
+  const trades = (
+    getDb()
+      .prepare("SELECT * FROM contract_note_trades WHERE doc_id = ? ORDER BY id ASC")
+      .all(docId) as Row[]
+  ).map(mapTrade);
+  return {
+    docId: Number(row.doc_id),
+    broker: row.broker == null ? null : String(row.broker),
+    client: row.client == null ? null : String(row.client),
+    tradeDate: row.trade_date == null ? null : String(row.trade_date),
+    settlementDate: row.settlement_date == null ? null : String(row.settlement_date),
+    contractNoteNumber: row.contract_note_number == null ? null : String(row.contract_note_number),
+    netAmount: row.net_amount == null ? null : Number(row.net_amount),
+    totalCharges: row.total_charges == null ? null : Number(row.total_charges),
+    side: (String(row.side) as ContractNoteRecord["side"]) || "buy",
+    trades,
+  };
+}
+
+/** All contract-note trades (for the investment aggregation), across active docs. */
+export function listAllContractNoteTrades(): ContractNoteTrade[] {
+  const rows = getDb().prepare("SELECT * FROM contract_note_trades ORDER BY id ASC").all() as Row[];
+  return rows.map(mapTrade);
+}
+
+/** All contract-note headers keyed by docId. */
+export function listContractNotes(): ContractNoteRecord[] {
+  const rows = getDb().prepare("SELECT doc_id FROM contract_notes").all() as Row[];
+  return rows
+    .map((r) => getContractNote(Number(r.doc_id)))
+    .filter((n): n is ContractNoteRecord => n != null);
+}
+
+// ── Recurring entries (manual income/expenses) ────────────────────────────
+
+function mapRecurring(row: Row): RecurringEntry {
+  return {
+    id: Number(row.id),
+    name: String(row.name),
+    amount: Number(row.amount),
+    currency: String(row.currency),
+    frequency: String(row.frequency) as RecurringFrequency,
+    startDate: row.start_date == null ? null : String(row.start_date),
+    endDate: row.end_date == null ? null : String(row.end_date),
+    person: row.person == null ? null : String(row.person),
+    impactBucket: String(row.impact_bucket) as ImpactBucket,
+    scope: String(row.scope) as EntryScope,
+    notes: row.notes == null ? null : String(row.notes),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+export function listRecurringEntries(): RecurringEntry[] {
+  const rows = getDb().prepare("SELECT * FROM recurring_entries ORDER BY id DESC").all() as Row[];
+  return rows.map(mapRecurring);
+}
+
+export function insertRecurringEntry(entry: NewRecurringEntry): RecurringEntry {
+  const now = new Date().toISOString();
+  const info = getDb()
+    .prepare(
+      `INSERT INTO recurring_entries
+         (name, amount, currency, frequency, start_date, end_date, person, impact_bucket, scope, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      entry.name,
+      entry.amount,
+      entry.currency,
+      entry.frequency,
+      entry.startDate,
+      entry.endDate,
+      entry.person,
+      entry.impactBucket,
+      entry.scope,
+      entry.notes,
+      now,
+      now,
+    );
+  return { ...entry, id: Number(info.lastInsertRowid), createdAt: now, updatedAt: now };
+}
+
+export function updateRecurringEntry(id: number, patch: Partial<NewRecurringEntry>): void {
+  const cols: Record<string, string> = {
+    name: "name",
+    amount: "amount",
+    currency: "currency",
+    frequency: "frequency",
+    startDate: "start_date",
+    endDate: "end_date",
+    person: "person",
+    impactBucket: "impact_bucket",
+    scope: "scope",
+    notes: "notes",
+  };
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  for (const [key, col] of Object.entries(cols)) {
+    if (key in patch) {
+      sets.push(`${col} = ?`);
+      values.push((patch as Record<string, unknown>)[key] ?? null);
+    }
+  }
+  if (sets.length === 0) return;
+  sets.push("updated_at = ?");
+  values.push(new Date().toISOString());
+  values.push(id);
+  getDb()
+    .prepare(`UPDATE recurring_entries SET ${sets.join(", ")} WHERE id = ?`)
+    .run(...(values as never[]));
+}
+
+export function deleteRecurringEntry(id: number): void {
+  getDb().prepare("DELETE FROM recurring_entries WHERE id = ?").run(id);
 }
 
 export function listDocuments(limit = 200): DocumentRecord[] {
@@ -894,9 +1335,9 @@ export interface SnapshotCacheRow {
 
 /** Return the cached financial snapshot (raw JSON + timestamp), or null. */
 export function getSnapshotCache(): SnapshotCacheRow | null {
-  const row = getDb()
-    .prepare("SELECT json, generated_at FROM snapshot_cache WHERE id = 1")
-    .get() as Row | undefined;
+  const row = getDb().prepare("SELECT json, generated_at FROM snapshot_cache WHERE id = 1").get() as
+    | Row
+    | undefined;
   return row ? { json: String(row.json), generatedAt: String(row.generated_at) } : null;
 }
 
@@ -915,7 +1356,9 @@ export function saveSnapshotCache(json: string, generatedAt: string): void {
 
 /** All person-name remappings (rename / merge), as { from → to } pairs. */
 export function listNameOverrides(): { from: string; to: string }[] {
-  const rows = getDb().prepare("SELECT from_name, to_name FROM person_name_overrides").all() as Row[];
+  const rows = getDb()
+    .prepare("SELECT from_name, to_name FROM person_name_overrides")
+    .all() as Row[];
   return rows.map((r) => ({ from: String(r.from_name), to: String(r.to_name) }));
 }
 
@@ -930,13 +1373,18 @@ export function setNameOverride(from: string, to: string): void {
     )
     .run(from, to);
   // If the target already pointed elsewhere, keep chains from looping back.
-  getDb().prepare("DELETE FROM person_name_overrides WHERE from_name = ? AND to_name = ?").run(to, from);
+  getDb()
+    .prepare("DELETE FROM person_name_overrides WHERE from_name = ? AND to_name = ?")
+    .run(to, from);
 }
 
 /** Per-document attribution pins. `person === null` forces "unidentified". */
 export function listDocumentOverrides(): { docId: number; person: string | null }[] {
   const rows = getDb().prepare("SELECT doc_id, person FROM document_overrides").all() as Row[];
-  return rows.map((r) => ({ docId: Number(r.doc_id), person: r.person == null ? null : String(r.person) }));
+  return rows.map((r) => ({
+    docId: Number(r.doc_id),
+    person: r.person == null ? null : String(r.person),
+  }));
 }
 
 /** Pin a document to a person, or to "unidentified" when person is null. */
@@ -969,10 +1417,16 @@ export interface RateCacheEntry {
 /** Look up a previously fetched rate for a currency + requested date, or null. */
 export function getCachedRate(currency: string, reqDate: string): RateCacheEntry | null {
   const row = getDb()
-    .prepare("SELECT rate, rate_date, is_nearest FROM rate_cache WHERE currency = ? AND req_date = ?")
+    .prepare(
+      "SELECT rate, rate_date, is_nearest FROM rate_cache WHERE currency = ? AND req_date = ?",
+    )
     .get(currency, reqDate) as Row | undefined;
   if (!row) return null;
-  return { rate: Number(row.rate), rateDate: String(row.rate_date), isNearest: Number(row.is_nearest) === 1 };
+  return {
+    rate: Number(row.rate),
+    rateDate: String(row.rate_date),
+    isNearest: Number(row.is_nearest) === 1,
+  };
 }
 
 /** Store a fetched rate so the same currency + date isn't fetched again. */
@@ -985,13 +1439,22 @@ export function saveCachedRate(currency: string, reqDate: string, entry: RateCac
          rate = excluded.rate, rate_date = excluded.rate_date,
          is_nearest = excluded.is_nearest, fetched_at = excluded.fetched_at`,
     )
-    .run(currency, reqDate, entry.rate, entry.rateDate, entry.isNearest ? 1 : 0, new Date().toISOString());
+    .run(
+      currency,
+      reqDate,
+      entry.rate,
+      entry.rateDate,
+      entry.isNearest ? 1 : 0,
+      new Date().toISOString(),
+    );
 }
 
 // ── App settings (key/value) ────────────────────────────────────────────
 
 export function getSetting(key: string): string | null {
-  const row = getDb().prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as Row | undefined;
+  const row = getDb().prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as
+    | Row
+    | undefined;
   return row ? String(row.value) : null;
 }
 
@@ -1074,7 +1537,14 @@ export function upsertConfirmedRule(input: {
         `UPDATE learned_rules SET value = ?, confidence = ?, auto_apply = ?, evidence = ?, updated_at = ?
          WHERE id = ?`,
       )
-      .run(input.value.trim(), confidence, autoApply ? 1 : 0, JSON.stringify(merged), now, existing.id);
+      .run(
+        input.value.trim(),
+        confidence,
+        autoApply ? 1 : 0,
+        JSON.stringify(merged),
+        now,
+        existing.id,
+      );
     return { rule: findLearnedRule(input.ruleType, matchKey)!, isNew: false };
   }
 
@@ -1115,7 +1585,10 @@ export function addManualRule(input: {
 }
 
 /** Patch a rule's value and/or auto-apply flag (from Settings editing). */
-export function updateLearnedRule(id: number, patch: { value?: string; autoApply?: boolean }): void {
+export function updateLearnedRule(
+  id: number,
+  patch: { value?: string; autoApply?: boolean },
+): void {
   const sets: string[] = [];
   const args: unknown[] = [];
   if (patch.value != null) {
@@ -1130,7 +1603,9 @@ export function updateLearnedRule(id: number, patch: { value?: string; autoApply
   sets.push("updated_at = ?");
   args.push(new Date().toISOString());
   args.push(id);
-  getDb().prepare(`UPDATE learned_rules SET ${sets.join(", ")} WHERE id = ?`).run(...(args as never[]));
+  getDb()
+    .prepare(`UPDATE learned_rules SET ${sets.join(", ")} WHERE id = ?`)
+    .run(...(args as never[]));
 }
 
 export function deleteLearnedRule(id: number): void {
@@ -1151,7 +1626,9 @@ function mapReview(row: Row): TrainingReviewRecord {
 }
 
 export function getTrainingReview(docId: number): TrainingReviewRecord | null {
-  const row = getDb().prepare("SELECT * FROM training_reviews WHERE doc_id = ?").get(docId) as Row | undefined;
+  const row = getDb().prepare("SELECT * FROM training_reviews WHERE doc_id = ?").get(docId) as
+    | Row
+    | undefined;
   return row ? mapReview(row) : null;
 }
 
@@ -1201,9 +1678,15 @@ export function getPendingReviewCount(): number {
 
 export function getTrainingStats(): { reviewed: number; ruleCount: number } {
   const reviewed = Number(
-    (getDb().prepare("SELECT COUNT(*) AS n FROM training_reviews WHERE status != 'pending'").get() as Row).n,
+    (
+      getDb()
+        .prepare("SELECT COUNT(*) AS n FROM training_reviews WHERE status != 'pending'")
+        .get() as Row
+    ).n,
   );
-  const ruleCount = Number((getDb().prepare("SELECT COUNT(*) AS n FROM learned_rules").get() as Row).n);
+  const ruleCount = Number(
+    (getDb().prepare("SELECT COUNT(*) AS n FROM learned_rules").get() as Row).n,
+  );
   return { reviewed, ruleCount };
 }
 
@@ -1245,7 +1728,9 @@ export function listFieldReviews(docId?: number): DocumentFieldReview[] {
   const rows =
     docId == null
       ? (getDb().prepare("SELECT * FROM document_field_reviews").all() as Row[])
-      : (getDb().prepare("SELECT * FROM document_field_reviews WHERE doc_id = ?").all(docId) as Row[]);
+      : (getDb()
+          .prepare("SELECT * FROM document_field_reviews WHERE doc_id = ?")
+          .all(docId) as Row[]);
   return rows.map(mapFieldReview);
 }
 
@@ -1431,7 +1916,9 @@ function mapPerson(row: Row): PersonRecord {
 }
 
 export function listPersons(): PersonRecord[] {
-  const rows = getDb().prepare("SELECT * FROM persons ORDER BY is_self DESC, display_name ASC").all() as Row[];
+  const rows = getDb()
+    .prepare("SELECT * FROM persons ORDER BY is_self DESC, display_name ASC")
+    .all() as Row[];
   return rows.map(mapPerson);
 }
 
@@ -1513,7 +2000,9 @@ export function updatePerson(
   sets.push("updated_at = ?");
   args.push(new Date().toISOString());
   args.push(id);
-  getDb().prepare(`UPDATE persons SET ${sets.join(", ")} WHERE id = ?`).run(...(args as never[]));
+  getDb()
+    .prepare(`UPDATE persons SET ${sets.join(", ")} WHERE id = ?`)
+    .run(...(args as never[]));
 }
 
 /** Mark one person as "Self", clearing the flag on everyone else. */
@@ -1521,7 +2010,9 @@ export function setSelfPerson(id: number): void {
   const database = getDb();
   const now = new Date().toISOString();
   database.prepare("UPDATE persons SET is_self = 0, updated_at = ? WHERE is_self = 1").run(now);
-  database.prepare("UPDATE persons SET is_self = 1, status = 'confirmed', updated_at = ? WHERE id = ?").run(now, id);
+  database
+    .prepare("UPDATE persons SET is_self = 1, status = 'confirmed', updated_at = ? WHERE id = ?")
+    .run(now, id);
 }
 
 export function deletePerson(id: number): void {
@@ -1548,7 +2039,9 @@ export function listAliases(personId?: number): PersonAlias[] {
   const rows = (
     personId == null
       ? db_.prepare("SELECT * FROM person_aliases ORDER BY id ASC").all()
-      : db_.prepare("SELECT * FROM person_aliases WHERE person_id = ? ORDER BY id ASC").all(personId)
+      : db_
+          .prepare("SELECT * FROM person_aliases WHERE person_id = ? ORDER BY id ASC")
+          .all(personId)
   ) as Row[];
   return rows.map(mapAlias);
 }

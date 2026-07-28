@@ -28,24 +28,28 @@ import {
   Building2,
   Calendar,
   CalendarClock,
+  Camera,
   Coins,
   Copy,
   ExternalLink,
   FileText,
+  LineChart,
   Pencil,
   Search,
   Star,
   Tag,
   Trash2,
+  TrendingUp,
   User,
 } from "lucide-react";
 import { EvidenceCard } from "./evidence-card";
-import { useFinancePrefs, type FinancePrefs } from "../finance";
+import { impactSummary, useFinancePrefs, type FinancePrefs } from "../finance";
 import {
   formatDate,
   formatForeign,
   formatInr,
   fyLabel,
+  IMPACT_LABEL,
   LIFECYCLE_META,
   OVERALL_META,
   ROLE_LABEL,
@@ -117,14 +121,28 @@ function Preview({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void 
 
 // ── Lightweight hover summary (from list-row data, no fetch) ───────────────
 
-function SummaryLine({ icon, label, value, muted }: { icon: ReactNode; label: string; value: string; muted?: boolean }) {
+function SummaryLine({
+  icon,
+  label,
+  value,
+  muted,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  muted?: boolean;
+}) {
   return (
     <div className="flex items-center gap-2 py-1">
       <span className="shrink-0 text-tertiary">{icon}</span>
       <Text variant="small" color="tertiary" className="w-24 shrink-0">
         {label}
       </Text>
-      <Text variant="small" color={muted ? "tertiary" : "primary"} className="flex-1 min-w-0 truncate">
+      <Text
+        variant="small"
+        color={muted ? "tertiary" : "primary"}
+        className="flex-1 min-w-0 truncate"
+      >
         {value}
       </Text>
     </div>
@@ -134,7 +152,10 @@ function SummaryLine({ icon, label, value, muted }: { icon: ReactNode; label: st
 function PeekSummary({ row, prefs }: { row: DocumentBrowserRow; prefs: FinancePrefs }) {
   const meta = OVERALL_META[row.reviewStatus];
   const currencyLine =
-    row.currencyStatus === "converted" && row.foreignAmount != null && row.foreignCurrency && row.inrValue != null
+    row.currencyStatus === "converted" &&
+    row.foreignAmount != null &&
+    row.foreignCurrency &&
+    row.inrValue != null
       ? `${formatForeign(row.foreignAmount, row.foreignCurrency, prefs)} → ${formatInr(row.inrValue, prefs)}`
       : row.currencyStatus === "needs_review"
         ? "Foreign amount — needs review"
@@ -142,11 +163,32 @@ function PeekSummary({ row, prefs }: { row: DocumentBrowserRow; prefs: FinancePr
 
   return (
     <div className="flex flex-col gap-2">
+      {/* Plain-language "what this means" — the first thing to read. */}
+      {row.impact ? (
+        <div className="flex items-start gap-2 rounded-card border border-accent/30 bg-accent/10 px-3 py-2">
+          <TrendingUp className="mt-0.5 size-4 shrink-0 text-accent" />
+          <Text variant="small" className="break-words">
+            {impactSummary(row.impact, prefs)}
+          </Text>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
         {row.lifecycleState !== "active" ? (
-          <Badge color={LIFECYCLE_META[row.lifecycleState].color}>{LIFECYCLE_META[row.lifecycleState].label}</Badge>
+          <Badge color={LIFECYCLE_META[row.lifecycleState].color}>
+            {LIFECYCLE_META[row.lifecycleState].label}
+          </Badge>
         ) : null}
         <Badge color={meta.color}>{meta.label}</Badge>
+        {row.isContractNote ? (
+          <Badge color="purple">
+            <LineChart className="size-3" /> Contract note
+          </Badge>
+        ) : null}
+        {row.fileType === "image" ? (
+          <Badge color="secondary">
+            <Camera className="size-3" /> Photo
+          </Badge>
+        ) : null}
         {row.personIsSelf ? (
           <Badge color="blue">
             <Star className="size-3" /> Self
@@ -164,13 +206,56 @@ function PeekSummary({ row, prefs }: { row: DocumentBrowserRow; prefs: FinancePr
         ) : null}
       </div>
       <div className="flex flex-col divide-y divide-separator">
-        <SummaryLine icon={<User className="size-3.5" />} label="Person" value={row.personName ?? "Unidentified"} muted={!row.personName} />
-        <SummaryLine icon={<FileText className="size-3.5" />} label="Type" value={row.docType ?? "Unknown"} muted={!row.docType} />
-        <SummaryLine icon={<Building2 className="size-3.5" />} label="Vendor" value={row.vendor ?? "Unknown"} muted={!row.vendor} />
-        <SummaryLine icon={<Calendar className="size-3.5" />} label="Date" value={formatDate(row.docDate, prefs)} muted={!row.docDate} />
-        <SummaryLine icon={<CalendarClock className="size-3.5" />} label="Financial year" value={row.financialYear ? fyLabel(row.financialYear) : "Not determined"} muted={!row.financialYear} />
-        <SummaryLine icon={<Tag className="size-3.5" />} label="Category" value={row.category ?? "Uncategorized"} muted={!row.category} />
-        {currencyLine ? <SummaryLine icon={<Coins className="size-3.5" />} label="Currency" value={currencyLine} /> : null}
+        <SummaryLine
+          icon={<User className="size-3.5" />}
+          label="Person"
+          value={row.personName ?? "Unidentified"}
+          muted={!row.personName}
+        />
+        <SummaryLine
+          icon={<FileText className="size-3.5" />}
+          label="Type"
+          value={row.docType ?? "Unknown"}
+          muted={!row.docType}
+        />
+        <SummaryLine
+          icon={<Building2 className="size-3.5" />}
+          label="Vendor"
+          value={row.vendor ?? "Unknown"}
+          muted={!row.vendor}
+        />
+        <SummaryLine
+          icon={<Calendar className="size-3.5" />}
+          label="Date"
+          value={formatDate(row.docDate, prefs)}
+          muted={!row.docDate}
+        />
+        <SummaryLine
+          icon={<CalendarClock className="size-3.5" />}
+          label="Financial year"
+          value={row.financialYear ? fyLabel(row.financialYear) : "Not determined"}
+          muted={!row.financialYear}
+        />
+        <SummaryLine
+          icon={<Tag className="size-3.5" />}
+          label="Category"
+          value={row.category ?? "Uncategorized"}
+          muted={!row.category}
+        />
+        {row.impact ? (
+          <SummaryLine
+            icon={<TrendingUp className="size-3.5" />}
+            label="Impact"
+            value={`${IMPACT_LABEL[row.impact.bucket]}${row.impact.amountInr != null ? " · " + formatInr(row.impact.amountInr, prefs) : ""}`}
+          />
+        ) : null}
+        {currencyLine ? (
+          <SummaryLine
+            icon={<Coins className="size-3.5" />}
+            label="Currency"
+            value={currencyLine}
+          />
+        ) : null}
       </div>
       {row.triageReason ? (
         <Text variant="small" color="secondary">
@@ -216,23 +301,35 @@ function DuplicatesPanel({ onOpenOriginal }: { onOpenOriginal: (docId: number) =
   return (
     <div className="flex flex-col gap-2 p-3">
       <Text variant="small" color="secondary">
-        Exact duplicates (identical content) are never reprocessed. Keep them ignored, or delete the log entry.
+        Exact duplicates (identical content) are never reprocessed. Keep them ignored, or delete the
+        log entry.
       </Text>
       {events.map((e) => (
-        <div key={e.id} className="flex flex-col gap-2 rounded-card border border-separator bg-well px-3 py-2.5">
+        <div
+          key={e.id}
+          className="flex flex-col gap-2 rounded-card border border-separator bg-well px-3 py-2.5"
+        >
           <div className="flex items-center gap-2">
             <Copy className="size-4 shrink-0 text-tertiary" />
             <Text variant="small-strong" className="flex-1 min-w-0 truncate" title={e.filename}>
               {e.filename}
             </Text>
-            {e.status === "acknowledged" ? <Badge color="secondary">Kept ignored</Badge> : <Badge color="yellow">New</Badge>}
+            {e.status === "acknowledged" ? (
+              <Badge color="secondary">Kept ignored</Badge>
+            ) : (
+              <Badge color="yellow">New</Badge>
+            )}
           </div>
           <Text variant="small" color="secondary" className="break-words">
             {e.reason}
           </Text>
           <div className="flex items-center gap-1.5">
             {e.duplicateOfDocId != null ? (
-              <Button size="small" variant="transparent" onClick={() => onOpenOriginal(e.duplicateOfDocId!)}>
+              <Button
+                size="small"
+                variant="transparent"
+                onClick={() => onOpenOriginal(e.duplicateOfDocId!)}
+              >
                 <ExternalLink className="size-3.5" />
                 Inspect original
               </Button>
@@ -302,9 +399,14 @@ export function DocumentsView() {
     return rows.filter((r) => {
       if (!laneMatches(r)) return false;
       if (!q) return true;
-      return [r.filename, r.personName, r.vendor, r.docType, r.category, r.financialYear && fyLabel(r.financialYear)].some(
-        (v) => v?.toLowerCase().includes(q),
-      );
+      return [
+        r.filename,
+        r.personName,
+        r.vendor,
+        r.docType,
+        r.category,
+        r.financialYear && fyLabel(r.financialYear),
+      ].some((v) => v?.toLowerCase().includes(q));
     });
   }, [rows, query, lane]);
 
@@ -314,10 +416,13 @@ export function DocumentsView() {
     void invoke<number | null>("documents:takeInitialFocus").then((id) => {
       if (!cancelled && typeof id === "number") setPinnedId(id);
     });
-    const unsubscribeFocus = window.glazeAPI.glaze.ipc.on("documents:focus", (_e, payload: unknown) => {
-      const id = (payload as { docId?: unknown })?.docId;
-      if (typeof id === "number") setPinnedId(id);
-    });
+    const unsubscribeFocus = window.glazeAPI.glaze.ipc.on(
+      "documents:focus",
+      (_e, payload: unknown) => {
+        const id = (payload as { docId?: unknown })?.docId;
+        if (typeof id === "number") setPinnedId(id);
+      },
+    );
     const unsubscribeChanged = window.glazeAPI.glaze.ipc.on("documents:changed", () => {
       void queryClient.invalidateQueries({ queryKey: ["documents"] });
     });
@@ -433,7 +538,11 @@ export function DocumentsView() {
             {filtered.map((r) => (
               <List.Item key={r.docId} item={r} onMouseEnter={() => setHoverId(r.docId)}>
                 <List.ItemIcon
-                  src={getFileThumbnailUrl(r.rawPath, { size: 40, scaleFactor: 2, fallback: "icon" })}
+                  src={getFileThumbnailUrl(r.rawPath, {
+                    size: 40,
+                    scaleFactor: 2,
+                    fallback: "icon",
+                  })}
                   alt=""
                 />
                 <List.ItemContent>
@@ -448,7 +557,19 @@ export function DocumentsView() {
                 <List.ItemAccessory>
                   <div className="flex items-center gap-1.5">
                     {r.lifecycleState !== "active" ? (
-                      <Badge color={LIFECYCLE_META[r.lifecycleState].color}>{LIFECYCLE_META[r.lifecycleState].label}</Badge>
+                      <Badge color={LIFECYCLE_META[r.lifecycleState].color}>
+                        {LIFECYCLE_META[r.lifecycleState].label}
+                      </Badge>
+                    ) : null}
+                    {r.isContractNote ? (
+                      <span title="Contract note">
+                        <LineChart className="size-3.5 text-purple-9" />
+                      </span>
+                    ) : null}
+                    {r.fileType === "image" ? (
+                      <span title="Photo">
+                        <Camera className="size-3.5 text-tertiary" />
+                      </span>
                     ) : null}
                     {r.hasFx ? <Coins className="size-3.5 text-tertiary" /> : null}
                     {r.hasManualOverride ? <Pencil className="size-3 text-support-blue" /> : null}
@@ -467,7 +588,11 @@ export function DocumentsView() {
   );
 
   return (
-    <SplitView list={list} listSize={{ default: 340, min: 280, max: 460 }} storageKey="documents-browser">
+    <SplitView
+      list={list}
+      listSize={{ default: 340, min: 280, max: 460 }}
+      storageKey="documents-browser"
+    >
       <ScrollArea
         title={activeRow ? activeRow.filename : "Details"}
         subtitle={activeRow ? formatDate(activeRow.dateIngested, prefs) + " · ingested" : undefined}
@@ -485,7 +610,11 @@ export function DocumentsView() {
             />
           ) : (
             <>
-              <Preview key={activeRow.docId} row={activeRow} onOpen={() => openFile(activeRow.docId)} />
+              <Preview
+                key={activeRow.docId}
+                row={activeRow}
+                onOpen={() => openFile(activeRow.docId)}
+              />
 
               {showingPinned ? (
                 detailQuery.isLoading || !detailQuery.data ? (

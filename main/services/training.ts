@@ -130,10 +130,14 @@ const questionSchema = z.object({
         prompt: z.string().describe("A short, practical question, easy to answer in the moment"),
         kind: z
           .enum(["single", "yesno", "chips", "text"])
-          .describe("Prefer single/yesno/chips over text; use text only when no small option set fits"),
+          .describe(
+            "Prefer single/yesno/chips over text; use text only when no small option set fits",
+          ),
         options: z
           .array(z.string())
-          .describe("2-5 concise choices for 'single' or 'chips'; empty array for 'yesno' and 'text'"),
+          .describe(
+            "2-5 concise choices for 'single' or 'chips'; empty array for 'yesno' and 'text'",
+          ),
         target: z
           .enum([
             "vendor_category",
@@ -162,11 +166,15 @@ const questionSchema = z.object({
               "keyword/account this is about. For person_identity: the detected name in THIS document. For " +
               "person_role: the person's name this role applies to. null for person_attribution and none.",
           ),
-        theme: z.string().describe("Very short label, e.g. 'Owner', 'Category', 'Expense type', 'Vendor rule'"),
+        theme: z
+          .string()
+          .describe("Very short label, e.g. 'Owner', 'Category', 'Expense type', 'Vendor rule'"),
       }),
     )
     .max(5)
-    .describe("At most 5 questions, prioritising the single most useful unresolved ambiguity for this document"),
+    .describe(
+      "At most 5 questions, prioritising the single most useful unresolved ambiguity for this document",
+    ),
 });
 
 /** Describe the facts already known from confident rules, for the AI prompt. */
@@ -178,6 +186,7 @@ function knownFactsText(rules: LearnedRule[]): string {
     keyword_doctype: "Keyword → document type",
     source_scope: "Account/source scope",
     accounting_treatment: "Vendor → accounting treatment",
+    impact_bucket: "Vendor → financial impact",
   };
   return rules
     .map((r) => `- ${label[r.ruleType]}: "${r.matchKey}" → ${r.value} (confidence ${r.confidence})`)
@@ -216,7 +225,12 @@ export async function prepareTraining(docId: number): Promise<{ shouldAsk: boole
   for (const rule of autoApplied) {
     if (rule.ruleType === "person_variant") {
       // Canonicalise the name variant onto its person so the snapshot reflects it.
-      confirmNameForPerson(rule.matchKey, ensurePerson(rule.value, "learned_rule"), "learned_rule", { docId });
+      confirmNameForPerson(
+        rule.matchKey,
+        ensurePerson(rule.value, "learned_rule"),
+        "learned_rule",
+        { docId },
+      );
     }
     // vendor_category / keyword_doctype / source_scope act as known facts that
     // keep us from re-asking; they need no per-document write here.
@@ -230,8 +244,18 @@ export async function prepareTraining(docId: number): Promise<{ shouldAsk: boole
       ? "(none yet)"
       : people
           .map((p) => {
-            const roles = p.roles.length ? ` [roles: ${p.roles.join(", ")}${p.isSelf ? ", SELF" : ""}]` : p.isSelf ? " [SELF]" : "";
-            const aliases = p.aliases.length > 1 ? ` (aka ${p.aliases.map((a) => a.alias).filter((a) => a !== p.displayName).join(", ")})` : "";
+            const roles = p.roles.length
+              ? ` [roles: ${p.roles.join(", ")}${p.isSelf ? ", SELF" : ""}]`
+              : p.isSelf
+                ? " [SELF]"
+                : "";
+            const aliases =
+              p.aliases.length > 1
+                ? ` (aka ${p.aliases
+                    .map((a) => a.alias)
+                    .filter((a) => a !== p.displayName)
+                    .join(", ")})`
+                : "";
             return `- ${p.displayName}${aliases}${roles}`;
           })
           .join("\n");
@@ -475,6 +499,7 @@ const TYPE_HEADINGS: Record<RuleType, string> = {
   keyword_doctype: "Keyword / layout → Document type",
   source_scope: "Account / source → Business vs Personal",
   accounting_treatment: "Vendor → Accounting treatment",
+  impact_bucket: "Vendor → Financial impact",
 };
 
 /** Regenerate the human-readable RULES.md from the current learned rules. */
@@ -492,7 +517,9 @@ export async function writeRulesMarkdown(): Promise<void> {
   lines.push("");
 
   if (rules.length === 0) {
-    lines.push("No rules learned yet. Turn on Training Mode and drop a document to start teaching the app.");
+    lines.push(
+      "No rules learned yet. Turn on Training Mode and drop a document to start teaching the app.",
+    );
   } else {
     for (const type of Object.keys(TYPE_HEADINGS) as RuleType[]) {
       const group = rules.filter((r) => r.ruleType === type);
@@ -500,9 +527,13 @@ export async function writeRulesMarkdown(): Promise<void> {
       lines.push(`## ${TYPE_HEADINGS[type]}`);
       lines.push("");
       for (const r of group) {
-        const applied = r.autoApply ? "auto-applied" : `needs ${AUTO_APPLY_THRESHOLD - r.confidence} more to auto-apply`;
+        const applied = r.autoApply
+          ? "auto-applied"
+          : `needs ${AUTO_APPLY_THRESHOLD - r.confidence} more to auto-apply`;
         const origin = r.source === "manual" ? "added manually" : "confirmed by you";
-        lines.push(`- **${r.matchKey}** → ${r.value}  _(confidence ${r.confidence}, ${origin}, ${applied})_`);
+        lines.push(
+          `- **${r.matchKey}** → ${r.value}  _(confidence ${r.confidence}, ${origin}, ${applied})_`,
+        );
         if (r.evidence.length > 0) {
           const files = Array.from(new Set(r.evidence.map((e) => e.filename))).slice(0, 6);
           lines.push(`  - Evidence: ${files.join(", ")}`);
@@ -547,7 +578,11 @@ export function listRules(): LearnedRule[] {
   return listLearnedRules();
 }
 
-export async function addRule(input: { ruleType: RuleType; matchKey: string; value: string }): Promise<LearnedRule> {
+export async function addRule(input: {
+  ruleType: RuleType;
+  matchKey: string;
+  value: string;
+}): Promise<LearnedRule> {
   const rule = addManualRule(input);
   if (rule.ruleType === "person_variant") {
     confirmNameForPerson(rule.matchKey, ensurePerson(rule.value, "manual"), "manual");
@@ -556,7 +591,10 @@ export async function addRule(input: { ruleType: RuleType; matchKey: string; val
   return rule;
 }
 
-export async function editRule(id: number, patch: { value?: string; autoApply?: boolean }): Promise<void> {
+export async function editRule(
+  id: number,
+  patch: { value?: string; autoApply?: boolean },
+): Promise<void> {
   updateLearnedRule(id, patch);
   await writeRulesMarkdown();
 }
