@@ -1,81 +1,177 @@
-# Quick2Afvault
+# Quick2AVault
 
-A tiny, always-on-top macOS accessory app for archiving and organizing personal financial documents. Drop a PDF, XLSX, CSV, or TXT file onto the floating orb and it is copied to a dated vault folder, converted to Markdown, analyzed for people, dates, amounts, and foreign currencies, and recorded in a local SQLite database.
+A macOS desktop utility that turns your financial document chaos into a calm, organised, AI-powered vault. Drop a PDF, spreadsheet, or photo of a receipt onto a floating orb, and **Quick2AVault** safely archives it, converts it to searchable Markdown, reads its contents, classifies it by person and financial period, converts foreign currencies at official exchange rates, and surfaces only the things that actually need your attention.
 
-> **Platform note:** This is a Glaze SDK app configured as a macOS `accessory` app (`appConfig.macOS.activationPolicy: "accessory"`). It has no Dock icon and no Cmd-Tab presence; the only visible UI is the orb and the transient windows it opens.
+> **Platform note:** **Quick2AVault** is a Glaze SDK accessory app (`activationPolicy: "accessory"`). It has no Dock icon and no Cmd-Tab presence — the only visible UI is the floating orb and the transient windows it opens.
 
-## What it does
+## The Problem
 
-- **Floating orb widget** — a frameless, transparent, always-on-top circle that lives on all workspaces, remembers its position, and accepts drag-and-drop files. A single click opens the **Financial Snapshot**; a right-click shows the native menu.
-- **Drag & drop ingestion** — files are copied to `~/Documents/Quick2Afvault/Raw/<YYYY-MM-DD>/` and converted to Markdown in `~/Documents/Quick2Afvault/Markdown/<YYYY-MM-DD>/`.
-- **SHA-256 deduplication** — identical files are not reprocessed.
-- **Markdown conversion** — text is extracted with `pdf-parse` / `xlsx` / utf-8 readers, then polished to Markdown by Glaze AI (`fast`, max 24 k chars) with a deterministic fallback on any AI failure.
-- **Unified document extraction** — one AI pass at ingestion extracts document type, vendor/institution, document date, primary amount, and currency, each with a `confident` flag. The foreign-currency conversion is computed from the same pass.
-- **Review Queue** — uncertain, missing, or conflicting fields become per-document field reviews (`doc_type`, `vendor`, `doc_date`, `amount`, `fx`, `person`). Users can confirm, correct, or defer each field; corrections feed learned rules and never overwrite user-confirmed values.
-- **Canonical Person ontology** — extracted names are normalized and resolved to canonical `Person` records with aliases, semantic roles, evidence, confidence, and source-of-truth (`ai_inferred < learned_rule < user_confirmed < manual`). Supports rename, merge, split, alias add/remove, and per-document reassign.
-- **Financial Snapshot** — a click-to-open popup beside the orb that summarizes the vault by person, including counts, date ranges, categories, foreign-invoice totals, Unidentified documents, and a global Needs Review bucket. Cached in SQLite; refresh re-runs AI attribution.
-- **Document Browser + Evidence Card** — a dedicated `Documents` window with a searchable, keyboard-navigable list and a pinned Evidence Card that shows why the app thinks what it thinks, with per-field Confirm / Correct / Later actions.
-- **Foreign-currency conversion** — USD/EUR/GBP/JPY amounts are converted to INR using the Frankfurter FBIL reference rate for the invoice date, with a nearest-prior-business-day fallback. Converted values are stored on the document record and aggregated in the Snapshot.
-- **Training Mode** — opt-in mode that asks 3–5 targeted questions after each ingest and turns answers into learned rules. Rules auto-apply after consistent confirmations and are mirrored in `~/Documents/Quick2Afvault/RULES.md`.
-- **Notifications & toasts** — native macOS notifications summarize every batch, and a near-orb, non-focusable toast appears for genuine conversion failures while keeping the original safe.
+Personal financial documents live everywhere: email attachments, phone photos, downloads folders, random folders on the desktop. They're PDFs you can't search, spreadsheets with no context, photos of receipts that vanish into your camera roll. When tax season or a loan application comes around, good luck finding that one statement from three years ago.
 
-## Tech stack
+**Quick2AVault** solves this by being the single, calm place where every financial document lands — automatically organised, intelligently analyzed, and always findable.
 
-- **Runtime / framework:** Glaze SDK (`@glaze/core/backend`, `@glaze/core/ai`)
-- **Language:** TypeScript 5.5+ (ES modules)
-- **Frontend:** React 19, TanStack Router, TanStack Query, Tailwind CSS 4, Radix UI / `@radix-ui/colors`, Lucide icons, `cmdk`, `class-variance-authority`, `tailwind-merge`
-- **Backend:** Node.js main process, `node:sqlite`, `pdf-parse`, `xlsx`
-- **Build:** Vite 8, esbuild, `glaze.ts` CLI wrapper
-- **Node engine:** `>= 24`
-- **Package manager:** npm (pinned via `packageManager` in `package.json`)
+## The Vision
 
-## Project structure
+**Quick2AVault** is not just a document scanner. It's a **personal financial intelligence layer** that reasons about your money life:
+
+- **Who** does this document belong to? (You, your spouse, a client, a vendor?)
+- **What** kind of document is it? (Invoice, statement, receipt, contract note?)
+- **When** does it belong — not just the date on the paper, but which financial year, which accounting period?
+- **How much** money moved, and in what direction — income, expense, investment, tax?
+- **What does it mean** — suggested accounting treatment, financial impact, and confidence-backed insights?
+
+It's a safe deposit box, a filing cabinet, a financial analyst, and a compliance assistant — all in a tiny orb that lives on your desktop.
+
+## Core Features
+
+### Floating Orb Interface
+A frameless, transparent, always-on-top circle that lives on all workspaces, remembers its position, and accepts drag-and-drop files. A single click opens the **Financial Snapshot**; a right-click shows the native menu. The orb pulses during processing and stays calm when idle.
+
+### Non-Blocking, Safe-Receipt Ingestion
+Drop a file — any file — and the moment it's safely copied into your vault, you get immediate positive feedback. The orb acknowledges receipt with a check animation before background processing begins. The app stays fully responsive: you can drop another batch while the first is still processing, and it queues cleanly instead of freezing.
+
+- **Phase 1 (intake):** Hash with SHA-256, deduplicate, copy the original into `~/Documents/Quick2AVault/Raw/<YYYY-MM-DD>/` — returns instantly.
+- **Phase 2 (processing):** Convert to Markdown, run AI extraction, classify, and record — all in the background.
+- **Batch support:** Drop 10 files at once; see live progress.
+- **Failure safety:** If processing fails, the original is always safe. A near-orb toast explains what happened.
+
+### Intelligent Intake Triage
+Not every file is a financial document. **Quick2AVault** performs a fast, deterministic (no-AI) first pass to decide what lane each file belongs in:
+
+1. **Accepted** — plausibly a financial document; queued for normal processing.
+2. **Irrelevant / junk** — family photos, personal notes, casual non-financial content; filed into `~/Documents/Quick2AVault/Irrelevant/` with a clear explanation, never destroyed, restorable later.
+3. **Exact duplicate** — identical SHA-256 content hash; logged and skipped, never reprocessed.
+4. **Same filename, different content** — both kept, stored under safe unique paths, original visible filename preserved in the UI.
+
+### SHA-256 Content Deduplication
+Identical files are never reprocessed. Duplicate detection uses deterministic file/content comparison (SHA-256), never an LLM. Filename is used only as a fast first-pass signal; content hashing confirms the match.
+
+### Universal Document Conversion
+Converts any supported file into clean, searchable Markdown:
+
+- **PDFs** parsed with `pdf-parse`
+- **XLSX/CSV** read with `xlsx` and rendered as Markdown tables
+- **TXT** read as UTF-8
+- **Photos & scanned PDFs** transcribed via vision OCR (native macOS image stack with EXIF auto-rotation)
+- AI polishes the extracted representation into well-structured Markdown with a deterministic fallback on any AI failure — the original is always preserved
+
+### Vision OCR for Photographed Documents
+Many users capture documents with their phone. **Quick2AVault** runs vision extraction on image files and image-based/scanned PDFs, transcribing text faithfully and deciding whether the image is actually a financial document — so a family photo gets routed to the irrelevant lane instead of being force-analyzed.
+
+### Unified AI Document Extraction
+One AI pass at ingestion extracts every field the app reasons about — document type, vendor/institution, document date, primary amount, currency, expense/income direction, service period, payment date, advance/prepaid status, impact bucket, and more — each with a confidence flag. The foreign-currency conversion is computed from the same pass (no extra AI call).
+
+### Foreign-Currency Conversion
+USD, EUR, GBP, and JPY amounts are converted to INR using India's official FBIL benchmark rate for the invoice date, fetched via the free Frankfurter API. When FBIL doesn't publish a rate (weekends, Mumbai bank holidays), the most recent prior business day's rate is used and clearly marked as a "nearest available rate." Rates are cached locally so the same currency+date is never fetched twice. Uncertain conversions are flagged for review rather than guessing a wrong number.
+
+### Financial-Year Awareness (Core Classification Layer)
+Every dated document is assigned to a financial-year bucket as early as possible in processing. India's default FY (April 1 to March 31) is used, so a document dated 2026-03-31 lands in FY 2025-26 and one dated 2026-04-01 lands in FY 2026-27. Missing or ambiguous dates route uncertainty into review rather than silent misclassification. FY appears in document records, the Review Queue, Document Browser, Evidence Card, and Snapshot summaries.
+
+### Accounting Policy Hints (Advisory Layer)
+A lightweight, advisory classification layer that separates document facts from accounting interpretation. For relevant documents, it infers a suggested accounting treatment — current-period expense, prepaid expense, accrued expense, deferred revenue, recognized revenue, reimbursement, or needs accounting review — with confidence and a plain-language reason. It flags advance payments, prepaid subscriptions, and cross-financial-year cases for review. Presented as "Suggested treatment," never as final accounting truth.
+
+### Financial Impact Layer (Plain-Language "What Changed")
+Once a document is recognized as a financial transaction, **Quick2AVault** derives an immediate, human-readable impact: which bucket it feeds (income, household expense, business expense, software/utility expense, investment purchase/sale, liability/dues, tax/statutory, transfer/neutral, or needs review), the canonical INR amount it moves, and a confidence-backed explanation. Low-confidence guesses are framed as "Looks like…" rather than certainties. User-editable preferences steer ambiguous categories (software invoices, groceries, marketplace purchases).
+
+### Canonical Person Intelligence
+A real person may appear across documents under several name variants ("Mahesh Shantaram", "Shantaram Mahesh", "M. Shantaram"). **Quick2AVault** introduces a canonical Person entity with known aliases, semantic roles (self, spouse, client, supplier, bank RM, accountant, etc.), confidence, and supporting evidence. Entity resolution matches detected names using exact alias match, reordered first/last names, and initials/shortened variants. High-confidence matches link silently; uncertain ones create candidates that Training Mode asks about. User-confirmed fields are never overwritten by AI.
+
+### Financial Snapshot
+A click-to-open popup beside the orb that summarizes the vault by person — counts, date ranges, categories, foreign-invoice totals converted to INR, an Unidentified bucket, and a global Needs Review count. Cached in SQLite for instant opening; a refresh re-runs AI attribution. The snapshot also shows hero totals (income, expenses, investments, recurring monthly outflow), per-bucket impact rollups, document-driven investment activity from broker contract notes, and manual recurring entries.
+
+### Review Queue
+A lightweight triage inbox for document intelligence the app isn't confident about. Every ingested document gets one review row per tracked field (person, document type, vendor, date, financial year, amount, currency conversion, accounting hint, financial impact). Anything low-confidence, conflicting, or missing stays pending and surfaces in the queue. Resolving a field keeps a full audit trail, never overwrites a user-confirmed value, and feeds corrections back into learned rules. Zero-value invoices are correctly treated as valid when the rest of the extraction is coherent.
+
+### Document Browser + Evidence Card
+A dedicated Documents window with a searchable, keyboard-navigable list and a pinned Evidence Card that shows why the app thinks what it thinks — per-field confidence, source of truth, status, and reason. Includes Confirm / Correct / Later actions, per-document person reassignment, file opening, and lifecycle controls (exclude, restore, reprocess, delete permanently).
+
+### Training Mode
+A user-enabled mode that asks 3–5 targeted questions after each ingest, turning answers into reusable learned rules (vendor→category, name variant→person, keyword→document type, account→business/personal, vendor→accounting treatment, vendor→impact bucket). Rules auto-apply after consistent confirmations and are mirrored in `~/Documents/Quick2AVault/RULES.md`. On a fresh install, Training Mode defaults to ON so the app starts learning from the very first drop — and never silently re-enables if you turn it off.
+
+### Broker Contract Note Support
+Stock-broker contract notes ("Contract Note cum Tax Invoice") are recognized as a first-class document class, not generic invoices. The app extracts the broker, client, trade/settlement dates, contract note number, net amount, and every traded security line item (buy/sell, quantity, price, net amount, symbol/ISIN). These feed an investment-activity view and map the document to an investment purchase/sale event rather than an expense.
+
+### Manual Recurring Entries
+Not everything arrives as a document. Salary, rent, SIPs, school fees, subscriptions, EMIs, and utilities are tracked as manual recurring entries with configurable frequency, scope (business/personal), and impact bucket. These participate in the financial picture alongside document-derived events, clearly marked as manual/recurring, and normalized to a monthly-equivalent for the Snapshot's recurring outflow figure.
+
+### Native Notifications & Near-Orb Toasts
+Every batch gets a native macOS notification summarizing what happened — documents added, duplicates skipped, irrelevant files filed, conversion failures. Genuine (non-AI-blocked) conversion failures surface as a near-orb, non-focusable toast that makes clear: the original is safe, processing failed, and the document may need review.
+
+### Lifecycle Management
+Documents move through clear, reversible states: **active**, **irrelevant**, **excluded**, **reprocess requested**. You can delete from the active working set without erasing from disk, restore excluded documents, and reprocess from the existing raw file — no re-drop needed. The state model is surfaced everywhere: Review Queue, Document Browser, and Evidence Card.
+
+### First-Run Finance Preferences
+On installation, **Quick2AVault** prompts you to confirm a small set of financial preferences before serious analysis begins — prefilled with India defaults (INR, April–March financial year, DD-MM-YYYY date format, Indian number grouping with lakh/crore). These preferences actually drive display and interpretation: currency and number formatting, date rendering, and the financial-year classification every dated document receives. Fully editable in Settings.
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **Runtime / Framework** | Glaze SDK (`@glaze/core/backend`, `@glaze/core/ai`) |
+| **Language** | TypeScript 5.5+ (ES modules) |
+| **Frontend** | React 19, TanStack Router, TanStack Query, Tailwind CSS 4, Radix UI / `@radix-ui/colors`, Lucide icons, `cmdk`, `class-variance-authority`, `tailwind-merge` |
+| **Backend** | Node.js main process, `node:sqlite`, `pdf-parse`, `xlsx` |
+| **Build** | Vite 8, esbuild, `glaze.ts` CLI wrapper |
+| **Node Engine** | `>= 24` |
+| **Package Manager** | npm (pinned via `packageManager` in `package.json`) |
+
+## Data & Storage Paths
+
+| What | Where |
+|------|-------|
+| **Vault originals** | `~/Documents/Quick2AVault/Raw/<YYYY-MM-DD>/` |
+| **Vault Markdown** | `~/Documents/Quick2AVault/Markdown/<YYYY-MM-DD>/` |
+| **Irrelevant docs** | `~/Documents/Quick2AVault/Irrelevant/<YYYY-MM-DD>/` |
+| **Learned rules mirror** | `~/Documents/Quick2AVault/RULES.md` |
+| **SQLite database** | `~/Library/Application Support/Quick2AVault/quick2avault.db` |
+| **Orb position/state** | `~/Library/Application Support/Quick2AVault/orb-state.json` |
+
+## Architecture Overview
+
+### Non-Blocking Ingestion Pipeline
 
 ```
-.
-├── package.json            # app metadata, scripts, dependencies, Glaze config
-├── tsconfig.json           # TypeScript paths, strict mode, bundler resolution
-├── glaze.ts                # thin CLI wrapper that resolves the Glaze SDK
-├── main/
-│   ├── index.ts            # app entry point: menu, lifecycle, create orb
-│   ├── handlers/index.ts   # registers all IPC handlers
-│   ├── services/
-│   │   ├── vault.ts        # file copy, dedup, Markdown conversion orchestration
-│   │   ├── converter.ts    # file -> text -> Markdown (pdf/xlsx/csv/txt)
-│   │   ├── extraction.ts   # unified AI extraction of doc fields + FX
-│   │   ├── currency.ts     # FBIL/Frankfurter USD/EUR/GBP/JPY -> INR conversion
-│   │   ├── snapshot.ts     # AI attribution, aggregation, caching
-│   │   ├── people.ts       # canonical person ontology / entity resolution
-│   │   ├── reviews.ts      # Review Queue routing, confirm/correct, audit
-│   │   ├── training.ts     # Training Mode question generation & rules
-│   │   ├── document-detail.ts  # Document Browser / Evidence Card assembly
-│   │   ├── database.ts     # SQLite schema, migrations, accessors
-│   │   └── notify.ts       # native macOS batch notifications
-│   └── windows/
-│       ├── orb-window.ts       # the floating orb window + custom drag
-│       ├── orb-menu.ts         # right-click context menu
-│       ├── settings-window.ts  # settings / history / people / review queue
-│       ├── snapshot-window.ts  # Financial Snapshot popup
-│       ├── training-window.ts  # Training Mode question popup
-│       ├── documents-window.ts # Document Browser window
-│       └── toast-window.ts     # near-orb transient toast (plain DOM)
-├── renderer/
-│   ├── styles.css
-│   ├── preload.ts
-│   ├── main/               # orb home view
-│   ├── settings/           # settings app
-│   ├── snapshot/           # Financial Snapshot popup
-│   ├── training/           # Training Mode popup
-│   ├── documents/          # Document Browser + Evidence Card
-│   └── shared/             # shared renderer utilities
-├── main-window.html
-├── settings-window.html
-├── snapshot-window.html
-├── training-window.html
-├── documents-window.html
-├── toast-window.html
-└── app-icon.*              # generated app icons (ignored by git)
+Drop → intakeFile() → enqueueDrop() → [background queue] → processIntake()
+  │         │              │                  │
+  │         │              │                  └── 1. Read text (extractText / OCR)
+  │         │              │                  └── 2. Triage relevance (triage.ts)
+  │         │              │                  └── 3. Convert to Markdown (converter.ts)
+  │         │              │                  └── 4. Extract fields (extraction.ts)
+  │         │              │                  └── 5. Classify FY (preferences.ts)
+  │         │              │                  └── 6. Derive accounting hint (accounting.ts)
+  │         │              │                  └── 7. Derive financial impact (impact.ts)
+  │         │              │                  └── 8. Extract contract note (contract-note.ts)
+  │         │              │                  └── 9. Insert document record (database.ts)
+  │         │              │                  └── 10. Record reviews (reviews.ts)
+  │         │              │                  └── 11. Prepare training (training.ts)
+  │         │              │
+  │         │              └── Returns receipt immediately (accepted/duplicate/error)
+  │         │
+  │         └── SHA-256 hash → check duplicates → copy to vault → return receipt
+  │
+  └── File dropped on orb → immediate visual acknowledgment (check animation)
 ```
+
+### AI Behavior & Graceful Degradation
+
+AI is **optional** (`capabilities.ai.mode: "optional"`, grade `fast`). If the user hasn't enabled AI or credits are exhausted:
+
+- Markdown conversion falls back to the deterministic extracted representation.
+- Extraction returns empty/uncertain fields that go to the Review Queue.
+- Snapshot `getCachedSnapshot()` still works from cache; `refreshSnapshot()` shows a blocked banner alongside raw stats.
+- Training Mode doesn't run without AI.
+- OCR falls back to empty text; the document is still stored safely.
+
+The app **never overwrites** a `user_confirmed` or `manual` field with AI output. This is enforced by `canOverwrite()` in `database.ts` and by the resolve logic in `reviews.ts`.
+
+## Key Design Principles
+
+- **Calm but reversible.** The app doesn't destroy anything. Irrelevant files are kept, not deleted. Duplicates are logged, not silently dropped. Excluded documents can be restored.
+- **Immediate feedback, background processing.** "Received" comes before "processed." The orb acknowledges receipt instantly; heavy work happens off the critical path.
+- **Confidence-backed, never overpromised.** Every AI-derived field carries a confidence flag. Low-confidence results surface in the Review Queue with a clear explanation of what's uncertain.
+- **User authority over AI.** User-confirmed values are never overwritten. Corrections feed learned rules that auto-apply in the future.
+- **Financial-period aware.** Documents are classified into financial years from day one. The app reasons in accounting periods, not just raw dates.
+- **Accounting-aware, not a bookkeeping engine.** Accounting treatment hints are advisory suggestions with evidence, never GAAP-compliant bookings.
 
 ## Development
 
@@ -83,152 +179,24 @@ All commands run from this directory:
 
 ```bash
 npm install
-npm run dev         # start the app in dev mode
+npm run dev          # start the app in dev mode
 npm run dev:renderer
-npm run build       # build the app into ../.glaze/build
+npm run build        # build the app into ../.glaze/build
 npm run lint
 npm run type-check
 npm run format
 ```
 
 `glaze.ts` resolves the Glaze CLI from one of:
-
 - `../glaze-core/cli/glaze.js`
 - `../../../sdk/current/@glaze/core/cli/glaze.js`
 
 This means the repo is expected to live inside a Glaze app container.
 
-## Architecture overview
+## Status & Known Limitations
 
-### Main process
+The app is functionally complete through the Document Browser + Evidence Card. The AI-dependent paths (conversion, extraction, snapshot refresh, training question generation, FX conversion, OCR, contract note extraction) are validated statically and by schema, but their quality and runtime behavior depend on real file drops and available AI credits. The Frankfurter FBIL API is keyless but requires network access.
 
-`main/index.ts` registers IPC handlers and creates the orb window on `app.whenReady`. It also ensures the vault directories exist.
+## License
 
-`main/handlers/index.ts` is the single place all IPC channels are registered. It wires renderer calls to the backend services and broadcasts state changes (`training:changed`, `review:changed`) where appropriate.
-
-### Ingestion pipeline (`main/services/vault.ts`)
-
-`ingestFile(filePath)` does the following:
-
-1. Hash the file with SHA-256.
-2. If the hash already exists, return a `duplicate` result.
-3. Copy the original into `Raw/<today>/` with a `(n)` suffix on collisions.
-4. Convert to Markdown and write to `Markdown/<today>/`.
-5. Run `extractDocument()` to get doc type, vendor, date, amount, currency, and FX.
-6. Insert a `DocumentRecord` into SQLite with the extracted currency fields.
-7. Seed the Review Queue with `recordExtractionReviews()`.
-
-`ingestFiles(paths)` iterates one file at a time so the renderer can show a `done/total` progress pill.
-
-### Markdown conversion (`main/services/converter.ts`)
-
-- PDFs are parsed with `pdf-parse`.
-- XLSX/CSV are read with `xlsx` and rendered as Markdown tables.
-- TXT is read as UTF-8.
-- The extracted representation is sent to `generateText(glaze("fast"))` with a 24 000-char cap.
-- On any `GlazeAIError` or failure, a deterministic fallback Markdown is written so the original is always preserved.
-
-### Unified extraction (`main/services/extraction.ts`)
-
-`extractDocument(text, filename)` calls `generateObject(glaze("fast"))` once with a schema that returns `documentType`, `vendor`, `documentDate`, `amount`, and `currency` plus per-field confidence flags. It then calls `convertToInr()` to compute the FX fields. If AI is blocked, it returns an empty extraction; the file is still stored safely.
-
-### Currency (`main/services/currency.ts`)
-
-`convertToInr({ currency, amount, invoiceDate, confident })`:
-
-- Only converts `USD`, `EUR`, `GBP`, `JPY` to INR.
-- `INR`/`NONE` or missing confident inputs return `currencyStatus: "none"` or `"needs_review"`.
-- Fetches `https://api.frankfurter.dev/v2/rate/{CUR}/INR?providers=FBIL&date={date}`.
-- Caches rates locally by `currency + requestedDate`.
-- Records `rateDate` and `rateIsNearest` when a prior business-day rate is substituted.
-- Returns rounded `inrValue = amount * rate`.
-
-### Snapshot (`main/services/snapshot.ts`)
-
-- Stores per-document AI attributions in `snapshot_cache` as `{ version: 2, attributions[] }`.
-- `getCachedSnapshot()` seeds people from existing names and aggregates from cache without calling AI.
-- `refreshSnapshot()` re-runs AI attribution, resolves each name to a canonical person, records person reviews, and re-aggregates.
-- Aggregation groups by canonical person with counts, date ranges, categories, `foreignInvoices[]`, `foreignTotalInr`, an `Unidentified` bucket, and a global `needsReview` bucket.
-- `getAttributionMap()` provides the Document Browser with per-document person/category/period without re-running AI.
-
-### People (`main/services/people.ts`)
-
-- Tables: `persons`, `person_aliases`, `person_evidence`.
-- Normalization supports exact alias, reordered first/last names (≥0.85 auto-link for candidates), and initials/shortened variants (0.72, kept as candidates for Training).
-- Source-of-truth hierarchy: `ai_inferred < learned_rule < user_confirmed < manual`; AI never overwrites a higher source.
-- Supports `listPeople`, `ensurePerson`, `renamePerson`, `mergePersons`, `splitPerson`, `add/removeAlias`, `markSelf`, `setPersonRoles`, `deletePersonEntity`, and `consolidateCandidateDuplicates`.
-- Document overrides (`document_overrides`) apply at aggregation time, so reassignments reflect instantly without an AI re-run.
-
-### Review Queue (`main/services/reviews.ts`)
-
-- Tables: `document_field_reviews`, `review_audit`.
-- Tracks six fields: `person`, `doc_type`, `vendor`, `doc_date`, `amount`, `fx`.
-- Statuses: `low_confidence`, `conflict`, `missing`, `confirmed`, `corrected`, `deferred`.
-- `resolveField(docId, field, action, value?)` enforces source authority, writes an audit entry, and applies side effects:
-  - person correction → learns `person_variant` and can create/confirm a person
-  - doc_type correction with known vendor → learns `vendor_category`
-  - fx correction → re-runs `convertToInr()` and updates the document currency
-- `confirmAllSuggestions(docId)` confirms every pending field in one action.
-
-### Training (`main/services/training.ts`)
-
-- Tables: `app_settings`, `learned_rules`, `training_reviews`.
-- `prepareTraining(docId)` generates 3–5 questions from the doc excerpt and known confident facts.
-- `saveAnswers()` turns answers into rules keyed by `(type, match_key)`:
-  - `vendor_category`, `person_variant`, `keyword_doctype`, `source_scope`
-- `AUTO_APPLY_THRESHOLD = 2` confirms before a rule auto-applies; manual rules apply immediately.
-- A human-readable `RULES.md` is mirrored in the vault root.
-- Settings shows mode toggle, stats, and an editable rule list.
-
-### Document Browser / Evidence Card (`main/services/document-detail.ts`)
-
-`listDocumentBrowser()` returns lightweight rows joining the document record, field reviews, snapshot attribution, canonical person, and a best-effort `source_scope` business/personal label.
-
-`getDocumentDetail(docId)` reads a 1200-char Markdown excerpt and returns the full Evidence Card data: summary grid, person context with aliases/evidence, detail fields with confidence/source/status/reason, Markdown excerpt, and audit trail.
-
-### Database (`main/services/database.ts`)
-
-`node:sqlite` (`DatabaseSync`) located at `~/Library/Application Support/Quick2Afvault/quick2afvault.db`.
-
-Key tables:
-
-- `documents` — every ingested file + paths + hash + currency columns
-- `snapshot_cache` — AI attribution cache
-- `persons`, `person_aliases`, `person_evidence` — canonical people
-- `document_overrides`, `person_name_overrides` (vestigial, read-only seed) — user overrides
-- `rate_cache` — FBIL rate cache
-- `learned_rules`, `training_reviews` — Training Mode
-- `document_field_reviews`, `review_audit` — Review Queue
-- `app_settings` — key/value settings
-
-Migrations are idempotent and check `PRAGMA table_info` before `ADD COLUMN`.
-
-## Data & storage paths
-
-- **Vault originals:** `~/Documents/Quick2Afvault/Raw/<YYYY-MM-DD>/`
-- **Vault Markdown:** `~/Documents/Quick2Afvault/Markdown/<YYYY-MM-DD>/`
-- **Learned rules mirror:** `~/Documents/Quick2Afvault/RULES.md`
-- **SQLite database:** `~/Library/Application Support/Quick2Afvault/quick2afvault.db`
-- **Orb position/state:** `~/Library/Application Support/Quick2Afvault/orb-state.json`
-
-## AI behavior & fallbacks
-
-AI is **optional** (`capabilities.ai.mode: "optional"`, grade `"fast"`). If the user has not enabled AI or credits are exhausted:
-
-- Markdown conversion falls back to the extracted representation.
-- Extraction returns empty/uncertain fields that go to the Review Queue.
-- Snapshot `getCachedSnapshot()` still works from cache; `refreshSnapshot()` shows a blocked banner and raw stats.
-- Training Mode does not run without AI.
-
-The app never overwrites a `user_confirmed` or `manual` field with AI output. This is enforced by `canOverwrite()` in `database.ts` and by the resolve logic in `reviews.ts`.
-
-## macOS integration notes
-
-- `activationPolicy: "accessory"` means no Dock icon and no Cmd-Tab entry.
-- The orb is a `BrowserWindow` with `frame: false`, `transparent: true`, `hasShadow: false`, `alwaysOnTop: "floating"`, `visibleOnAllWorkspaces: true`, and a custom pointer-driven drag so clicks and drags are distinguishable.
-- Toast, Snapshot, and Training windows are positioned relative to the orb using `screen.getDisplayNearestPoint` and `workArea` clamping.
-- Native notifications are used for batch outcomes via `main/services/notify.ts`.
-
-## Status & known limitations
-
-The app is functionally complete through the Document Browser + Evidence Card. The AI-dependent paths (conversion, extraction, snapshot refresh, training question generation, FX conversion) are validated statically and by schema, but their quality and runtime behavior depend on real file drops and available AI credits. The Frankfurter FBIL API is keyless but requires network access.
+Proprietary — built for personal financial document management.
