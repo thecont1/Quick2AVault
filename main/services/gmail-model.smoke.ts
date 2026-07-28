@@ -9,16 +9,16 @@ import {
   type GmailMessage,
 } from "./gmail-model.js";
 
-assert.deepEqual(normalizeGmailLocalPart("  TheCont1.Hermes "), {
+assert.deepEqual(normalizeGmailLocalPart("  Test.User "), {
   ok: true,
-  localPart: "thecont1.hermes",
+  localPart: "test.user",
 });
-const configuredMailbox = deriveGmailAddress("thecont1.hermes");
-assert.equal(configuredMailbox, `thecont1.hermes@${"gmail.com"}`);
-assert.equal(gmailAccountsMatch(deriveGmailAddress("TheCont1.Hermes"), configuredMailbox), true);
-assert.equal(gmailAccountsMatch(deriveGmailAddress("thecont1hermes"), configuredMailbox), true);
+const configuredMailbox = deriveGmailAddress("test.user");
+assert.equal(configuredMailbox, `test.user@${"gmail.com"}`);
+assert.equal(gmailAccountsMatch(deriveGmailAddress("Test.User"), configuredMailbox), true);
+assert.equal(gmailAccountsMatch(deriveGmailAddress("testuser"), configuredMailbox), true);
 assert.equal(gmailAccountsMatch(deriveGmailAddress("other.account"), configuredMailbox), false);
-assert.equal(gmailAccountsMatch(`thecont1hermes@${"example.com"}`, configuredMailbox), false);
+assert.equal(gmailAccountsMatch(`testuser@${"example.com"}`, configuredMailbox), false);
 for (const invalid of [
   "",
   "abc",
