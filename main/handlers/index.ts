@@ -15,7 +15,8 @@ import {
   takePendingSettingsSection,
 } from "../windows/settings-window.js";
 import { closeOnboardingWindow, openOnboardingWindow } from "../windows/onboarding-window.js";
-import { openDocumentsWindow, takeInitialFocusDocId } from "../windows/documents-window.js";
+import { openDocumentsWindow, takeInitialDocumentsContext } from "../windows/documents-window.js";
+import type { DocumentDrilldown } from "../services/document-browser-model.js";
 import { showOrbMenu } from "../windows/orb-menu.js";
 import { beginOrbDrag, endOrbDrag, moveOrbBy } from "../windows/orb-window.js";
 import {
@@ -292,14 +293,31 @@ export function registerHandlers(): void {
   });
 
   // ── Document Browser / evidence card ────────────────────────────────
-  ipcMain.handle("window:openDocuments", async (_event, focusDocId?: unknown) => {
-    const id = Number(focusDocId);
-    await openDocumentsWindow(Number.isFinite(id) ? id : null);
-  });
+  ipcMain.handle(
+    "window:openDocuments",
+    async (_event, focusDocId?: unknown, drilldown?: unknown) => {
+      const id = typeof focusDocId === "number" && Number.isFinite(focusDocId) ? focusDocId : null;
+      const input = drilldown as Partial<DocumentDrilldown> | null | undefined;
+      const validDrilldown =
+        input &&
+        (input.metric === "income" ||
+          input.metric === "spending" ||
+          input.metric === "investments") &&
+        (input.period === "month" || input.period === "financial_year") &&
+        typeof input.label === "string" &&
+        typeof input.startDate === "string" &&
+        typeof input.endDate === "string" &&
+        Array.isArray(input.docIds) &&
+        input.docIds.every((id) => typeof id === "number" && Number.isFinite(id))
+          ? (input as DocumentDrilldown)
+          : null;
+      await openDocumentsWindow(id, validDrilldown);
+    },
+  );
 
   // Consumed once by the browser on mount to select an initially-focused doc.
   ipcMain.handle("documents:takeInitialFocus", async () => {
-    return takeInitialFocusDocId();
+    return takeInitialDocumentsContext();
   });
 
   ipcMain.handle("documents:list", async () => {

@@ -32,6 +32,7 @@ import {
   Coins,
   Copy,
   ExternalLink,
+  FileSearch,
   FileText,
   LineChart,
   Pencil,
@@ -44,6 +45,11 @@ import {
   ZoomIn,
 } from "lucide-react";
 import { EvidenceCard } from "./evidence-card";
+import {
+  applyDocumentDrilldown,
+  groupDocumentRows,
+  type DocumentDrilldown,
+} from "../../main/services/document-browser-model";
 import { impactSummary, useFinancePrefs, type FinancePrefs } from "../finance";
 import {
   formatDate,
@@ -94,7 +100,7 @@ function Preview({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void 
   // The image's on-screen box, captured (unscaled) on enter so pointer→origin
   // math stays stable while the image is transformed.
   const rectRef = useRef<DOMRect | null>(null);
-  const src = getFileThumbnailUrl(row.rawPath, { size: 1000, scaleFactor: 2, fallback: "icon" });
+  const src = getFileThumbnailUrl(row.rawPath, { size: 1600, scaleFactor: 2, fallback: "icon" });
   const canZoom = !errored && loaded;
 
   return (
@@ -103,7 +109,7 @@ function Preview({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void 
       onClick={onOpen}
       title="Open the original file"
       className={cn(
-        "group relative flex h-[300px] w-full items-center justify-center overflow-hidden rounded-card border border-separator bg-well",
+        "group relative flex h-[min(52vh,480px)] min-h-[340px] w-full items-center justify-center overflow-hidden rounded-card border border-separator bg-well",
         canZoom && "cursor-zoom-in",
       )}
     >
@@ -438,6 +444,7 @@ export function DocumentsView() {
   const [hoverId, setHoverId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [lane, setLane] = useState<Lane>("all");
+  const [drilldown, setDrilldown] = useState<DocumentDrilldown | null>(null);
   const prefs = useFinancePrefs();
   const queryClient = useQueryClient();
 
@@ -452,7 +459,7 @@ export function DocumentsView() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return rows.filter((r) => {
+    return applyDocumentDrilldown(rows, drilldown).filter((r) => {
       if (!laneMatches(r)) return false;
       if (!q) return true;
       return [
@@ -464,19 +471,30 @@ export function DocumentsView() {
         r.financialYear && fyLabel(r.financialYear),
       ].some((v) => v?.toLowerCase().includes(q));
     });
-  }, [rows, query, lane]);
+  }, [rows, query, lane, drilldown]);
+  const groups = useMemo(() => groupDocumentRows(filtered), [filtered]);
 
   // Consume any initial focus request, and subscribe to later ones + data changes.
   useEffect(() => {
     let cancelled = false;
-    void invoke<number | null>("documents:takeInitialFocus").then((id) => {
-      if (!cancelled && typeof id === "number") setPinnedId(id);
+    void invoke<{ docId: number | null; drilldown: DocumentDrilldown | null }>(
+      "documents:takeInitialFocus",
+    ).then((context) => {
+      if (cancelled) return;
+      if (typeof context.docId === "number") setPinnedId(context.docId);
+      if (context.drilldown) {
+        setDrilldown(context.drilldown);
+        setLane("all");
+      }
     });
     const unsubscribeFocus = window.glazeAPI.glaze.ipc.on(
       "documents:focus",
       (_e, payload: unknown) => {
-        const id = (payload as { docId?: unknown })?.docId;
+        const context = payload as { docId?: unknown; drilldown?: DocumentDrilldown | null };
+        const id = context.docId;
         if (typeof id === "number") setPinnedId(id);
+        setDrilldown(context.drilldown ?? null);
+        if (context.drilldown) setLane("all");
       },
     );
     const unsubscribeChanged = window.glazeAPI.glaze.ipc.on("documents:changed", () => {
@@ -495,8 +513,14 @@ export function DocumentsView() {
 
   // Default the pinned document to the first row once data arrives.
   useEffect(() => {
-    if (pinnedId == null && rows.length > 0) setPinnedId(rows[0].docId);
-  }, [pinnedId, rows]);
+    if (pinnedId == null && filtered.length > 0) setPinnedId(filtered[0].docId);
+  }, [pinnedId, filtered]);
+
+  useEffect(() => {
+    if (filtered.length > 0 && !filtered.some((row) => row.docId === pinnedId)) {
+      setPinnedId(filtered[0].docId);
+    }
+  }, [filtered, pinnedId]);
 
   const activeId = hoverId ?? pinnedId;
   const activeRow = rows.find((r) => r.docId === activeId) ?? null;
@@ -563,6 +587,26 @@ export function DocumentsView() {
       }
       className="h-full"
     >
+      {drilldown ? (
+        <div className="m-3 flex items-start gap-2 rounded-card border border-accent/30 bg-accent/10 px-3 py-2">
+          <FileSearch className="mt-0.5 size-4 shrink-0 text-accent" />
+          <div className="min-w-0 flex-1">
+            <Text variant="small-strong" className="capitalize">
+              {drilldown.metric} · {drilldown.label}
+            </Text>
+            <Text variant="mini" color="secondary" className="block">
+              Documents behind this snapshot total.
+            </Text>
+          </div>
+          <button
+            type="button"
+            className="text-xs text-secondary hover:text-primary"
+            onClick={() => setDrilldown(null)}
+          >
+            Clear
+          </button>
+        </div>
+      ) : null}
       {rows.length === 0 ? (
         <div className="p-4">
           <Text variant="small" color="tertiary">
@@ -591,52 +635,67 @@ export function DocumentsView() {
               if (e.key === "Enter" && pinnedId != null) openFile(pinnedId);
             }}
           >
-            {filtered.map((r) => (
-              <List.Item key={r.docId} item={r} onMouseEnter={() => setHoverId(r.docId)}>
-                <List.ItemIcon
-                  src={getFileThumbnailUrl(r.rawPath, {
-                    size: 40,
-                    scaleFactor: 2,
-                    fallback: "icon",
-                  })}
-                  alt=""
-                />
-                <List.ItemContent>
-                  <List.ItemTitle>{r.filename}</List.ItemTitle>
-                  <List.ItemDescription>
-                    {(r.personName ?? "Unidentified") +
-                      " · " +
-                      (r.docType ?? "Unknown type") +
-                      (r.financialYear ? " · " + fyLabel(r.financialYear) : "")}
-                  </List.ItemDescription>
-                </List.ItemContent>
-                <List.ItemAccessory>
-                  <div className="flex items-center gap-1.5">
-                    {r.lifecycleState !== "active" ? (
-                      <Badge color={LIFECYCLE_META[r.lifecycleState].color}>
-                        {LIFECYCLE_META[r.lifecycleState].label}
-                      </Badge>
-                    ) : null}
-                    {r.isContractNote ? (
-                      <span title="Contract note">
-                        <LineChart className="size-3.5 text-purple-9" />
-                      </span>
-                    ) : null}
-                    {r.fileType === "image" ? (
-                      <span title="Photo">
-                        <Camera className="size-3.5 text-tertiary" />
-                      </span>
-                    ) : null}
-                    {r.hasFx ? <Coins className="size-3.5 text-tertiary" /> : null}
-                    {r.hasManualOverride ? <Pencil className="size-3 text-support-blue" /> : null}
-                    <span
-                      className={cn("size-2 rounded-full", statusDotClass(r.reviewStatus))}
-                      title={OVERALL_META[r.reviewStatus].label}
-                    />
-                  </div>
-                </List.ItemAccessory>
-              </List.Item>
-            ))}
+            {groups.flatMap((group) => [
+              <div
+                key={`group-${group.label}`}
+                className="sticky top-0 z-10 flex items-center gap-2 border-y border-separator bg-popover/95 px-3 py-1.5 backdrop-blur"
+              >
+                <Text
+                  variant="mini"
+                  color="secondary"
+                  className="font-semibold uppercase tracking-[0.12em]"
+                >
+                  {group.label}
+                </Text>
+                <span className="text-[10px] tabular-nums text-tertiary">{group.rows.length}</span>
+              </div>,
+              ...group.rows.map((r) => (
+                <List.Item key={r.docId} item={r} onMouseEnter={() => setHoverId(r.docId)}>
+                  <List.ItemIcon
+                    src={getFileThumbnailUrl(r.rawPath, {
+                      size: 40,
+                      scaleFactor: 2,
+                      fallback: "icon",
+                    })}
+                    alt=""
+                  />
+                  <List.ItemContent>
+                    <List.ItemTitle>{r.filename}</List.ItemTitle>
+                    <List.ItemDescription>
+                      {formatDate(r.docDate ?? r.dateIngested, prefs) +
+                        " · " +
+                        (r.personName ? `👤 ${r.personName}` : "Unidentified") +
+                        (r.financialYear ? " · " + fyLabel(r.financialYear) : "")}
+                    </List.ItemDescription>
+                  </List.ItemContent>
+                  <List.ItemAccessory>
+                    <div className="flex items-center gap-1.5">
+                      {r.lifecycleState !== "active" ? (
+                        <Badge color={LIFECYCLE_META[r.lifecycleState].color}>
+                          {LIFECYCLE_META[r.lifecycleState].label}
+                        </Badge>
+                      ) : null}
+                      {r.isContractNote ? (
+                        <span title="Contract note">
+                          <LineChart className="size-3.5 text-purple-9" />
+                        </span>
+                      ) : null}
+                      {r.fileType === "image" ? (
+                        <span title="Photo">
+                          <Camera className="size-3.5 text-tertiary" />
+                        </span>
+                      ) : null}
+                      {r.hasFx ? <Coins className="size-3.5 text-tertiary" /> : null}
+                      {r.hasManualOverride ? <Pencil className="size-3 text-support-blue" /> : null}
+                      <span
+                        className={cn("size-2 rounded-full", statusDotClass(r.reviewStatus))}
+                        title={OVERALL_META[r.reviewStatus].label}
+                      />
+                    </div>
+                  </List.ItemAccessory>
+                </List.Item>
+              )),
+            ])}
           </List.Root>
         </div>
       )}

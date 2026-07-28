@@ -149,6 +149,8 @@ export interface DocumentBrowserRow {
   inrValue: number | null;
   currencyStatus: CurrencyFields["currencyStatus"];
   impact: FinancialImpact | null;
+  impactBucket: string | null;
+  impactDirection: "in" | "out" | "neutral" | null;
   isContractNote: boolean;
   lifecycleState: LifecycleState;
   triageReason: string | null;

@@ -90,6 +90,8 @@ export interface DocumentBrowserRow {
   currencyStatus: CurrencyFields["currencyStatus"];
   /** Plain-language financial impact (bucket + amount), or null. */
   impact: FinancialImpact | null;
+  impactBucket: string | null;
+  impactDirection: "in" | "out" | "neutral" | null;
   /** True when this is a broker contract note (securities trade). */
   isContractNote: boolean;
   /** Intake triage lane / lifecycle state. */
@@ -291,6 +293,8 @@ export function listDocumentBrowser(): DocumentBrowserRow[] {
       inrValue: doc.inrValue,
       currencyStatus: doc.currencyStatus,
       impact: doc.impact,
+      impactBucket: doc.impact?.bucket ?? null,
+      impactDirection: doc.impact?.direction ?? null,
       isContractNote: doc.isContractNote,
       lifecycleState: doc.lifecycleState,
       triageReason: doc.triageReason,
