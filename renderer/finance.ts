@@ -211,6 +211,7 @@ export interface RecurringEntry {
   endDate: string | null;
   person: string | null;
   impactBucket: ImpactBucket;
+  category: string | null;
   scope: EntryScope;
   notes: string | null;
   createdAt: string;

@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 
-import { documentIsInPeriod, rollupMoneyForPeriod, snapshotPeriodInfo } from "./snapshot-period.js";
+import {
+  documentIsInPeriod,
+  recurringContributionForPeriod,
+  recurringOccurrencesInPeriod,
+  rollupMoneyForPeriod,
+  snapshotPeriodInfo,
+} from "./snapshot-period.js";
 
 const july = new Date(2026, 6, 28, 12, 0, 0);
 const month = snapshotPeriodInfo("month", july, 4);
@@ -36,6 +42,139 @@ const calendarYear = snapshotPeriodInfo("financial_year", july, 1);
 assert.equal(calendarYear.label, "FY 2026-27");
 assert.equal(calendarYear.startDate, "2026-01-01");
 assert.equal(calendarYear.endDate, "2026-12-31");
+
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 24_000,
+      frequency: "annually",
+      startDate: "2026-07-15",
+      endDate: null,
+    },
+    month,
+  ),
+  1,
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 24_000,
+      frequency: "annually",
+      startDate: "2026-08-15",
+      endDate: null,
+    },
+    month,
+  ),
+  0,
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 2_000,
+      frequency: "monthly",
+      startDate: "2026-04-05",
+      endDate: null,
+    },
+    indiaFy,
+  ),
+  12,
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 6_000,
+      frequency: "quarterly",
+      startDate: "2026-04-30",
+      endDate: "2026-10-30",
+    },
+    indiaFy,
+  ),
+  3,
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 1_000,
+      frequency: "custom",
+      startDate: null,
+      endDate: null,
+    },
+    month,
+  ),
+  0,
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 2_000,
+      frequency: "monthly",
+      startDate: null,
+      endDate: null,
+    },
+    month,
+  ),
+  1,
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 2_000,
+      frequency: "monthly",
+      startDate: null,
+      endDate: null,
+    },
+    indiaFy,
+  ),
+  12,
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 24_000,
+      frequency: "annually",
+      startDate: null,
+      endDate: null,
+    },
+    indiaFy,
+  ),
+  0,
+);
+assert.equal(
+  recurringContributionForPeriod(
+    {
+      amount: 3_100,
+      frequency: "custom",
+      startDate: "2026-07-20",
+      endDate: null,
+    },
+    month,
+  ),
+  3_100,
+);
+assert.equal(
+  recurringContributionForPeriod(
+    {
+      amount: 3_100,
+      frequency: "custom",
+      startDate: null,
+      endDate: null,
+    },
+    month,
+  ),
+  0,
+);
+assert.equal(
+  recurringContributionForPeriod(
+    {
+      amount: Number.NaN,
+      frequency: "custom",
+      startDate: "2026-07-20",
+      endDate: null,
+    },
+    month,
+  ),
+  0,
+);
 
 assert.deepEqual(
   rollupMoneyForPeriod(

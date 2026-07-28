@@ -59,6 +59,8 @@ export function coerceRecurringInput(value: unknown): NewRecurringEntry | null {
     endDate: toIsoOrNull(v.endDate),
     person: typeof v.person === "string" && v.person.trim() ? v.person.trim() : null,
     impactBucket,
+    category:
+      typeof v.category === "string" && v.category.trim() ? v.category.trim().slice(0, 60) : null,
     scope,
     notes: typeof v.notes === "string" && v.notes.trim() ? v.notes.trim() : null,
   };

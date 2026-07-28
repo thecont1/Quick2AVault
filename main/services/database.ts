@@ -233,6 +233,8 @@ export interface RecurringEntry {
   endDate: string | null;
   person: string | null;
   impactBucket: ImpactBucket;
+  /** User-facing category used by watch/category rollups (e.g. AI Expense). */
+  category: string | null;
   scope: EntryScope;
   notes: string | null;
   createdAt: string;
@@ -729,6 +731,7 @@ function getDb(): DatabaseSync {
       end_date TEXT,
       person TEXT,
       impact_bucket TEXT NOT NULL,
+      category TEXT,
       scope TEXT NOT NULL,
       notes TEXT,
       created_at TEXT NOT NULL,
@@ -736,6 +739,7 @@ function getDb(): DatabaseSync {
     );
   `);
   ensureCurrencyColumns(db);
+  ensureRecurringColumns(db);
   logger.info("database", "Document database ready", { dbPath });
   return db;
 }
@@ -768,6 +772,16 @@ function ensureCurrencyColumns(database: DatabaseSync): void {
   for (const [name, type] of columns) {
     if (!existing.has(name)) database.exec(`ALTER TABLE documents ADD COLUMN ${name} ${type}`);
   }
+}
+
+function ensureRecurringColumns(database: DatabaseSync): void {
+  const existing = new Set(
+    (database.prepare("PRAGMA table_info(recurring_entries)").all() as Row[]).map((r) =>
+      String(r.name),
+    ),
+  );
+  if (!existing.has("category"))
+    database.exec("ALTER TABLE recurring_entries ADD COLUMN category TEXT");
 }
 
 function parseAccounting(raw: unknown): AccountingHint | null {
@@ -1227,6 +1241,7 @@ function mapRecurring(row: Row): RecurringEntry {
     endDate: row.end_date == null ? null : String(row.end_date),
     person: row.person == null ? null : String(row.person),
     impactBucket: String(row.impact_bucket) as ImpactBucket,
+    category: row.category == null ? null : String(row.category),
     scope: String(row.scope) as EntryScope,
     notes: row.notes == null ? null : String(row.notes),
     createdAt: String(row.created_at),
@@ -1244,8 +1259,8 @@ export function insertRecurringEntry(entry: NewRecurringEntry): RecurringEntry {
   const info = getDb()
     .prepare(
       `INSERT INTO recurring_entries
-         (name, amount, currency, frequency, start_date, end_date, person, impact_bucket, scope, notes, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (name, amount, currency, frequency, start_date, end_date, person, impact_bucket, category, scope, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       entry.name,
@@ -1256,6 +1271,7 @@ export function insertRecurringEntry(entry: NewRecurringEntry): RecurringEntry {
       entry.endDate,
       entry.person,
       entry.impactBucket,
+      entry.category,
       entry.scope,
       entry.notes,
       now,
@@ -1274,6 +1290,7 @@ export function updateRecurringEntry(id: number, patch: Partial<NewRecurringEntr
     endDate: "end_date",
     person: "person",
     impactBucket: "impact_bucket",
+    category: "category",
     scope: "scope",
     notes: "notes",
   };

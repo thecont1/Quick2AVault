@@ -1816,6 +1816,7 @@ interface RecurringEntry {
   endDate: string | null;
   person: string | null;
   impactBucket: ImpactBucket;
+  category: string | null;
   scope: string;
   notes: string | null;
   createdAt: string;
@@ -1872,6 +1873,7 @@ function RecurringEntriesSection() {
     endDate: "",
     person: "",
     impactBucket: "household_expense" as ImpactBucket,
+    category: "",
     scope: "personal" as (typeof SCOPE_OPTIONS)[number],
     notes: "",
   });
@@ -1886,6 +1888,7 @@ function RecurringEntriesSection() {
       endDate: "",
       person: "",
       impactBucket: "household_expense",
+      category: "",
       scope: "personal",
       notes: "",
     });
@@ -1901,6 +1904,7 @@ function RecurringEntriesSection() {
       endDate: draft.endDate || null,
       person: draft.person.trim() || null,
       impactBucket: draft.impactBucket,
+      category: draft.category.trim() || null,
       scope: draft.scope,
       notes: draft.notes.trim() || null,
     });
@@ -1992,6 +1996,12 @@ function RecurringEntriesSection() {
             value={draft.person}
             onChange={(e) => setDraft({ ...draft, person: e.target.value })}
           />
+          <Input
+            size="small"
+            placeholder="Category (e.g. AI Expense, News, Entertainment)"
+            value={draft.category}
+            onChange={(e) => setDraft({ ...draft, category: e.target.value })}
+          />
           <div className="flex items-center gap-1.5 flex-wrap">
             <Select
               value={draft.impactBucket}
@@ -2063,7 +2073,7 @@ function RecurringEntriesSection() {
                 </Text>
                 <Text variant="small" color="tertiary" className="truncate">
                   {e.amount} {e.currency} · {FREQUENCY_LABEL[e.frequency] ?? e.frequency} ·{" "}
-                  {IMPACT_LABEL[e.impactBucket]}
+                  {e.category || IMPACT_LABEL[e.impactBucket]}
                   {e.person ? ` · ${e.person}` : ""}
                 </Text>
               </div>

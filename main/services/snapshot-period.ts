@@ -1,5 +1,14 @@
 export type SnapshotPeriod = "month" | "financial_year";
 
+export type RecurringFrequency = "weekly" | "monthly" | "quarterly" | "annually" | "custom";
+
+export interface RecurringSchedule {
+  amount: number;
+  frequency: RecurringFrequency;
+  startDate: string | null;
+  endDate: string | null;
+}
+
 export interface DatedMoneyImpact {
   documentDate: string | null;
   bucket: string;
@@ -77,6 +86,82 @@ export function documentIsInPeriod(
     date >= info.startDate &&
     date <= info.endDate
   );
+}
+
+const parseIsoDate = (value: string): Date | null => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return isoDate(date) === value ? date : null;
+};
+
+const addMonths = (date: Date, months: number): Date => {
+  const day = date.getDate();
+  const target = new Date(date.getFullYear(), date.getMonth() + months, 1);
+  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(day, lastDay));
+  return target;
+};
+
+/** Amount a recurring entry contributes in a snapshot period. */
+export function recurringContributionForPeriod(
+  entry: RecurringSchedule,
+  info: SnapshotPeriodInfo,
+): number {
+  if (!Number.isFinite(entry.amount) || entry.amount < 0) return 0;
+  if (entry.frequency === "custom") {
+    if (!entry.startDate) return 0;
+    return documentIsInPeriod({ documentDate: entry.startDate }, info) ? entry.amount : 0;
+  }
+  return entry.amount * recurringOccurrencesInPeriod(entry, info);
+}
+
+/** Count concrete payment occurrences inside a snapshot period. */
+export function recurringOccurrencesInPeriod(
+  entry: RecurringSchedule,
+  info: SnapshotPeriodInfo,
+): number {
+  if (!Number.isFinite(entry.amount) || entry.amount < 0 || entry.frequency === "custom") return 0;
+  const periodStart = parseIsoDate(info.startDate);
+  const periodEnd = parseIsoDate(info.endDate);
+  const start = entry.startDate ? parseIsoDate(entry.startDate) : null;
+  const end = entry.endDate ? parseIsoDate(entry.endDate) : null;
+  if (!periodStart || !periodEnd) return 0;
+  if (!start) {
+    // Dates were optional before period-aware rollups. Preserve undated monthly
+    // entries by counting calendar months; other cadences need a real anchor.
+    if (entry.frequency !== "monthly" || end) return 0;
+    return (
+      (periodEnd.getFullYear() - periodStart.getFullYear()) * 12 +
+      periodEnd.getMonth() -
+      periodStart.getMonth() +
+      1
+    );
+  }
+  if (end && end < start) return 0;
+
+  const last = end && end < periodEnd ? end : periodEnd;
+  if (start > last) return 0;
+  let count = 0;
+  let cursor = start;
+  while (cursor <= last) {
+    if (cursor >= periodStart) count += 1;
+    switch (entry.frequency) {
+      case "weekly":
+        cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 7);
+        break;
+      case "monthly":
+        cursor = addMonths(cursor, 1);
+        break;
+      case "quarterly":
+        cursor = addMonths(cursor, 3);
+        break;
+      case "annually":
+        cursor = addMonths(cursor, 12);
+        break;
+    }
+  }
+  return count;
 }
 
 export function rollupMoneyForPeriod(
