@@ -120,6 +120,15 @@ export async function enqueueDrop(paths: string[]): Promise<DropReceipt> {
 }
 
 /**
+ * Intake files created by a trusted internal source such as Gmail. This is the
+ * same hash/copy/process queue as drag-and-drop, so cross-source duplicates are
+ * suppressed by the existing document hash invariant.
+ */
+export async function enqueueInternalFiles(paths: string[]): Promise<DropReceipt> {
+  return enqueueDrop(paths);
+}
+
+/**
  * Reprocess an existing document (rescue an irrelevant/excluded file) using its
  * raw file on disk — no re-drop. Queues alongside new drops, never blocking.
  */

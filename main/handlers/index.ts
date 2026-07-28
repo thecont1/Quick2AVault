@@ -111,6 +111,13 @@ import {
   skipReview,
   type TrainingAnswer,
 } from "../services/training.js";
+import {
+  connectGmail,
+  disconnectGmail,
+  getGmailStatus,
+  setGmailPaused,
+  syncGmailNow,
+} from "../services/gmail.js";
 
 // Sentinels used by the document-reassignment select in Settings.
 const REASSIGN_AUTO = "__auto__";
@@ -218,6 +225,16 @@ export function registerHandlers(): void {
   ipcMain.handle("window:closeSettings", async () => {
     getSettingsWindow()?.close();
   });
+
+  // Gmail-only financial dropbox. Read-only OAuth and sync; no send, reply,
+  // archive, delete, label, or read-state mutation handlers exist.
+  ipcMain.handle("gmail:getStatus", async () => getGmailStatus());
+  ipcMain.handle("gmail:connect", async (_event, localPart: unknown) => connectGmail(localPart));
+  ipcMain.handle("gmail:syncNow", async () => syncGmailNow());
+  ipcMain.handle("gmail:setPaused", async (_event, paused: unknown) =>
+    setGmailPaused(paused === true),
+  );
+  ipcMain.handle("gmail:disconnect", async () => disconnectGmail());
 
   // Consumed once by the settings renderer on mount to scroll to a section.
   ipcMain.handle("settings:takeFocusSection", async () => {

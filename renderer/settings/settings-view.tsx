@@ -54,7 +54,10 @@ import {
   Hash,
   Info,
   LayoutDashboard,
+  Mail,
+  Pause,
   Pencil,
+  Play,
   Plus,
   Repeat,
   RotateCcw,
@@ -79,6 +82,26 @@ import {
   type FinancePrefs,
   type ImpactBucket,
 } from "../finance";
+
+interface GmailStatus {
+  localPart: string | null;
+  mailbox: string | null;
+  connection:
+    | "not_configured"
+    | "disconnected"
+    | "connecting"
+    | "connected"
+    | "paused"
+    | "syncing"
+    | "error";
+  paused: boolean;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  emailCount: number;
+  documentCount: number;
+  eventCount: number;
+  oauthConfigured: boolean;
+}
 
 interface DocumentRecord {
   id: number;
@@ -2106,6 +2129,190 @@ function RecurringEntriesSection() {
   );
 }
 
+function GmailMailboxSection() {
+  const queryClient = useQueryClient();
+  const statusQuery = useQuery({
+    queryKey: ["gmailStatus"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<GmailStatus>("gmail:getStatus"),
+  });
+  const status = statusQuery.data;
+  const [localPart, setLocalPart] = useState("");
+
+  useEffect(() => {
+    if (status?.localPart) setLocalPart(status.localPart);
+  }, [status?.localPart]);
+
+  useEffect(() => {
+    const unsubscribe = window.glazeAPI.glaze.ipc.on("gmail:statusChanged", () => {
+      queryClient.invalidateQueries({ queryKey: ["gmailStatus"] });
+    });
+    return () => unsubscribe();
+  }, [queryClient]);
+
+  const connect = useMutation({
+    mutationFn: () => window.glazeAPI.glaze.ipc.invoke<GmailStatus>("gmail:connect", localPart),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["gmailStatus"], next);
+      toast.success(`Connected ${next.mailbox}`);
+    },
+    onError: (error) => toast.error(`Gmail connection failed: ${error}`),
+  });
+  const sync = useMutation({
+    mutationFn: () => window.glazeAPI.glaze.ipc.invoke<GmailStatus>("gmail:syncNow"),
+    onSuccess: (next) => queryClient.setQueryData(["gmailStatus"], next),
+    onError: (error) => toast.error(`Gmail sync failed: ${error}`),
+  });
+  const pause = useMutation({
+    mutationFn: (paused: boolean) =>
+      window.glazeAPI.glaze.ipc.invoke<GmailStatus>("gmail:setPaused", paused),
+    onSuccess: (next) => queryClient.setQueryData(["gmailStatus"], next),
+    onError: (error) => toast.error(`Couldn't update Gmail sync: ${error}`),
+  });
+  const disconnect = useMutation({
+    mutationFn: () => window.glazeAPI.glaze.ipc.invoke<GmailStatus>("gmail:disconnect"),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["gmailStatus"], next);
+      setLocalPart("");
+    },
+    onError: (error) => toast.error(`Couldn't disconnect Gmail: ${error}`),
+  });
+
+  const busy = connect.isPending || sync.isPending || pause.isPending || disconnect.isPending;
+  const statusLabel: Record<GmailStatus["connection"], string> = {
+    not_configured: "Not configured",
+    disconnected: "Ready to connect",
+    connecting: "Connecting…",
+    connected: "Connected",
+    paused: "Paused",
+    syncing: "Syncing…",
+    error: "Needs attention",
+  };
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Mail className="size-4 text-secondary" />
+        <div className="flex-1">
+          <Text variant="strong">Gmail financial dropbox</Text>
+          <Text variant="small" color="tertiary">
+            Gmail only · read-only access · Quick2A Vault never sends or changes email.
+          </Text>
+        </div>
+        {status ? <Badge>{statusLabel[status.connection]}</Badge> : null}
+      </div>
+
+      {status?.mailbox ? (
+        <>
+          <div className="rounded-card border border-separator bg-secondary/30 p-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <Text variant="small-strong" className="truncate">
+                  {status.mailbox}
+                </Text>
+                <Text variant="small" color="tertiary">
+                  Last sync{" "}
+                  {status.lastSyncAt ? formatDate(status.lastSyncAt) : "not yet completed"}
+                </Text>
+              </div>
+              <div className="flex gap-1">
+                <Button size="small" variant="filled" disabled={busy} onClick={() => sync.mutate()}>
+                  <RotateCcw className="size-3.5" /> Sync now
+                </Button>
+                <Button
+                  size="small"
+                  variant="transparent"
+                  disabled={busy}
+                  onClick={() => pause.mutate(!status.paused)}
+                >
+                  {status.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
+                  {status.paused ? "Resume" : "Pause"}
+                </Button>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <StatTile label="Emails" value={status.emailCount} />
+              <StatTile label="Documents" value={status.documentCount} />
+              <StatTile label="Body events" value={status.eventCount} />
+            </div>
+            {status.lastError ? (
+              <Text variant="small" color="red">
+                {status.lastError}
+              </Text>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              value={localPart}
+              onChange={(event) => setLocalPart(event.target.value)}
+              aria-label="Gmail local-part"
+              autoCapitalize="none"
+              autoCorrect="off"
+            />
+            <Text variant="small-strong" className="shrink-0">
+              @gmail.com
+            </Text>
+            <Button
+              size="small"
+              variant="filled"
+              disabled={busy || !localPart.trim()}
+              onClick={() => connect.mutate()}
+            >
+              Reconnect
+            </Button>
+            <Button
+              size="small"
+              variant="transparent"
+              disabled={busy}
+              onClick={() => disconnect.mutate()}
+            >
+              Disconnect
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <Label>
+            Gmail mailbox
+            <div className="flex items-center gap-2">
+              <Input
+                value={localPart}
+                onChange={(event) => setLocalPart(event.target.value)}
+                placeholder="financial.dropbox"
+                autoCapitalize="none"
+                autoCorrect="off"
+              />
+              <Text variant="small-strong" className="shrink-0">
+                @gmail.com
+              </Text>
+            </div>
+          </Label>
+          <Button
+            variant="accent"
+            disabled={busy || !localPart.trim() || status?.oauthConfigured === false}
+            onClick={() => connect.mutate()}
+          >
+            Connect Gmail
+          </Button>
+          {status?.oauthConfigured === false ? (
+            <Text variant="small" color="red">
+              This build needs a Google desktop OAuth client ID before Gmail can connect.
+            </Text>
+          ) : null}
+        </div>
+      )}
+
+      <div className="rounded-card border border-separator p-3 flex flex-col gap-1">
+        <Text variant="small-strong">Forwarding setup</Text>
+        <Text variant="small" color="secondary">
+          In each household mailbox, create Gmail forwarding or filter rules for invoices, receipts,
+          UPI alerts, subscriptions, broker notes, utility bills, and travel receipts. Forward them
+          to the mailbox shown above. One-off messages can be forwarded manually.
+        </Text>
+      </div>
+    </section>
+  );
+}
+
 /** Editable finance / locale preferences (India defaults on first run). */
 function FinancePreferencesSection() {
   const queryClient = useQueryClient();
@@ -2636,6 +2843,9 @@ export function SettingsView() {
             </Button>
           </div>
         </section>
+      </Zone>
+      <Zone>
+        <GmailMailboxSection />
       </Zone>
       <Zone>
         <FinancePreferencesSection />

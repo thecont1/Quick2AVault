@@ -35,6 +35,17 @@ Drop a file — any file — and the moment it's safely copied into your vault, 
 - **Batch support:** Drop 10 files at once; see live progress.
 - **Failure safety:** If processing fails, the original is always safe. A near-orb toast explains what happened.
 
+### Gmail Financial Dropbox (Gmail Only)
+Settings can connect one user-chosen Gmail address by entering only its local part; the app derives
+`<local-part>@gmail.com` and stores no hardcoded mailbox. Google authorization uses an installed-desktop
+PKCE flow with a loopback callback and read-only Gmail scope. Refresh tokens are held by Glaze's encrypted
+OAuth token store, never in SQLite preferences.
+
+Quick2A Vault performs a bounded 30-day bootstrap (up to 100 messages), then advances via Gmail history IDs
+every five minutes. Supported attachments and relevant body-only transaction alerts enter the same SHA-256
+intake queue as dropped files, so deduplication and learned vendor/category rules behave identically. Gmail
+messages are never sent, replied to, archived, deleted, labelled, or marked read.
+
 ### Intelligent Intake Triage
 Not every file is a financial document. **Quick2AVault** performs a fast, deterministic (no-AI) first pass to decide what lane each file belongs in:
 
@@ -187,6 +198,19 @@ npm run type-check
 npm run format
 ```
 
+### Gmail OAuth build setup
+
+Create a Google Cloud OAuth client with application type **Desktop app**, enable the Gmail API, and configure
+the OAuth consent screen. Expose its public client ID to the app process as:
+
+```bash
+QUICK2AVAULT_GMAIL_CLIENT_ID="<desktop OAuth client ID>" npm run dev
+```
+
+No client secret is required or stored for the desktop PKCE flow. For an OAuth app still in Testing mode,
+add intended Gmail accounts as test users. Gmail setup remains unavailable in Settings when the client ID is
+absent; no mailbox value is supplied by the build.
+
 `glaze.ts` resolves the Glaze CLI from one of:
 - `../glaze-core/cli/glaze.js`
 - `../../../sdk/current/@glaze/core/cli/glaze.js`
@@ -195,7 +219,11 @@ This means the repo is expected to live inside a Glaze app container.
 
 ## Status & Known Limitations
 
-The app is functionally complete through the Document Browser + Evidence Card. The AI-dependent paths (conversion, extraction, snapshot refresh, training question generation, FX conversion, OCR, contract note extraction) are validated statically and by schema, but their quality and runtime behavior depend on real file drops and available AI credits. The Frankfurter FBIL API is keyless but requires network access.
+The app is functionally complete through Gmail-only intake and the Document Browser + Evidence Card. Gmail
+requires network access, a configured Google desktop OAuth client ID, and user consent. The AI-dependent paths
+(conversion, extraction, snapshot refresh, training question generation, FX conversion, OCR, contract note
+extraction) are validated statically and by schema, but their quality and runtime behavior depend on actual
+inputs and available AI credits. The Frankfurter FBIL API is keyless but requires network access.
 
 Recurring entries are planning records, not booked transactions. They remain separate from hero totals to prevent double-counting when a rent receipt, contract note, subscription invoice, or other actual document is also present. Reconciliation states (scheduled, actual, matched) are reserved for a later release rather than shipped as an unreliable heuristic.
 

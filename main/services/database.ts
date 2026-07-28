@@ -259,6 +259,15 @@ export interface DuplicateEvent {
   reason: string;
 }
 
+export interface GmailImportRecord {
+  mailbox: string;
+  messageId: string;
+  importedAt: string;
+  emailCount: number;
+  documentCount: number;
+  eventCount: number;
+}
+
 /** The kinds of rule Training Mode / review corrections can learn. */
 export type RuleType =
   | "vendor_category"
@@ -571,6 +580,19 @@ function getDb(): DatabaseSync {
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
+    );
+  `);
+  // Gmail sync provenance. Message IDs make retries idempotent; file bytes still
+  // use documents.hash so deduplication spans Gmail and manual-drop intake.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS gmail_imports (
+      mailbox TEXT NOT NULL,
+      message_id TEXT NOT NULL,
+      imported_at TEXT NOT NULL,
+      email_count INTEGER NOT NULL DEFAULT 0,
+      document_count INTEGER NOT NULL DEFAULT 0,
+      event_count INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (mailbox, message_id)
     );
   `);
   // Rules the app has learned from Training Mode answers. One row per
@@ -1486,6 +1508,56 @@ export function setSetting(key: string, value: string): void {
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     )
     .run(key, value);
+}
+
+export function deleteSetting(key: string): void {
+  getDb().prepare("DELETE FROM app_settings WHERE key = ?").run(key);
+}
+
+export function hasGmailImport(mailbox: string, messageId: string): boolean {
+  return !!getDb()
+    .prepare("SELECT 1 FROM gmail_imports WHERE mailbox = ? AND message_id = ?")
+    .get(mailbox, messageId);
+}
+
+export function saveGmailImport(record: GmailImportRecord): void {
+  getDb()
+    .prepare(
+      `INSERT INTO gmail_imports
+         (mailbox, message_id, imported_at, email_count, document_count, event_count)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(mailbox, message_id) DO NOTHING`,
+    )
+    .run(
+      record.mailbox,
+      record.messageId,
+      record.importedAt,
+      record.emailCount,
+      record.documentCount,
+      record.eventCount,
+    );
+}
+
+export function gmailImportTotals(mailbox: string | null): {
+  emailCount: number;
+  documentCount: number;
+  eventCount: number;
+} {
+  if (!mailbox) return { emailCount: 0, documentCount: 0, eventCount: 0 };
+  const row = getDb()
+    .prepare(
+      `SELECT COALESCE(SUM(email_count), 0) AS email_count,
+              COALESCE(SUM(document_count), 0) AS document_count,
+              COALESCE(SUM(event_count), 0) AS event_count
+       FROM gmail_imports
+       WHERE mailbox = ?`,
+    )
+    .get(mailbox) as Row;
+  return {
+    emailCount: Number(row.email_count ?? 0),
+    documentCount: Number(row.document_count ?? 0),
+    eventCount: Number(row.event_count ?? 0),
+  };
 }
 
 // ── Learned rules (Training Mode) ───────────────────────────────────────

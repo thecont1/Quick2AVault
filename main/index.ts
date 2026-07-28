@@ -14,6 +14,7 @@ import { reprocessRequestedDocIds } from "./services/database.js";
 import { backfillFinancialYears, reconcileReviews } from "./services/reviews.js";
 import { isFirstRun } from "./services/preferences.js";
 import { openOnboardingWindow } from "./windows/onboarding-window.js";
+import { startGmailSyncScheduler, stopGmailSyncScheduler } from "./services/gmail.js";
 
 // ── IPC Handlers ──────────────────────────────────────────────────────
 registerHandlers();
@@ -66,6 +67,7 @@ app.on("activate", (hasVisibleWindows) => {
 });
 
 app.on("before-quit", () => {
+  stopGmailSyncScheduler();
   logger.info("main", "App before-quit, cleaning up...");
 });
 
@@ -79,6 +81,7 @@ app.whenReady().then(async () => {
   // any previously-ingested documents into their financial-year buckets.
   reconcileReviews();
   backfillFinancialYears();
+  startGmailSyncScheduler();
 
   // Pick up any documents the user asked to reprocess "later" in a prior session.
   const pending = reprocessRequestedDocIds();
