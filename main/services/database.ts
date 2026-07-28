@@ -137,6 +137,10 @@ export interface FinancialImpact {
   direction: ImpactDirection;
   /** Canonical INR amount this document moves (for summary totals), or null. */
   amountInr: number | null;
+  /** Coarse extraction category persisted for watch-category rollups. */
+  spendCategory?: string | null;
+  /** User-facing watch category, including custom labels, when detected. */
+  watchCategory?: string | null;
   /** Short human-readable reason for the bucket. */
   reason: string;
   source: FieldSource;

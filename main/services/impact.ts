@@ -234,6 +234,8 @@ export function deriveImpact(input: {
       confidence: 0.95,
       direction: directionFor(bucket),
       amountInr,
+      spendCategory: "investment",
+      watchCategory: extraction.watchCategory,
       reason:
         contractNote.side === "sell"
           ? "A broker contract note — securities sold."
@@ -293,7 +295,16 @@ export function deriveImpact(input: {
   // No usable amount weakens the signal but doesn't invalidate the bucket.
   if (amountInr == null && confidence > 0.6) confidence = 0.6;
 
-  return { bucket, confidence, direction: directionFor(bucket), amountInr, reason, source };
+  return {
+    bucket,
+    confidence,
+    direction: directionFor(bucket),
+    amountInr,
+    spendCategory: extraction.spendCategory,
+    watchCategory: extraction.watchCategory,
+    reason,
+    source,
+  };
 }
 
 function reasonForCategory(category: SpendCategory, bucket: ImpactBucket): string {

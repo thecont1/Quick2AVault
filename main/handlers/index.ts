@@ -53,6 +53,7 @@ import {
 } from "../services/database.js";
 import { getCachedSnapshot, refreshSnapshot } from "../services/snapshot.js";
 import { getImpactPrefs, setImpactPrefs, type ImpactPrefs } from "../services/impact.js";
+import { getWatchCategories, setWatchCategories } from "../services/watch-categories.js";
 import { coerceRecurringInput } from "../services/recurring.js";
 import {
   getFinancePrefs,
@@ -250,6 +251,14 @@ export function registerHandlers(): void {
   ipcMain.handle("impactPrefs:set", async (_event, patch: unknown) => {
     const next = setImpactPrefs((patch ?? {}) as Partial<ImpactPrefs>);
     ipcMain.broadcast("impactPrefs:changed", next);
+    return next;
+  });
+
+  ipcMain.handle("watchCategories:get", async () => getWatchCategories());
+
+  ipcMain.handle("watchCategories:set", async (_event, categories: unknown) => {
+    const next = setWatchCategories(categories);
+    ipcMain.broadcast("watchCategories:changed", next);
     return next;
   });
 

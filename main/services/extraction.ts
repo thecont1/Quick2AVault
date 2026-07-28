@@ -20,6 +20,7 @@ import {
   type CurrencyFields,
   type ImpactBucket,
 } from "./database.js";
+import { watchCategoryExtractionLabels } from "./watch-categories.js";
 
 const MAX_AI_CHARS = 8000;
 
@@ -86,6 +87,8 @@ export interface DocumentExtraction {
   impactConfident: boolean;
   /** A coarse spending category used to apply user impact-mapping preferences. */
   spendCategory: SpendCategory;
+  /** A configured watch-category label, including custom categories, or null. */
+  watchCategory: string | null;
   /** The AI thinks this is a stock-broker contract note / securities trade confirmation. */
   isContractNote: boolean;
 }
@@ -116,104 +119,117 @@ const EMPTY_EXTRACTION: DocumentExtraction = {
   impactBucket: null,
   impactConfident: false,
   spendCategory: "none",
+  watchCategory: null,
   isContractNote: false,
 };
 
-const schema = z.object({
-  documentType: z
-    .string()
-    .nullable()
-    .describe(
-      "The kind of document, e.g. 'bank statement', 'invoice', 'tax document', 'insurance policy', " +
-        "'credit card statement', 'receipt', 'salary slip'. Null if genuinely unclear.",
-    ),
-  documentTypeConfident: z
-    .boolean()
-    .describe("true only if the document type is clearly identifiable"),
-  vendor: z
-    .string()
-    .nullable()
-    .describe(
-      "The issuing institution, vendor, or company the document is from (e.g. 'HDFC Bank', 'Amazon', " +
-        "'LIC'). Null if there is no clear issuer.",
-    ),
-  vendorConfident: z.boolean().describe("true only if the vendor/institution is clearly stated"),
-  documentDate: z
-    .string()
-    .nullable()
-    .describe(
-      "The primary document/statement/invoice date as YYYY-MM-DD. Null if no clear date is present.",
-    ),
-  documentDateConfident: z
-    .boolean()
-    .describe("true only if a single clear document date was found"),
-  amount: z
-    .number()
-    .nullable()
-    .describe(
-      "The single primary amount — invoice total, grand total, amount due, or statement balance — as a " +
-        "plain number without symbols or separators. Null if there is no clear single primary amount.",
-    ),
-  amountConfident: z.boolean().describe("true only if the primary amount is clear and unambiguous"),
-  currency: z
-    .enum(["USD", "EUR", "GBP", "JPY", "INR", "NONE"])
-    .describe("Currency of the primary amount; NONE if there is no clear monetary amount."),
-  flow: z
-    .enum(["expense", "income", "unknown"])
-    .describe(
-      "Does this document represent money the user PAYS (expense: invoices, bills, receipts) or RECEIVES " +
-        "(income: sales invoices you issued, salary, interest)? 'unknown' when it isn't a financial transaction.",
-    ),
-  flowConfident: z.boolean().describe("true only if the expense/income direction is clear"),
-  servicePeriodStart: z
-    .string()
-    .nullable()
-    .describe(
-      "Start of the period the goods/services cover, as YYYY-MM-DD (e.g. a subscription, rental, or insurance " +
-        "period). Null if no coverage period is stated.",
-    ),
-  servicePeriodEnd: z
-    .string()
-    .nullable()
-    .describe("End of the covered service period as YYYY-MM-DD. Null if none is stated."),
-  paymentDate: z
-    .string()
-    .nullable()
-    .describe(
-      "The date payment was actually made, as YYYY-MM-DD, if stated separately from the document date. Null otherwise.",
-    ),
-  advanceOrPrepaid: z
-    .boolean()
-    .describe(
-      "true if this looks like an advance payment, deposit, retainer, or a prepaid / annual subscription paid " +
-        "up front for a future period",
-    ),
-  impactBucket: z
-    .enum(IMPACT_BUCKETS as [ImpactBucket, ...ImpactBucket[]])
-    .nullable()
-    .describe(
-      "Which financial bucket this document most likely feeds. Use 'income' for money received (sales invoice, " +
-        "salary, interest), 'household_expense' for groceries/home bills, 'business_expense' for work costs, " +
-        "'software_utility_expense' for SaaS/AI/utility bills, 'investment_purchase'/'investment_sale' for " +
-        "securities/mutual-fund trades, 'liability_dues' for credit-card statements/loans due, 'tax_statutory' " +
-        "for tax/GST/statutory payments, 'transfer_neutral' for internal transfers, 'needs_review' if unclear. " +
-        "Null if it isn't a financial transaction.",
-    ),
-  impactBucketConfident: z.boolean().describe("true only if the impact bucket is clear"),
-  spendCategory: z
-    .enum(SPEND_CATEGORIES)
-    .describe(
-      "A coarse category of what this is, used to apply the user's preferences: 'grocery', 'software_saas' " +
-        "(SaaS / AI / software subscription), 'marketplace' (Amazon/Flipkart-style shopping), 'insurance', " +
-        "'utilities', 'rent', 'salary', 'tax', 'credit_card', 'investment', or 'none' if it fits none of these.",
-    ),
-  isContractNote: z
-    .boolean()
-    .describe(
-      "true if this is a stock-broker contract note / securities trade confirmation / 'contract note cum tax " +
-        "invoice' listing traded shares with ISINs — NOT a generic invoice.",
-    ),
-});
+function extractionSchema(watchCategories: string[]) {
+  return z.object({
+    documentType: z
+      .string()
+      .nullable()
+      .describe(
+        "The kind of document, e.g. 'bank statement', 'invoice', 'tax document', 'insurance policy', " +
+          "'credit card statement', 'receipt', 'salary slip'. Null if genuinely unclear.",
+      ),
+    documentTypeConfident: z
+      .boolean()
+      .describe("true only if the document type is clearly identifiable"),
+    vendor: z
+      .string()
+      .nullable()
+      .describe(
+        "The issuing institution, vendor, or company the document is from (e.g. 'HDFC Bank', 'Amazon', " +
+          "'LIC'). Null if there is no clear issuer.",
+      ),
+    vendorConfident: z.boolean().describe("true only if the vendor/institution is clearly stated"),
+    documentDate: z
+      .string()
+      .nullable()
+      .describe(
+        "The primary document/statement/invoice date as YYYY-MM-DD. Null if no clear date is present.",
+      ),
+    documentDateConfident: z
+      .boolean()
+      .describe("true only if a single clear document date was found"),
+    amount: z
+      .number()
+      .nullable()
+      .describe(
+        "The single primary amount — invoice total, grand total, amount due, or statement balance — as a " +
+          "plain number without symbols or separators. Null if there is no clear single primary amount.",
+      ),
+    amountConfident: z
+      .boolean()
+      .describe("true only if the primary amount is clear and unambiguous"),
+    currency: z
+      .enum(["USD", "EUR", "GBP", "JPY", "INR", "NONE"])
+      .describe("Currency of the primary amount; NONE if there is no clear monetary amount."),
+    flow: z
+      .enum(["expense", "income", "unknown"])
+      .describe(
+        "Does this document represent money the user PAYS (expense: invoices, bills, receipts) or RECEIVES " +
+          "(income: sales invoices you issued, salary, interest)? 'unknown' when it isn't a financial transaction.",
+      ),
+    flowConfident: z.boolean().describe("true only if the expense/income direction is clear"),
+    servicePeriodStart: z
+      .string()
+      .nullable()
+      .describe(
+        "Start of the period the goods/services cover, as YYYY-MM-DD (e.g. a subscription, rental, or insurance " +
+          "period). Null if no coverage period is stated.",
+      ),
+    servicePeriodEnd: z
+      .string()
+      .nullable()
+      .describe("End of the covered service period as YYYY-MM-DD. Null if none is stated."),
+    paymentDate: z
+      .string()
+      .nullable()
+      .describe(
+        "The date payment was actually made, as YYYY-MM-DD, if stated separately from the document date. Null otherwise.",
+      ),
+    advanceOrPrepaid: z
+      .boolean()
+      .describe(
+        "true if this looks like an advance payment, deposit, retainer, or a prepaid / annual subscription paid " +
+          "up front for a future period",
+      ),
+    impactBucket: z
+      .enum(IMPACT_BUCKETS as [ImpactBucket, ...ImpactBucket[]])
+      .nullable()
+      .describe(
+        "Which financial bucket this document most likely feeds. Use 'income' for money received (sales invoice, " +
+          "salary, interest), 'household_expense' for groceries/home bills, 'business_expense' for work costs, " +
+          "'software_utility_expense' for SaaS/AI/utility bills, 'investment_purchase'/'investment_sale' for " +
+          "securities/mutual-fund trades, 'liability_dues' for credit-card statements/loans due, 'tax_statutory' " +
+          "for tax/GST/statutory payments, 'transfer_neutral' for internal transfers, 'needs_review' if unclear. " +
+          "Null if it isn't a financial transaction.",
+      ),
+    impactBucketConfident: z.boolean().describe("true only if the impact bucket is clear"),
+    spendCategory: z
+      .enum(SPEND_CATEGORIES)
+      .describe(
+        "A coarse category of what this is, used to apply the user's preferences: 'grocery', 'software_saas' " +
+          "(SaaS / AI / software subscription), 'marketplace' (Amazon/Flipkart-style shopping), 'insurance', " +
+          "'utilities', 'rent', 'salary', 'tax', 'credit_card', 'investment', or 'none' if it fits none of these.",
+      ),
+    watchCategory: z
+      .string()
+      .nullable()
+      .describe(
+        watchCategories.length > 0
+          ? `If clearly applicable, return exactly one of these user watch-category labels: ${watchCategories.join(", ")}. Otherwise null.`
+          : "Null; no user watch categories are configured.",
+      ),
+    isContractNote: z
+      .boolean()
+      .describe(
+        "true if this is a stock-broker contract note / securities trade confirmation / 'contract note cum tax " +
+          "invoice' listing traded shares with ISINs — NOT a generic invoice.",
+      ),
+  });
+}
 
 function trimField(value: string | null, confident: boolean): ExtractedField {
   const v = value?.trim() ? value.trim() : null;
@@ -239,6 +255,8 @@ export async function extractDocument(text: string, filename: string): Promise<E
     };
   }
 
+  const configuredWatchCategories = watchCategoryExtractionLabels();
+  const schema = extractionSchema(configuredWatchCategories);
   let detected: z.infer<typeof schema>;
   try {
     const { object } = await generateObject({
@@ -293,6 +311,10 @@ export async function extractDocument(text: string, filename: string): Promise<E
     impactBucket: detected.impactBucket,
     impactConfident: detected.impactBucket != null && detected.impactBucketConfident,
     spendCategory: detected.spendCategory,
+    watchCategory:
+      detected.watchCategory && configuredWatchCategories.includes(detected.watchCategory.trim())
+        ? detected.watchCategory.trim()
+        : null,
     isContractNote: detected.isContractNote,
   };
 
