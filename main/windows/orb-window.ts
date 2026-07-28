@@ -9,8 +9,9 @@ import { BrowserWindow, app, logger } from "@glaze/core/backend";
 
 import { getPreloadPath, getWindowUrl } from "./window-paths.js";
 
-// Window is larger than the visible orb so its shadow and pulse have room.
-const ORB_WINDOW_SIZE = 104;
+// Window is larger than the visible logo plate so its shadow, glow and drag
+// scale-up have room to render without clipping.
+const ORB_WINDOW_SIZE = 128;
 
 let orbWindow: BrowserWindow | null = null;
 

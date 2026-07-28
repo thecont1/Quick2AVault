@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
@@ -17,7 +17,10 @@ import {
   SelectSeparator,
   SelectTrigger,
   SelectValue,
-  Separator,
+  Sidebar,
+  SidebarList,
+  SidebarListItem,
+  SplitView,
   Table,
   TableBody,
   TableCell,
@@ -50,17 +53,20 @@ import {
   GraduationCap,
   Hash,
   Info,
+  LayoutDashboard,
   Pencil,
   Plus,
   Repeat,
   RotateCcw,
   Scissors,
+  SlidersHorizontal,
   Star,
   Trash2,
   TrendingUp,
   Users,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   financialYearKey,
   formatDatePref,
@@ -2109,9 +2115,78 @@ function FinancePreferencesSection() {
   );
 }
 
+// ── Workspace shell ─────────────────────────────────────────────────────────
+
+type WorkspaceView = "overview" | "review" | "learn" | "people" | "documents" | "settings";
+
+interface NavItem {
+  id: WorkspaceView;
+  label: string;
+  purpose: string;
+  icon: LucideIcon;
+}
+
+// Top-level modes. Rarely-changed configuration lives under "Settings"; every
+// other item is an active, frequently-used surface with its own calm view — so
+// a preference never sits next to a task in one long scroll.
+const WORKSPACE_NAV: NavItem[] = [
+  { id: "overview", label: "Overview", purpose: "Your vault at a glance.", icon: LayoutDashboard },
+  { id: "review", label: "Review", purpose: "Decisions waiting on you.", icon: ClipboardList },
+  {
+    id: "learn",
+    label: "Learn",
+    purpose: "What the app has learned from you.",
+    icon: GraduationCap,
+  },
+  { id: "people", label: "People", purpose: "Identities across your documents.", icon: Users },
+  { id: "documents", label: "Documents", purpose: "Everything in your vault.", icon: FileSearch },
+  {
+    id: "settings",
+    label: "Settings",
+    purpose: "Preferences you rarely need to change.",
+    icon: SlidersHorizontal,
+  },
+];
+
+// A calm, contained zone — one grouped concern per card. Gives each top-level
+// section a distinct panel without heavy web-style cards (native-settings feel:
+// a subtly recessed surface with a hairline border and generous padding).
+function Zone({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={cn("rounded-card border border-separator bg-well p-5", className)}>
+      {children}
+    </div>
+  );
+}
+
+function StatTile({
+  label,
+  value,
+  emphasize,
+}: {
+  label: string;
+  value: number;
+  emphasize?: boolean;
+}) {
+  return (
+    <div className="flex flex-col gap-0.5 rounded-lg bg-control-subtle px-3 py-2.5">
+      <Text
+        variant="heading2"
+        className={cn("tabular-nums", emphasize && value > 0 && "text-support-orange")}
+      >
+        {value}
+      </Text>
+      <Text variant="small" color="secondary">
+        {label}
+      </Text>
+    </div>
+  );
+}
+
 export function SettingsView() {
   useTheme();
   const queryClient = useQueryClient();
+  const [view, setView] = useState<WorkspaceView>("overview");
 
   // Close the window on Escape (unless typing in a control).
   useEffect(() => {
@@ -2133,31 +2208,35 @@ export function SettingsView() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Scroll to a requested section when opened from a deep link (e.g. the
+  // Switch to the requested workspace when opened from a deep link (e.g. the
   // snapshot quick actions → "Review Queue"). Handles both the initial open and
   // subsequent requests while the window is already open.
   useEffect(() => {
-    const scrollToSection = (section: string | null) => {
-      if (!section) return;
-      window.setTimeout(() => {
-        document
-          .getElementById(`settings-${section}`)
-          ?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 80);
+    const focusSection = (section: string | null) => {
+      if (section === "review-queue") setView("review");
+      else if (section === "finance") setView("settings");
     };
     void window.glazeAPI.glaze.ipc
       .invoke<string | null>("settings:takeFocusSection")
-      .then(scrollToSection)
+      .then(focusSection)
       .catch(() => {});
     const unsubscribe = window.glazeAPI.glaze.ipc.on(
       "settings:focusSection",
       (_event, payload: unknown) => {
         const section = (payload as { section?: string } | undefined)?.section;
-        if (typeof section === "string") scrollToSection(section);
+        if (typeof section === "string") focusSection(section);
       },
     );
     return () => unsubscribe();
   }, []);
+
+  // Live count for the Review nav badge (urgency cue in the sidebar).
+  useEffect(() => {
+    const unsubscribe = window.glazeAPI.glaze.ipc.on("review:changed", () => {
+      queryClient.invalidateQueries({ queryKey: ["reviewsCount"] });
+    });
+    return () => unsubscribe();
+  }, [queryClient]);
 
   const vaultPathQuery = useQuery({
     queryKey: ["vaultPath"],
@@ -2183,6 +2262,11 @@ export function SettingsView() {
   const themeQuery = useQuery({
     queryKey: ["themeInfo"],
     queryFn: () => window.glazeAPI.nativeTheme.getInfo(),
+  });
+
+  const reviewsCountQuery = useQuery({
+    queryKey: ["reviewsCount"],
+    queryFn: () => window.glazeAPI.glaze.ipc.invoke<number>("reviews:count"),
   });
 
   const reassign = useMutation({
@@ -2214,6 +2298,9 @@ export function SettingsView() {
   const snapshot = snapshotQuery.data?.snapshot ?? null;
   const people = snapshot?.people ?? [];
   const peopleNames = people.map((p) => p.name);
+  const totalDocs = stats?.total ?? 0;
+  const convertedDocs = stats?.converted ?? 0;
+  const reviewCount = reviewsCountQuery.data ?? 0;
 
   // Map each analyzed document to its person (null = unidentified).
   const docPerson = new Map<number, string | null>();
@@ -2222,21 +2309,183 @@ export function SettingsView() {
   }
   for (const d of snapshot?.unidentified?.documents ?? []) docPerson.set(d.docId, null);
 
-  return (
-    <ScrollArea
-      toolbar={
-        <Toolbar>
-          <ToolbarContent>
+  const active = WORKSPACE_NAV.find((n) => n.id === view) ?? WORKSPACE_NAV[0];
+
+  const overview = (
+    <>
+      <Zone>
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-3">
             <AppLogo />
-            <ToolbarTitle>Quick2Afvault</ToolbarTitle>
-          </ToolbarContent>
-        </Toolbar>
-      }
-    >
-      <div className="px-5 pb-10 flex flex-col gap-8">
-        {/* Vault location */}
+            <div className="flex flex-col min-w-0">
+              <Text variant="strong">Quick2A Vault</Text>
+              <Text variant="small" color="secondary" className="truncate">
+                {vaultPathQuery.data ?? "…"}
+              </Text>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <StatTile label="Documents" value={totalDocs} />
+            <StatTile label="Converted" value={convertedDocs} />
+            <StatTile label="Needs review" value={reviewCount} emphasize />
+          </div>
+        </div>
+      </Zone>
+      <Zone>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-0.5">
+            <Text variant="strong">Quick actions</Text>
+            <Text variant="small" color="secondary">
+              Jump to the things you do most.
+            </Text>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="accent"
+              onClick={() => window.glazeAPI.glaze.ipc.invoke("snapshot:open")}
+            >
+              <TrendingUp className="size-4" />
+              Financial Snapshot
+            </Button>
+            <Button
+              variant="filled"
+              onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
+            >
+              <FileSearch className="size-4" />
+              Browse Documents
+            </Button>
+            <Button variant="transparent" onClick={handleOpenFolder}>
+              <FolderOpen className="size-4" />
+              Open Vault Folder
+            </Button>
+          </div>
+        </div>
+      </Zone>
+    </>
+  );
+
+  const documentsView = (
+    <Zone>
+      <section className="flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <Text variant="strong">Documents</Text>
+            <Text variant="small" color="secondary">
+              Browse and inspect everything in your vault.
+            </Text>
+          </div>
+          <Button
+            variant="accent"
+            className="shrink-0"
+            onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
+          >
+            <FileSearch className="size-4" />
+            Open Browser
+          </Button>
+        </div>
+        {documents.length === 0 ? (
+          <EmptyState>
+            <EmptyStateTitle>No documents yet</EmptyStateTitle>
+            <EmptyStateDescription>
+              Drag files onto the logo to add them to your vault.
+            </EmptyStateDescription>
+          </EmptyState>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead>Person</TableHead>
+                <TableHead>Added</TableHead>
+                <TableHead>Markdown</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {documents.map((doc) => {
+                const analyzed = docPerson.has(doc.id);
+                const person = docPerson.get(doc.id);
+                const value = !analyzed ? "" : person === null ? REASSIGN_UNIDENTIFIED : person;
+                return (
+                  <TableRow key={doc.id}>
+                    <TableCell className="max-w-[150px] truncate" title={doc.originalFilename}>
+                      {doc.originalFilename}
+                    </TableCell>
+                    <TableCell>
+                      <Text variant="small" color="secondary">
+                        {TYPE_LABEL[doc.fileType] ?? doc.fileType}
+                      </Text>
+                    </TableCell>
+                    <TableCell>
+                      {analyzed ? (
+                        <Select
+                          value={value}
+                          onValueChange={(target) => reassign.mutate({ docId: doc.id, target })}
+                        >
+                          <SelectTrigger size="small" variant="filled" className="w-[130px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {peopleNames.map((n) => (
+                              <SelectItem key={n} value={n}>
+                                {n}
+                              </SelectItem>
+                            ))}
+                            <SelectItem value={REASSIGN_UNIDENTIFIED}>Unidentified</SelectItem>
+                            <SelectSeparator />
+                            <SelectItem value={REASSIGN_AUTO}>Reset to AI</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Text variant="small" color="tertiary">
+                          Not analyzed
+                        </Text>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Text variant="small" color="secondary" className="tabular-nums">
+                        {formatDate(doc.dateIngested)}
+                      </Text>
+                    </TableCell>
+                    <TableCell>
+                      <Text variant="small" color={doc.markdownSuccess ? "green" : "tertiary"}>
+                        {doc.markdownSuccess ? "Converted" : "Raw only"}
+                      </Text>
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        variant="transparent"
+                        iconOnly
+                        aria-label="Inspect document"
+                        title="Open in Document Browser"
+                        onClick={() =>
+                          window.glazeAPI.glaze.ipc.invoke("window:openDocuments", doc.id)
+                        }
+                      >
+                        <FileSearch className="size-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </section>
+    </Zone>
+  );
+
+  const settingsView = (
+    <>
+      <Zone>
         <section className="flex flex-col gap-3">
-          <Text variant="strong">Vault</Text>
+          <div className="flex flex-col gap-0.5">
+            <Text variant="strong">Vault</Text>
+            <Text variant="small" color="secondary">
+              Where your originals and Markdown are stored.
+            </Text>
+          </div>
           <div className="flex items-center justify-between gap-4">
             <div className="flex flex-col min-w-0">
               <Text variant="small" color="secondary" className="truncate">
@@ -2248,159 +2497,30 @@ export function SettingsView() {
                 </Text>
               ) : null}
             </div>
-            <Button variant="accent" onClick={handleOpenFolder} className="shrink-0">
+            <Button variant="filled" onClick={handleOpenFolder} className="shrink-0">
               <FolderOpen className="size-4" />
               Open Vault Folder
             </Button>
           </div>
         </section>
-
-        <Separator />
-
-        {/* Finance & locale preferences */}
-        <div id="settings-finance" className="scroll-mt-4">
-          <FinancePreferencesSection />
-        </div>
-
-        <Separator />
-
-        {/* Impact mapping preferences */}
+      </Zone>
+      <Zone>
+        <FinancePreferencesSection />
+      </Zone>
+      <Zone>
         <ImpactPreferencesSection />
-
-        <Separator />
-
-        {/* Manual recurring entries */}
+      </Zone>
+      <Zone>
         <RecurringEntriesSection />
-
-        <Separator />
-
-        {/* Review Queue */}
-        <div id="settings-review-queue" className="scroll-mt-4">
-          <ReviewQueueSection />
-        </div>
-
-        <Separator />
-
-        {/* People */}
-        <PeopleSection />
-
-        <Separator />
-
-        {/* Ingested documents */}
-        <section className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <Text variant="strong" className="flex-1">
-              Documents
-            </Text>
-            <Button
-              variant="transparent"
-              onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
-            >
-              <FileSearch className="size-4" />
-              Browse documents
-            </Button>
-          </div>
-          {documents.length === 0 ? (
-            <EmptyState>
-              <EmptyStateTitle>No documents yet</EmptyStateTitle>
-              <EmptyStateDescription>
-                Drag files onto the orb to add them to your vault.
-              </EmptyStateDescription>
-            </EmptyState>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Person</TableHead>
-                  <TableHead>Added</TableHead>
-                  <TableHead>Markdown</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {documents.map((doc) => {
-                  const analyzed = docPerson.has(doc.id);
-                  const person = docPerson.get(doc.id);
-                  const value = !analyzed ? "" : person === null ? REASSIGN_UNIDENTIFIED : person;
-                  return (
-                    <TableRow key={doc.id}>
-                      <TableCell className="max-w-[150px] truncate" title={doc.originalFilename}>
-                        {doc.originalFilename}
-                      </TableCell>
-                      <TableCell>
-                        <Text variant="small" color="secondary">
-                          {TYPE_LABEL[doc.fileType] ?? doc.fileType}
-                        </Text>
-                      </TableCell>
-                      <TableCell>
-                        {analyzed ? (
-                          <Select
-                            value={value}
-                            onValueChange={(target) => reassign.mutate({ docId: doc.id, target })}
-                          >
-                            <SelectTrigger size="small" variant="filled" className="w-[130px]">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {peopleNames.map((n) => (
-                                <SelectItem key={n} value={n}>
-                                  {n}
-                                </SelectItem>
-                              ))}
-                              <SelectItem value={REASSIGN_UNIDENTIFIED}>Unidentified</SelectItem>
-                              <SelectSeparator />
-                              <SelectItem value={REASSIGN_AUTO}>Reset to AI</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Text variant="small" color="tertiary">
-                            Not analyzed
-                          </Text>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <Text variant="small" color="secondary" className="tabular-nums">
-                          {formatDate(doc.dateIngested)}
-                        </Text>
-                      </TableCell>
-                      <TableCell>
-                        <Text variant="small" color={doc.markdownSuccess ? "green" : "tertiary"}>
-                          {doc.markdownSuccess ? "Converted" : "Raw only"}
-                        </Text>
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="transparent"
-                          iconOnly
-                          aria-label="Inspect document"
-                          title="Open in Document Browser"
-                          onClick={() =>
-                            window.glazeAPI.glaze.ipc.invoke("window:openDocuments", doc.id)
-                          }
-                        >
-                          <FileSearch className="size-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </section>
-
-        <Separator />
-
-        {/* Training Mode */}
-        <TrainingSection />
-
-        <Separator />
-
-        {/* Appearance */}
+      </Zone>
+      <Zone>
         <section className="flex items-center justify-between gap-4">
-          <Text variant="strong">Appearance</Text>
+          <div className="flex flex-col gap-0.5">
+            <Text variant="strong">Appearance</Text>
+            <Text variant="small" color="secondary">
+              How Quick2A Vault looks.
+            </Text>
+          </div>
           <RadioGroup
             value={themeQuery.data?.themeSource ?? "system"}
             onValueChange={handleThemeChange}
@@ -2420,7 +2540,81 @@ export function SettingsView() {
             </Label>
           </RadioGroup>
         </section>
-      </div>
-    </ScrollArea>
+      </Zone>
+    </>
+  );
+
+  return (
+    <SplitView
+      storageKey="quick2a-workspace"
+      sidebarSize={{ default: 212, min: 188, max: 264 }}
+      sidebar={
+        <Sidebar
+          toolbar={
+            <Toolbar>
+              <ToolbarContent>
+                <AppLogo />
+                <ToolbarTitle>Quick2A Vault</ToolbarTitle>
+              </ToolbarContent>
+            </Toolbar>
+          }
+        >
+          <SidebarList
+            items={WORKSPACE_NAV}
+            selectedItem={active}
+            onSelectedItemChange={(n) => setView(n.id)}
+            getItemKey={(n) => n.id}
+          >
+            {WORKSPACE_NAV.map((n) => {
+              const Icon = n.icon;
+              let accessory: ReactNode = null;
+              if (n.id === "review" && reviewCount > 0) {
+                accessory = (
+                  <Badge color="orange" className="tabular-nums">
+                    {reviewCount}
+                  </Badge>
+                );
+              } else if (n.id === "documents" && totalDocs > 0) {
+                accessory = totalDocs;
+              } else if (n.id === "people" && people.length > 0) {
+                accessory = people.length;
+              }
+              return (
+                <SidebarListItem
+                  key={n.id}
+                  item={n}
+                  icon={<Icon className="size-4" />}
+                  title={n.label}
+                  accessory={accessory}
+                />
+              );
+            })}
+          </SidebarList>
+        </Sidebar>
+      }
+    >
+      <ScrollArea title={active.label} subtitle={active.purpose}>
+        <div className="px-1 pb-10 flex flex-col gap-5">
+          {view === "overview" ? overview : null}
+          {view === "review" ? (
+            <Zone>
+              <ReviewQueueSection />
+            </Zone>
+          ) : null}
+          {view === "learn" ? (
+            <Zone>
+              <TrainingSection />
+            </Zone>
+          ) : null}
+          {view === "people" ? (
+            <Zone>
+              <PeopleSection />
+            </Zone>
+          ) : null}
+          {view === "documents" ? documentsView : null}
+          {view === "settings" ? settingsView : null}
+        </div>
+      </ScrollArea>
+    </SplitView>
   );
 }

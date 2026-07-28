@@ -5,8 +5,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { AlertCircle, ArrowDownToLine, Check, Loader2, Vault } from "lucide-react";
+import { AlertCircle, ArrowDownToLine, Bell, Check } from "lucide-react";
 import { cn } from "@glaze/core/utils";
+import logoUrl from "../assets/logo.png";
 
 type OrbStatus = "idle" | "received" | "processing" | "success" | "error";
 
@@ -262,52 +263,87 @@ export function HomeView() {
     }
   }, []);
 
-  const Icon =
-    dragActive && status !== "processing" && status !== "received"
-      ? ArrowDownToLine
-      : status === "processing"
-        ? Loader2
-        : status === "success" || status === "received"
-          ? Check
-          : status === "error"
-            ? AlertCircle
-            : Vault;
-
   const showBatch = status === "processing" && progress.total > 1;
-  // Glow only when idle and not mid-drop, so it doesn't fight the other states.
-  const trainingGlow = trainingPending > 0 && status === "idle" && !dragActive;
+  const showRing = status === "processing";
+  // Warm attention only when idle and not mid-drop, so it doesn't fight the
+  // other states (drop / processing / result flashes take priority).
+  const attention = trainingPending > 0 && status === "idle" && !dragActive;
+
+  // A single status pip in the corner keeps the branded logo visible while
+  // still communicating what's happening: green check for accepted/success,
+  // warm amber bell for questions waiting, red for a genuine failure.
+  const pip =
+    status === "success" || status === "received"
+      ? { Icon: Check, tone: "text-support-green" as const }
+      : status === "error"
+        ? { Icon: AlertCircle, tone: "text-support-red" as const }
+        : attention
+          ? { Icon: Bell, tone: "text-support-orange" as const }
+          : null;
 
   return (
     <div className="h-full w-full flex items-center justify-center select-none">
       <div className="relative flex items-center justify-center">
+        {/* Calm rotating progress ring while the background queue works. */}
+        {showRing ? (
+          <div className="logo-ring absolute -inset-[3px] rounded-[30px]" aria-hidden />
+        ) : null}
+
+        {/* The branded launcher: the Quick2A Vault logo on a soft backing plate
+            so it reads cleanly against busy desktops. All orb behaviors (click,
+            right-click, drag, drop) are bound here and at the window level. */}
         <div
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           className={cn(
-            "flex items-center justify-center rounded-full size-16 cursor-pointer",
-            "bg-accent text-accent-contrast transition-all duration-200 ease-out",
-            // Theme-aware edge/shadow so the orb reads cleanly on light and dark desktops.
-            "ring-1 ring-black/10 shadow-lg shadow-black/20",
-            "dark:ring-white/20 dark:shadow-xl dark:shadow-black/50",
-            dragActive && "scale-110 shadow-xl",
+            "relative size-24 overflow-hidden rounded-[27px] cursor-pointer",
+            "bg-panel transition-all duration-200 ease-out",
+            // Theme-aware edge/shadow so the logo reads cleanly on any desktop.
+            "ring-1 ring-black/10 shadow-lg shadow-black/25",
+            "dark:ring-white/15 dark:shadow-xl dark:shadow-black/60",
+            dragActive && "scale-110 shadow-xl ring-2 ring-accent",
             status === "received" && "orb-received",
-            status === "processing" && "orb-pulse",
-            trainingGlow && "orb-training ring-white/60 dark:ring-white/70",
+            attention && "orb-training",
           )}
         >
-          <Icon
-            className={cn("size-7", status === "processing" && "animate-spin")}
-            strokeWidth={2}
+          <img
+            src={logoUrl}
+            alt="Quick2A Vault"
+            draggable={false}
+            className="pointer-events-none size-full object-cover"
           />
+
+          {/* Drop affordance: a clear accent target over the logo without
+              hiding its charm. */}
+          {dragActive ? (
+            <div className="absolute inset-0 flex items-center justify-center rounded-[27px] bg-accent/25">
+              <div className="rounded-full bg-accent p-2 text-accent-contrast shadow-md">
+                <ArrowDownToLine className="size-6" strokeWidth={2.25} />
+              </div>
+            </div>
+          ) : null}
         </div>
+
+        {/* Status pip — a small badge in the corner; keeps the logo dominant. */}
+        {pip ? (
+          <div
+            className={cn(
+              "absolute -bottom-1 -right-1 flex items-center justify-center rounded-full size-7",
+              "bg-panel ring-1 ring-black/10 dark:ring-white/15 shadow-sm badge-pop",
+              pip.tone,
+            )}
+          >
+            <pip.Icon className="size-4" strokeWidth={2.5} />
+          </div>
+        ) : null}
 
         {/* Batch progress: how many files are left in a multi-file drop. */}
         {showBatch ? (
           <div
             className={cn(
-              "absolute -bottom-1 left-1/2 -translate-x-1/2 px-2 py-px rounded-full",
+              "absolute -bottom-1.5 left-1/2 -translate-x-1/2 px-2 py-px rounded-full",
               "bg-panel text-primary text-[10px] font-semibold tabular-nums leading-tight",
               "ring-1 ring-black/10 dark:ring-white/15 shadow-sm whitespace-nowrap",
             )}
