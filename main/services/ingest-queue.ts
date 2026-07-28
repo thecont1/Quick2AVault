@@ -58,6 +58,11 @@ const inFlightHashes = new Set<string>();
 let processing = false;
 let draining = false;
 
+/** Destructive maintenance may run only when no intake task can recreate data. */
+export function isIngestIdle(): boolean {
+  return !draining && !processing && queue.length === 0;
+}
+
 // Counters + collected results for the current run (reset when the queue drains).
 let runTotal = 0;
 let runDone = 0;

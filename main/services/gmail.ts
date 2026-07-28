@@ -341,6 +341,16 @@ export function syncGmailNow(): Promise<GmailStatus> {
   return syncPromise;
 }
 
+export function isGmailSyncIdle(): boolean {
+  return syncPromise == null;
+}
+
+/** Re-read connection state after document data/provenance is cleared. */
+export function notifyGmailDataReset(): void {
+  runtimeState = null;
+  broadcastStatus();
+}
+
 export function startGmailSyncScheduler(): void {
   if (syncTimer) return;
   void getGmailStatus().then((status) => {

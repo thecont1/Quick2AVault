@@ -52,6 +52,7 @@ import {
   type ReviewField,
   type RuleType,
 } from "../services/database.js";
+import { purgeAllDocuments } from "../services/document-purge.js";
 import { getCachedSnapshot, refreshSnapshot } from "../services/snapshot.js";
 import { getImpactPrefs, setImpactPrefs, type ImpactPrefs } from "../services/impact.js";
 import { getWatchCategories, setWatchCategories } from "../services/watch-categories.js";
@@ -385,6 +386,10 @@ export function registerHandlers(): void {
     return Number.isFinite(id)
       ? await deleteDocumentPermanently(id)
       : { ok: false, message: "Invalid document." };
+  });
+
+  ipcMain.handle("documents:purgeAll", async () => {
+    return purgeAllDocuments();
   });
 
   // ── Duplicate events ──────────────────────────────────────────────────

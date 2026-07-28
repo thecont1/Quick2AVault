@@ -10,6 +10,8 @@ import { DatabaseSync } from "node:sqlite";
 
 import { app, logger } from "@glaze/core/backend";
 
+import { purgeDocumentRows, type DocumentPurgeResult } from "./document-purge-model.js";
+
 /** Outcome of foreign-currency detection for a document. */
 export type CurrencyStatus = "none" | "converted" | "needs_review";
 
@@ -1367,6 +1369,11 @@ export function getStats(): { total: number; converted: number } {
     )
     .get() as Row;
   return { total: Number(row.total), converted: Number(row.converted) };
+}
+
+/** Clear every document-derived row while retaining preferences and learned configuration. */
+export function purgeAllDocumentData(): DocumentPurgeResult {
+  return purgeDocumentRows(getDb());
 }
 
 // ── Snapshot cache ──────────────────────────────────────────────────────
