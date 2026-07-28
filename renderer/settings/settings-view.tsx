@@ -1569,6 +1569,123 @@ interface ImpactPrefs {
   marketplace: ImpactBucket;
 }
 
+interface WatchCategoryPreference {
+  id: string;
+  label: string;
+  pinned: boolean;
+  builtIn: boolean;
+  spendCategories: string[];
+  impactBuckets: ImpactBucket[];
+}
+
+function WatchCategoriesSection() {
+  const queryClient = useQueryClient();
+  const [customLabel, setCustomLabel] = useState("");
+  const categoriesQuery = useQuery({
+    queryKey: ["watchCategories"],
+    queryFn: () =>
+      window.glazeAPI.glaze.ipc.invoke<WatchCategoryPreference[]>("watchCategories:get"),
+  });
+  const categories = categoriesQuery.data ?? [];
+  const save = useMutation({
+    mutationFn: (next: WatchCategoryPreference[]) =>
+      window.glazeAPI.glaze.ipc.invoke<WatchCategoryPreference[]>("watchCategories:set", next),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["watchCategories"], next);
+      queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+    },
+    onError: (error) => toast.error(`Couldn't save watch categories: ${error}`),
+  });
+
+  const toggle = (id: string) =>
+    save.mutate(
+      categories.map((category) =>
+        category.id === id ? { ...category, pinned: !category.pinned } : category,
+      ),
+    );
+  const addCustom = () => {
+    const label = customLabel.trim();
+    if (!label) return;
+    save.mutate([
+      ...categories,
+      {
+        id: label,
+        label,
+        pinned: true,
+        builtIn: false,
+        spendCategories: [],
+        impactBuckets: [],
+      },
+    ]);
+    setCustomLabel("");
+  };
+  const remove = (id: string) => save.mutate(categories.filter((category) => category.id !== id));
+
+  return (
+    <section className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <Star className="size-4 text-secondary" />
+        <Text variant="strong" className="flex-1">
+          Snapshot watch categories
+        </Text>
+      </div>
+      <Text variant="small" color="tertiary">
+        Choose the everyday totals shown beneath the headline numbers. The first six pinned
+        categories appear on the compact dashboard.
+      </Text>
+      <div className="grid grid-cols-2 gap-2">
+        {categories.map((category) => (
+          <div
+            key={category.id}
+            className="flex items-center gap-2 rounded-lg bg-control-subtle px-3 py-2"
+          >
+            <button
+              type="button"
+              role="checkbox"
+              aria-checked={category.pinned}
+              onClick={() => toggle(category.id)}
+              className={cn(
+                "size-4 rounded border flex items-center justify-center shrink-0 transition-colors",
+                category.pinned ? "bg-accent border-accent text-accent-contrast" : "border-panel",
+              )}
+            >
+              {category.pinned ? <Check className="size-3" /> : null}
+            </button>
+            <Text variant="small" className="flex-1 truncate">
+              {category.label}
+            </Text>
+            {!category.builtIn ? (
+              <button
+                type="button"
+                onClick={() => remove(category.id)}
+                aria-label={`Remove ${category.label}`}
+              >
+                <X className="size-3.5 text-tertiary hover:text-primary" />
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <Input
+          size="small"
+          value={customLabel}
+          onChange={(event) => setCustomLabel(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") addCustom();
+          }}
+          placeholder="Custom category"
+          className="max-w-64"
+        />
+        <Button variant="filled" onClick={addCustom} disabled={!customLabel.trim()}>
+          <Plus className="size-4" />
+          Add
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 const SOFTWARE_CHOICES: ImpactBucket[] = [
   "business_expense",
   "software_utility_expense",
@@ -2509,6 +2626,9 @@ export function SettingsView() {
       </Zone>
       <Zone>
         <ImpactPreferencesSection />
+      </Zone>
+      <Zone>
+        <WatchCategoriesSection />
       </Zone>
       <Zone>
         <RecurringEntriesSection />
