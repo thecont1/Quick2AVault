@@ -55,7 +55,7 @@ import {
 import { getCachedSnapshot, refreshSnapshot } from "../services/snapshot.js";
 import { getImpactPrefs, setImpactPrefs, type ImpactPrefs } from "../services/impact.js";
 import { getWatchCategories, setWatchCategories } from "../services/watch-categories.js";
-import { coerceRecurringInput } from "../services/recurring.js";
+import { validateRecurringInput } from "../services/recurring.js";
 import {
   getFinancePrefs,
   isFirstRun,
@@ -267,18 +267,21 @@ export function registerHandlers(): void {
   ipcMain.handle("recurring:list", async () => listRecurringEntries());
 
   ipcMain.handle("recurring:add", async (_event, input: unknown) => {
-    const coerced = coerceRecurringInput(input);
-    if (!coerced) return null;
-    const entry = insertRecurringEntry(coerced);
+    const validated = validateRecurringInput(input);
+    if (!validated.ok) return validated;
+    const entry = insertRecurringEntry(validated.value);
     ipcMain.broadcast("recurring:changed", {});
-    return entry;
+    return { ok: true, entry };
   });
 
   ipcMain.handle("recurring:update", async (_event, id: unknown, patch: unknown) => {
     const entryId = Number(id);
-    const coerced = coerceRecurringInput(patch);
-    if (!Number.isFinite(entryId) || !coerced) return { ok: false };
-    updateRecurringEntry(entryId, coerced);
+    if (!Number.isInteger(entryId) || entryId <= 0) {
+      return { ok: false, error: "Recurring entry ID is invalid." };
+    }
+    const validated = validateRecurringInput(patch);
+    if (!validated.ok) return validated;
+    updateRecurringEntry(entryId, validated.value);
     ipcMain.broadcast("recurring:changed", {});
     return { ok: true };
   });

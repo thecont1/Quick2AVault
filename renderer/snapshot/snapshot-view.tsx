@@ -35,6 +35,7 @@ interface WatchCategorySummary {
   label: string;
   totalInr: number;
   documentCount: number;
+  scheduledEntryCount: number;
 }
 
 interface SnapshotDrilldownIds {
@@ -473,9 +474,17 @@ export function SnapshotView() {
                           <Text variant="small" className="flex-1 truncate">
                             {category.label}
                           </Text>
-                          <Text variant="small-strong" className="tabular-nums shrink-0">
-                            {formatInr(category.totalInr)}
-                          </Text>
+                          <div className="flex flex-col items-end shrink-0">
+                            <Text variant="small-strong" className="tabular-nums">
+                              {formatInr(category.totalInr)}
+                            </Text>
+                            <Text variant="mini" color="tertiary">
+                              {category.documentCount} doc{category.documentCount === 1 ? "" : "s"}
+                              {category.scheduledEntryCount > 0
+                                ? ` + ${category.scheduledEntryCount} scheduled`
+                                : ""}
+                            </Text>
+                          </div>
                         </div>
                       ))}
                     </div>

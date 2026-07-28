@@ -95,11 +95,13 @@ const parseIsoDate = (value: string): Date | null => {
   return isoDate(date) === value ? date : null;
 };
 
-const addMonths = (date: Date, months: number): Date => {
-  const day = date.getDate();
-  const target = new Date(date.getFullYear(), date.getMonth() + months, 1);
-  const lastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
-  target.setDate(Math.min(day, lastDay));
+const anchoredMonth = (anchor: Date, months: number): Date => {
+  const target = new Date(anchor.getFullYear(), anchor.getMonth() + months, 1);
+  const anchorLastDay = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0).getDate();
+  const targetLastDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(
+    anchor.getDate() === anchorLastDay ? targetLastDay : Math.min(anchor.getDate(), targetLastDay),
+  );
   return target;
 };
 
@@ -143,21 +145,23 @@ export function recurringOccurrencesInPeriod(
   const last = end && end < periodEnd ? end : periodEnd;
   if (start > last) return 0;
   let count = 0;
+  let occurrence = 0;
   let cursor = start;
   while (cursor <= last) {
     if (cursor >= periodStart) count += 1;
+    occurrence += 1;
     switch (entry.frequency) {
       case "weekly":
-        cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 7);
+        cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate() + occurrence * 7);
         break;
       case "monthly":
-        cursor = addMonths(cursor, 1);
+        cursor = anchoredMonth(start, occurrence);
         break;
       case "quarterly":
-        cursor = addMonths(cursor, 3);
+        cursor = anchoredMonth(start, occurrence * 3);
         break;
       case "annually":
-        cursor = addMonths(cursor, 12);
+        cursor = anchoredMonth(start, occurrence * 12);
         break;
     }
   }

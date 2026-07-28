@@ -1847,10 +1847,18 @@ function RecurringEntriesSection() {
   const entries = entriesQuery.data ?? [];
 
   const addMutation = useMutation({
-    mutationFn: (input: unknown) => window.glazeAPI.glaze.ipc.invoke("recurring:add", input),
+    mutationFn: async (input: unknown) => {
+      const result = await window.glazeAPI.glaze.ipc.invoke<
+        { ok: true; entry: RecurringEntry } | { ok: false; error: string }
+      >("recurring:add", input);
+      if (!result.ok) throw new Error(result.error);
+      return result.entry;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["recurring"] });
       queryClient.invalidateQueries({ queryKey: ["snapshot"] });
+      setAdding(false);
+      resetDraft();
     },
     onError: (error) => toast.error(`Couldn't add entry: ${error}`),
   });
@@ -1908,8 +1916,6 @@ function RecurringEntriesSection() {
       scope: draft.scope,
       notes: draft.notes.trim() || null,
     });
-    setAdding(false);
-    resetDraft();
   };
 
   return (
@@ -1926,8 +1932,8 @@ function RecurringEntriesSection() {
       </div>
       <Text variant="small" color="tertiary">
         Income and expenses that don't always arrive as documents (salary, rent, SIPs, school fees,
-        subscriptions, EMIs). These show up in your financial picture alongside document-derived
-        events, clearly marked as manual.
+        subscriptions, EMIs). They remain clearly marked as scheduled/manual and do not change the
+        document-derived hero totals until reconciliation is available.
       </Text>
 
       {adding ? (

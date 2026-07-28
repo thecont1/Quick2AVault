@@ -31,24 +31,28 @@ assert.deepEqual(
     [
       {
         amountInr: 100.125,
+        source: "document",
         spendCategory: "grocery",
         watchCategory: null,
         impactBucket: "household_expense",
       },
       {
         amountInr: -250,
+        source: "document",
         spendCategory: null,
         watchCategory: "Groceries",
         impactBucket: "household_expense",
       },
       {
         amountInr: 700,
+        source: "document",
         spendCategory: null,
         watchCategory: null,
         impactBucket: "shopping_discretionary",
       },
       {
         amountInr: null,
+        source: "document",
         spendCategory: "grocery",
         watchCategory: null,
         impactBucket: "household_expense",
@@ -57,8 +61,58 @@ assert.deepEqual(
     categories,
   ),
   [
-    { id: "groceries", label: "Groceries", totalInr: 350.13, documentCount: 2 },
-    { id: "discretionary", label: "Discretionary", totalInr: 700, documentCount: 1 },
+    {
+      id: "groceries",
+      label: "Groceries",
+      totalInr: 350.13,
+      documentCount: 2,
+      scheduledEntryCount: 0,
+    },
+    {
+      id: "discretionary",
+      label: "Discretionary",
+      totalInr: 700,
+      documentCount: 1,
+      scheduledEntryCount: 0,
+    },
+  ],
+);
+
+assert.deepEqual(
+  rollupWatchCategories(
+    [
+      {
+        amountInr: 100,
+        source: "document",
+        spendCategory: "grocery",
+        watchCategory: null,
+        impactBucket: "household_expense",
+      },
+      {
+        amountInr: 900,
+        source: "scheduled",
+        spendCategory: "groceries",
+        watchCategory: "groceries",
+        impactBucket: "household_expense",
+      },
+    ],
+    categories,
+  ),
+  [
+    {
+      id: "groceries",
+      label: "Groceries",
+      totalInr: 1_000,
+      documentCount: 1,
+      scheduledEntryCount: 1,
+    },
+    {
+      id: "discretionary",
+      label: "Discretionary",
+      totalInr: 0,
+      documentCount: 0,
+      scheduledEntryCount: 0,
+    },
   ],
 );
 

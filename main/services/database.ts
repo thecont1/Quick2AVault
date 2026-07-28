@@ -219,9 +219,9 @@ export const ENTRY_SCOPES: EntryScope[] = ["business", "personal", "shared"];
 
 /**
  * A manually-entered recurring financial item (salary, rent, SIP, EMI, …). It
- * participates in the financial picture alongside document-derived events, but
- * is always clearly marked as manual / recurring — never pretends a document
- * exists.
+ * is tracked separately from document-derived hero totals until a future
+ * reconciliation layer can link scheduled and actual transactions without
+ * double-counting. It never pretends a document exists.
  */
 export interface RecurringEntry {
   id: number;

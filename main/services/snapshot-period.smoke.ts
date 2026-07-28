@@ -84,8 +84,8 @@ assert.equal(
     {
       amount: 6_000,
       frequency: "quarterly",
-      startDate: "2026-04-30",
-      endDate: "2026-10-30",
+      startDate: "2026-04-29",
+      endDate: "2026-10-29",
     },
     indiaFy,
   ),
@@ -139,6 +139,98 @@ assert.equal(
   ),
   0,
 );
+const janToMarch = {
+  period: "financial_year" as const,
+  label: "Q1 2026",
+  startDate: "2026-01-01",
+  endDate: "2026-03-30",
+};
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 1,
+      frequency: "monthly",
+      startDate: "2026-01-31",
+      endDate: null,
+    },
+    janToMarch,
+  ),
+  2,
+  "Jan 31 must advance to Feb 28 then Mar 31, not drift to Mar 28",
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 1,
+      frequency: "monthly",
+      startDate: "2026-08-31",
+      endDate: null,
+    },
+    {
+      ...janToMarch,
+      label: "Aug-Oct 2026",
+      startDate: "2026-08-01",
+      endDate: "2026-10-30",
+    },
+  ),
+  2,
+  "Aug 31 must advance to Sep 30 then Oct 31",
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 1,
+      frequency: "monthly",
+      startDate: "2026-04-30",
+      endDate: null,
+    },
+    {
+      ...janToMarch,
+      label: "Apr-May 2026",
+      startDate: "2026-04-01",
+      endDate: "2026-05-30",
+    },
+  ),
+  1,
+  "An end-of-month anchor must remain at month-end when the next month is longer",
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 1,
+      frequency: "monthly",
+      startDate: "2024-01-31",
+      endDate: null,
+    },
+    {
+      ...janToMarch,
+      label: "Leap Q1 2024",
+      startDate: "2024-01-01",
+      endDate: "2024-03-30",
+    },
+  ),
+  2,
+  "Jan 31 must advance to leap-day Feb 29 then Mar 31",
+);
+assert.equal(
+  recurringOccurrencesInPeriod(
+    {
+      amount: 1,
+      frequency: "annually",
+      startDate: "2024-02-29",
+      endDate: null,
+    },
+    {
+      ...janToMarch,
+      label: "Four years",
+      startDate: "2024-01-01",
+      endDate: "2028-02-28",
+    },
+  ),
+  4,
+  "Feb 29 annual schedules use Feb 28 in non-leap years and Feb 29 in leap years",
+);
+
 assert.equal(
   recurringContributionForPeriod(
     {

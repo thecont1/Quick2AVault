@@ -41,10 +41,10 @@ import { recordPersonReview } from "./reviews.js";
 import { directionFor, IMPACT_LABEL } from "./impact.js";
 import { isActiveNow, monthlyEquivalent } from "./recurring.js";
 import { fyLabel, getFinancePrefs } from "./preferences.js";
+import { summarizeDocumentMoney } from "./financial-explainability.js";
 import {
   documentIsInPeriod,
   recurringContributionForPeriod,
-  rollupMoneyForPeriod,
   snapshotPeriodInfo,
   type SnapshotPeriod,
 } from "./snapshot-period.js";
@@ -137,6 +137,7 @@ export interface WatchCategorySummary {
   label: string;
   totalInr: number;
   documentCount: number;
+  scheduledEntryCount: number;
 }
 
 export interface SnapshotDrilldownIds {
@@ -505,9 +506,9 @@ function aggregate(attributions: Attribution[]): SnapshotData {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
- * Roll up the financial-impact buckets, document-driven investment activity, and
- * manual recurring entries into the summary layers. Pure read-time aggregation
- * over the active documents already loaded — no AI.
+ * Roll up financial-impact buckets, document-driven investment activity, and
+ * separately-labelled manual schedules. Hero totals remain document-only until
+ * scheduled-to-actual reconciliation can make every top-line rupee explainable.
  */
 function buildFinancialLayers(
   docMeta: Map<number, DocumentRecord>,
@@ -529,41 +530,40 @@ function buildFinancialLayers(
       Array.from(docMeta.entries()).filter(([, document]) => documentIsInPeriod(document, info)),
     );
     const money = rollupMoney(scopedDocs, watchPrefs, reviewCount);
-    const periodTotals = rollupMoneyForPeriod(
+    const documentMoney = summarizeDocumentMoney(
       Array.from(docMeta.values(), (document) => ({
+        docId: document.id,
         documentDate: document.documentDate,
+        lifecycleState: document.lifecycleState,
         bucket: document.impact?.bucket ?? "needs_review",
         direction: document.impact?.direction ?? "neutral",
         amountInr: document.impact?.amountInr ?? null,
       })),
       info,
     );
-    money.totals.income = periodTotals.income;
-    money.totals.householdExpenses = periodTotals.spending;
-    money.totals.investments = periodTotals.investments;
-    money.totals.documentCount = periodTotals.documentCount;
-    money.totals.undatedDocumentCount = periodTotals.undatedDocumentCount;
+    money.totals.income = documentMoney.totals.income;
+    money.totals.householdExpenses = documentMoney.totals.spending;
+    money.totals.investments = documentMoney.totals.investments;
+    money.totals.documentCount = documentMoney.totals.documentCount;
+    money.totals.undatedDocumentCount = documentMoney.totals.undatedDocumentCount;
 
+    // Scheduled/manual entries stay out of hero totals until reconciliation can
+    // link them to actual documents without double-counting. They may still feed
+    // watch categories, explicitly labelled as scheduled contributions.
     const recurringImpacts = recurringEntries.flatMap((entry) => {
       if (entry.currency.toUpperCase() !== financePrefs.currency.toUpperCase()) return [];
       const amountInr = round2(recurringContributionForPeriod(entry, info));
       if (amountInr === 0) return [];
-      const direction = directionFor(entry.impactBucket);
-      if (entry.impactBucket === "income") money.totals.income += amountInr;
-      if (entry.impactBucket === "investment_purchase") money.totals.investments += amountInr;
-      else if (direction === "out") money.totals.householdExpenses += amountInr;
       return [
         {
           amountInr,
+          source: "scheduled" as const,
           spendCategory: entry.category,
           watchCategory: entry.category,
           impactBucket: entry.impactBucket,
         },
       ];
     });
-    money.totals.income = round2(money.totals.income);
-    money.totals.householdExpenses = round2(money.totals.householdExpenses);
-    money.totals.investments = round2(money.totals.investments);
     return {
       ...info,
       totals: money.totals,
@@ -571,7 +571,7 @@ function buildFinancialLayers(
         [...money.impactsForWatch, ...recurringImpacts],
         watchPrefs,
       ),
-      drilldownIds: money.drilldownIds,
+      drilldownIds: documentMoney.drilldownIds,
     };
   };
   const periods: Record<SnapshotPeriod, PeriodSnapshot> = {
@@ -740,6 +740,7 @@ function rollupMoney(
   watchCategories: WatchCategorySummary[];
   impactsForWatch: Array<{
     amountInr: number | null;
+    source: "document";
     spendCategory: string | null;
     watchCategory: string | null;
     impactBucket: string | null;
@@ -757,6 +758,7 @@ function rollupMoney(
   };
   const impactsForWatch: Array<{
     amountInr: number | null;
+    source: "document";
     spendCategory: string | null;
     watchCategory: string | null;
     impactBucket: string | null;
@@ -786,6 +788,7 @@ function rollupMoney(
 
     impactsForWatch.push({
       amountInr: impact.amountInr,
+      source: "document",
       spendCategory: impact.spendCategory ?? null,
       watchCategory: impact.watchCategory ?? null,
       impactBucket: impact.bucket,

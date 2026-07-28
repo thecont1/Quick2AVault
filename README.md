@@ -77,7 +77,7 @@ Once a document is recognized as a financial transaction, **Quick2AVault** deriv
 A real person may appear across documents under several name variants: first-name/last-name form, reversed form, or an initialled form. **Quick2AVault** introduces a canonical Person entity with known aliases, semantic roles (self, spouse, client, supplier, bank RM, accountant, etc.), confidence, and supporting evidence. Entity resolution matches detected names using exact alias match, reordered first/last names, and initials/shortened variants. High-confidence matches link silently; uncertain ones create candidates that Training Mode asks about. User-confirmed fields are never overwritten by AI.
 
 ### Financial Snapshot
-A click-to-open popup beside the orb that summarizes the vault by person — counts, date ranges, categories, foreign-invoice totals converted to INR, an Unidentified bucket, and a global Needs Review count. Cached in SQLite for instant opening; a refresh re-runs AI attribution. The snapshot also shows hero totals (income, expenses, investments, recurring monthly outflow), per-bucket impact rollups, document-driven investment activity from broker contract notes, and manual recurring entries.
+A click-to-open popup beside the orb that summarizes the vault by person — counts, date ranges, categories, foreign-invoice totals converted to INR, an Unidentified bucket, and a global Needs Review count. Cached in SQLite for instant opening; a refresh re-runs AI attribution. Income, Spending, and Investments are strictly document-derived: every rupee in a hero total is represented by a document in its drill-down. Scheduled/manual recurring entries are tracked separately and may appear in clearly labelled watch-category rollups, but are not merged into hero totals until trustworthy scheduled-to-actual reconciliation exists.
 
 ### Review Queue
 A lightweight triage inbox for document intelligence the app isn't confident about. Every ingested document gets one review row per tracked field (person, document type, vendor, date, financial year, amount, currency conversion, accounting hint, financial impact). Anything low-confidence, conflicting, or missing stays pending and surfaces in the queue. Resolving a field keeps a full audit trail, never overwrites a user-confirmed value, and feeds corrections back into learned rules. Zero-value invoices are correctly treated as valid when the rest of the extraction is coherent.
@@ -92,7 +92,7 @@ A user-enabled mode that asks 3–5 targeted questions after each ingest, turnin
 Stock-broker contract notes ("Contract Note cum Tax Invoice") are recognized as a first-class document class, not generic invoices. The app extracts the broker, client, trade/settlement dates, contract note number, net amount, and every traded security line item (buy/sell, quantity, price, net amount, symbol/ISIN). These feed an investment-activity view and map the document to an investment purchase/sale event rather than an expense.
 
 ### Manual Recurring Entries
-Not everything arrives as a document. Salary, rent, SIPs, school fees, subscriptions, EMIs, and utilities are tracked as manual recurring entries with configurable frequency, scope (business/personal), and impact bucket. These participate in the financial picture alongside document-derived events, clearly marked as manual/recurring, and normalized to a monthly-equivalent for the Snapshot's recurring outflow figure.
+Not everything arrives as a document. Salary, rent, SIPs, school fees, subscriptions, EMIs, and utilities are tracked as manual recurring entries with configurable frequency, scope (business/personal), impact bucket, and optional watch category. They are clearly marked as scheduled/manual. They can feed labelled watch-category planning rollups with a separate scheduled-entry count, but do not alter document-derived Income, Spending, or Investments hero totals. A future reconciliation layer may link schedules to actual documents; v1.1.1 deliberately does not infer those matches.
 
 ### Native Notifications & Near-Orb Toasts
 Every batch gets a native macOS notification summarizing what happened — documents added, duplicates skipped, irrelevant files filed, conversion failures. Genuine (non-AI-blocked) conversion failures surface as a near-orb, non-focusable toast that makes clear: the original is safe, processing failed, and the document may need review.
@@ -196,6 +196,8 @@ This means the repo is expected to live inside a Glaze app container.
 ## Status & Known Limitations
 
 The app is functionally complete through the Document Browser + Evidence Card. The AI-dependent paths (conversion, extraction, snapshot refresh, training question generation, FX conversion, OCR, contract note extraction) are validated statically and by schema, but their quality and runtime behavior depend on real file drops and available AI credits. The Frankfurter FBIL API is keyless but requires network access.
+
+Recurring entries are planning records, not booked transactions. They remain separate from hero totals to prevent double-counting when a rent receipt, contract note, subscription invoice, or other actual document is also present. Reconciliation states (scheduled, actual, matched) are reserved for a later release rather than shipped as an unreliable heuristic.
 
 ## License
 
