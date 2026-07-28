@@ -10,8 +10,9 @@ import * as fs from "node:fs/promises";
 
 import { generateText, glaze, GlazeAIError } from "@glaze/core/ai";
 import { logger } from "@glaze/core/backend";
-import * as XLSX from "xlsx";
 import pdfParse from "pdf-parse/lib/pdf-parse.js";
+
+import { parseCsvBuffer, parseXlsx } from "./spreadsheet.js";
 
 export type FileType = "pdf" | "xlsx" | "csv" | "txt" | "image";
 
@@ -82,14 +83,13 @@ function rowsToMarkdownTable(rows: unknown[][]): string {
   return lines.join("\n");
 }
 
-/** Turn a spreadsheet/CSV buffer into Markdown tables (one per sheet). */
-function spreadsheetToMarkdown(buffer: Buffer): string {
-  const workbook = XLSX.read(buffer, { type: "buffer" });
+/** Turn spreadsheet sections into Markdown tables. */
+function spreadsheetSectionsToMarkdown(
+  spreadsheetSections: Array<{ name: string; rows: unknown[][] }>,
+): string {
   const sections: string[] = [];
-  for (const name of workbook.SheetNames) {
-    const sheet = workbook.Sheets[name];
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false });
-    if (workbook.SheetNames.length > 1) sections.push(`## ${name}`);
+  for (const { name, rows } of spreadsheetSections) {
+    if (spreadsheetSections.length > 1) sections.push(`## ${name}`);
     sections.push(rowsToMarkdownTable(rows));
   }
   return sections.join("\n\n");
@@ -109,10 +109,13 @@ export async function extractText(filePath: string, type: FileType): Promise<str
         const parsed = await pdfParse(buffer);
         return parsed.text.trim();
       }
-      case "xlsx":
+      case "xlsx": {
+        const buffer = await fs.readFile(filePath);
+        return spreadsheetSectionsToMarkdown(await parseXlsx(buffer));
+      }
       case "csv": {
         const buffer = await fs.readFile(filePath);
-        return spreadsheetToMarkdown(buffer);
+        return spreadsheetSectionsToMarkdown(parseCsvBuffer(buffer));
       }
       case "txt": {
         return (await fs.readFile(filePath, "utf-8")).trim();
