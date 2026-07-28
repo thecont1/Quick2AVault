@@ -168,6 +168,31 @@ function SnapshotMenu({
   const training = trainingControlPresentation(trainingOn);
   return (
     <div className="flex items-center gap-1">
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings", "review-queue")}
+          aria-label="Review Queue"
+          className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
+        >
+          <ClipboardList className="size-4" />
+        </button>
+        {pendingReviews > 0 ? (
+          <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-semibold text-destructive-foreground">
+            {pendingReviews}
+          </span>
+        ) : null}
+      </div>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
+          aria-label="Browse Documents"
+          className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
+        >
+          <FileSearch className="size-4" />
+        </button>
+      </div>
       <button
         type="button"
         onClick={toggleTraining}
@@ -188,31 +213,6 @@ function SnapshotMenu({
       >
         <Settings className="size-4" />
       </button>
-      <div className="relative">
-        <button
-          type="button"
-          onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
-          aria-label="Browse Documents"
-          className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
-        >
-          <FileSearch className="size-4" />
-        </button>
-      </div>
-      <div className="relative">
-        <button
-          type="button"
-          onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings", "review-queue")}
-          aria-label="Review Queue"
-          className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
-        >
-          <ClipboardList className="size-4" />
-        </button>
-        {pendingReviews > 0 ? (
-          <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-semibold text-destructive-foreground">
-            {pendingReviews}
-          </span>
-        ) : null}
-      </div>
     </div>
   );
 }
