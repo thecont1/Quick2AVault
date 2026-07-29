@@ -46,7 +46,7 @@ export function HomeView() {
   const [dragActive, setDragActive] = useState(false);
   // Batch progress: how many files are done out of the whole drop (0 total = idle).
   const [progress, setProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
-  // How many Training Mode reviews are waiting (drives the "training pending" glow).
+  // How many Learning Mode reviews are waiting (drives the "training pending" glow).
   const [trainingPending, setTrainingPending] = useState(0);
 
   // Latest status, readable from imperative pointer handlers.

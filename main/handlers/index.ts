@@ -567,7 +567,7 @@ export function registerHandlers(): void {
     }
   });
 
-  // ── Training Mode ───────────────────────────────────────────────────
+  // ── Learning Mode ───────────────────────────────────────────────────
   ipcMain.handle("training:getMode", async () => {
     return isTrainingMode();
   });
@@ -579,7 +579,7 @@ export function registerHandlers(): void {
   });
 
   // After a batch of drops, generate questions for each new document (when
-  // Training Mode is on), then open the popup if anything needs asking.
+  // Learning Mode is on), then open the popup if anything needs asking.
   ipcMain.handle("training:prepareBatch", async (_event, docIds: number[]) => {
     if (!isTrainingMode() || !Array.isArray(docIds)) return { pendingCount: 0 };
     const ids = docIds.map((d) => Number(d)).filter((d) => Number.isFinite(d));
@@ -610,7 +610,7 @@ export function registerHandlers(): void {
     if (learned > 0) {
       void showToast(
         `Learned ${learned} new rule${learned === 1 ? "" : "s"}`,
-        "Training Mode is getting smarter.",
+        "Learning Mode is getting smarter.",
         "info",
       );
     } else if (reinforced > 0) {
@@ -719,7 +719,7 @@ export function registerHandlers(): void {
         const tail = result.ruleAutoApplies ? " It will now auto-apply to future documents." : "";
         void showToast(
           `${verb} a rule from your correction`,
-          `Training Mode is getting smarter.${tail}`,
+          `Learning Mode is getting smarter.${tail}`,
           "info",
         );
       }

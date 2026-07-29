@@ -85,7 +85,7 @@ A lightweight, advisory classification layer that separates document facts from 
 Once a document is recognized as a financial transaction, **Quick2AVault** derives an immediate, human-readable impact: which bucket it feeds (income, household expense, business expense, software/utility expense, investment purchase/sale, liability/dues, tax/statutory, transfer/neutral, or needs review), the canonical INR amount it moves, and a confidence-backed explanation. Low-confidence guesses are framed as "Looks like…" rather than certainties. User-editable preferences steer ambiguous categories (software invoices, groceries, marketplace purchases).
 
 ### Canonical Person Intelligence
-A real person may appear across documents under several name variants: first-name/last-name form, reversed form, or an initialled form. **Quick2AVault** introduces a canonical Person entity with known aliases, semantic roles (self, spouse, client, supplier, bank RM, accountant, etc.), confidence, and supporting evidence. Entity resolution matches detected names using exact alias match, reordered first/last names, and initials/shortened variants. High-confidence matches link silently; uncertain ones create candidates that Training Mode asks about. User-confirmed fields are never overwritten by AI.
+A real person may appear across documents under several name variants: first-name/last-name form, reversed form, or an initialled form. **Quick2AVault** introduces a canonical Person entity with known aliases, semantic roles (self, spouse, client, supplier, bank RM, accountant, etc.), confidence, and supporting evidence. Entity resolution matches detected names using exact alias match, reordered first/last names, and initials/shortened variants. High-confidence matches link silently; uncertain ones create candidates that Learning Mode asks about. User-confirmed fields are never overwritten by AI.
 
 ### Financial Snapshot
 A click-to-open popup beside the orb that summarizes the vault by person — counts, date ranges, categories, foreign-invoice totals converted to INR, an Unidentified bucket, and a global Needs Review count. Cached in SQLite for instant opening; a refresh re-runs AI attribution. Income, Spending, and Investments are strictly document-derived: every rupee in a hero total is represented by a document in its drill-down. Scheduled/manual recurring entries are tracked separately and may appear in clearly labelled watch-category rollups, but are not merged into hero totals until trustworthy scheduled-to-actual reconciliation exists.
@@ -96,8 +96,8 @@ A lightweight triage inbox for document intelligence the app isn't confident abo
 ### Document Browser + Evidence Card
 A dedicated Documents window with a searchable, keyboard-navigable list and a pinned Evidence Card that shows why the app thinks what it thinks — per-field confidence, source of truth, status, and reason. Includes Confirm / Correct / Later actions, per-document person reassignment, file opening, and lifecycle controls (exclude, restore, reprocess, delete permanently).
 
-### Training Mode
-A user-enabled mode that asks 3–5 targeted questions after each ingest, turning answers into reusable learned rules (vendor→category, name variant→person, keyword→document type, account→business/personal, vendor→accounting treatment, vendor→impact bucket). Rules auto-apply after consistent confirmations and are mirrored in `~/Documents/Quick2AVault/RULES.md`. On a fresh install, Training Mode defaults to ON so the app starts learning from the very first drop — and never silently re-enables if you turn it off.
+### Learning Mode
+A user-enabled mode that asks 3–5 targeted questions after each ingest, turning answers into reusable learned rules (vendor→category, name variant→person, keyword→document type, account→business/personal, vendor→accounting treatment, vendor→impact bucket). Rules auto-apply after consistent confirmations and are mirrored in `~/Documents/Quick2AVault/RULES.md`. On a fresh install, Learning Mode defaults to ON so the app starts learning from the very first drop — and never silently re-enables if you turn it off.
 
 ### Broker Contract Note Support
 Stock-broker contract notes ("Contract Note cum Tax Invoice") are recognized as a first-class document class, not generic invoices. The app extracts the broker, client, trade/settlement dates, contract note number, net amount, and every traded security line item (buy/sell, quantity, price, net amount, symbol/ISIN). These feed an investment-activity view and map the document to an investment purchase/sale event rather than an expense.
@@ -170,7 +170,7 @@ AI is **optional** (`capabilities.ai.mode: "optional"`, grade `fast`). If the us
 - Markdown conversion falls back to the deterministic extracted representation.
 - Extraction returns empty/uncertain fields that go to the Review Queue.
 - Snapshot `getCachedSnapshot()` still works from cache; `refreshSnapshot()` shows a blocked banner alongside raw stats.
-- Training Mode doesn't run without AI.
+- Learning Mode doesn't run without AI.
 - OCR falls back to empty text; the document is still stored safely.
 
 The app **never overwrites** a `user_confirmed` or `manual` field with AI output. This is enforced by `canOverwrite()` in `database.ts` and by the resolve logic in `reviews.ts`.

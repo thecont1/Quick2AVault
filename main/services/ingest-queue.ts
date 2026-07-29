@@ -182,7 +182,7 @@ async function finalizeRun(): Promise<void> {
   notifyIngestOutcome(results);
   toastConversionFailures(results);
 
-  // Processing may have created review items and (in Training Mode) questions.
+  // Processing may have created review items and (in Learning Mode) questions.
   ipcMain.broadcast("review:changed", { count: reviewCount() });
   // Nudge any open Document Browser to refresh its list (new/triaged/reprocessed).
   ipcMain.broadcast("documents:changed", {});
@@ -193,7 +193,7 @@ async function finalizeRun(): Promise<void> {
 }
 
 /**
- * Generate Training Mode questions for freshly-ingested documents (no-op when
+ * Generate Learning Mode questions for freshly-ingested documents (no-op when
  * the mode is off), open the popup if anything needs asking, and notify the orb.
  */
 async function prepareTrainingBatch(docIds: number[]): Promise<void> {

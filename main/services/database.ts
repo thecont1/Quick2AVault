@@ -270,7 +270,7 @@ export interface GmailImportRecord {
   eventCount: number;
 }
 
-/** The kinds of rule Training Mode / review corrections can learn. */
+/** The kinds of rule Learning Mode / review corrections can learn. */
 export type RuleType =
   | "vendor_category"
   | "person_variant"
@@ -577,7 +577,7 @@ function getDb(): DatabaseSync {
       PRIMARY KEY (currency, req_date)
     );
   `);
-  // Generic key/value app settings (e.g. Training Mode on/off).
+  // Generic key/value app settings (e.g. Learning Mode on/off).
   db.exec(`
     CREATE TABLE IF NOT EXISTS app_settings (
       key TEXT PRIMARY KEY,
@@ -597,7 +597,7 @@ function getDb(): DatabaseSync {
       PRIMARY KEY (mailbox, message_id)
     );
   `);
-  // Rules the app has learned from Training Mode answers. One row per
+  // Rules the app has learned from Learning Mode answers. One row per
   // (rule_type, match_key); confidence rises each time the same rule is
   // confirmed, and evidence records why the rule exists.
   db.exec(`
@@ -615,7 +615,7 @@ function getDb(): DatabaseSync {
       UNIQUE (rule_type, match_key)
     );
   `);
-  // One row per document that passed through Training Mode, holding its
+  // One row per document that passed through Learning Mode, holding its
   // generated questions and (once answered) the user's answers.
   db.exec(`
     CREATE TABLE IF NOT EXISTS training_reviews (
@@ -1567,7 +1567,7 @@ export function gmailImportTotals(mailbox: string | null): {
   };
 }
 
-// ── Learned rules (Training Mode) ───────────────────────────────────────
+// ── Learned rules (Learning Mode) ───────────────────────────────────────
 
 /** How many consistent confirmations before a rule is auto-applied silently. */
 export const AUTO_APPLY_THRESHOLD = 2;

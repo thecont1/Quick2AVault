@@ -14,9 +14,7 @@ export interface StoredOAuthTokens extends StoredOAuthTokensInput {
 
 export const GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
-export const GOOGLE_GMAIL_SCOPES = [
-  "https://www.googleapis.com/auth/gmail.readonly",
-];
+export const GOOGLE_GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 const EXPIRY_SKEW_MS = 60 * 1000;
 
 export interface GoogleAuthorizationUrlInput {

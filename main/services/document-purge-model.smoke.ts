@@ -19,10 +19,17 @@ const purgedTables = [
   "contract_notes",
   "contract_note_trades",
 ] as const;
-const preservedTables = ["app_settings", "learned_rules", "rate_cache", "recurring_entries"] as const;
+const preservedTables = [
+  "app_settings",
+  "learned_rules",
+  "rate_cache",
+  "recurring_entries",
+] as const;
 
 const db = new DatabaseSync(":memory:");
-for (const table of [...purgedTables, ...preservedTables].filter((table) => table !== "app_settings")) {
+for (const table of [...purgedTables, ...preservedTables].filter(
+  (table) => table !== "app_settings",
+)) {
   db.exec(`CREATE TABLE ${table} (id INTEGER PRIMARY KEY, value TEXT)`);
   db.prepare(`INSERT INTO ${table} (id, value) VALUES (1, ?)`).run(table);
 }
@@ -41,8 +48,11 @@ for (const table of preservedTables.filter((table) => table !== "app_settings"))
   assert.equal(Number(row.count), 1, `${table} must be preserved`);
 }
 assert.equal(
-  (db.prepare("SELECT value FROM app_settings WHERE key = ?").get("training.mode") as { value: string })
-    .value,
+  (
+    db.prepare("SELECT value FROM app_settings WHERE key = ?").get("training.mode") as {
+      value: string;
+    }
+  ).value,
   "1",
   "ordinary app settings must be preserved",
 );

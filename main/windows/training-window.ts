@@ -1,16 +1,16 @@
 /**
- * The Training Mode popup: a small focused card shown next to the orb that asks
+ * The Learning Mode popup: a small focused card shown next to the orb that asks
  * a short set of questions about the just-ingested document. Unlike the snapshot
  * popup it does NOT dismiss on blur — the user drove this by enabling Training
- * Mode, so it stays until they Save, Skip, or turn Training Mode off.
+ * Mode, so it stays until they Save, Skip, or turn Learning Mode off.
  */
 import { BrowserWindow, screen, logger } from "@glaze/core/backend";
 
 import { getPreloadPath, getWindowUrl } from "./window-paths.js";
 import { getOrbWindow } from "./orb-window.js";
 
-const POPUP_WIDTH = 360;
-const POPUP_HEIGHT = 500;
+const POPUP_WIDTH = 380;
+const POPUP_HEIGHT = 640;
 const GAP = 10;
 
 let trainingWindow: BrowserWindow | null = null;

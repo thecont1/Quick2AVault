@@ -7,7 +7,7 @@ export interface TrainingControlPresentation {
 export function trainingControlPresentation(on: boolean): TrainingControlPresentation {
   return {
     active: on,
-    ariaLabel: on ? "Turn Training Mode off" : "Turn Training Mode on",
-    title: on ? "Training Mode is on" : "Training Mode is off",
+    ariaLabel: on ? "Turn Learning Mode off" : "Turn Learning Mode on",
+    title: on ? "Learning Mode is on" : "Learning Mode is off",
   };
 }
