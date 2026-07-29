@@ -25,7 +25,7 @@ import { extractDocument } from "./extraction.js";
 import { extractContractNote } from "./contract-note.js";
 import { buildImpactSummary, deriveImpact, getImpactPrefs } from "./impact.js";
 import { ocrDocument } from "./ocr.js";
-import { recordExtractionReviews } from "./reviews.js";
+import { recordExtractionReviews, recordPersonReview } from "./reviews.js";
 import { deriveAccountingHint } from "./accounting.js";
 import { financialYearKey, getFinancePrefs } from "./preferences.js";
 import { classifyRelevance } from "./triage.js";
@@ -292,6 +292,18 @@ export async function processIntake(job: ProcessJob): Promise<IngestResult> {
       haystack: `${filename}\n${markdown}`,
     });
 
+    // Create a "missing" person review so the Person field appears in the
+    // Evidence Card immediately — the snapshot will refine it later via
+    // recordPersonReview (which overwrites ai_inferred reviews safely).
+    recordPersonReview({
+      docId: record.id,
+      extracted: null,
+      suggested: null,
+      confidence: 0,
+      status: "missing",
+      reason: "Person attribution will be determined when the snapshot is refreshed.",
+    });
+
     logger.info("vault", "Processed file", { filename, markdownSuccess: success });
     return {
       filename,
@@ -515,6 +527,16 @@ export async function reprocessDocument(docId: number): Promise<IngestResult> {
       accounting: analysis.accounting,
       impact: analysis.impact,
       haystack: `${filename}\n${markdown}`,
+    });
+
+    // Re-create a "missing" person review (deleteFieldReviewsForDoc wiped it).
+    recordPersonReview({
+      docId,
+      extracted: null,
+      suggested: null,
+      confidence: 0,
+      status: "missing",
+      reason: "Person attribution will be determined when the snapshot is refreshed.",
     });
 
     logger.info("vault", "Reprocessed document", { docId, filename, markdownSuccess: success });
