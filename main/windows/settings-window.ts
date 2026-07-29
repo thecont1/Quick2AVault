@@ -1,6 +1,5 @@
 import { BrowserWindow, ipcMain, logger } from "@glaze/core/backend";
 import { getPreloadPath, getWindowUrl } from "./window-paths.js";
-import { getOrbWindow } from "./orb-window.js";
 
 let settingsWindow: BrowserWindow | null = null;
 // A section to scroll to on open (e.g. "review-queue"), consumed once by the
@@ -38,8 +37,6 @@ export async function openSettingsWindow(section?: string | null): Promise<void>
     title: "Settings",
     show: false,
     center: true,
-    modal: true,
-    parent: getOrbWindow() ?? undefined,
     webPreferences: {
       preload: getPreloadPath(),
     },
