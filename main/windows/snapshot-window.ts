@@ -106,7 +106,10 @@ export async function openSnapshotWindow(): Promise<void> {
 
   snapshotWindow.once("ready-to-show", () => {
     snapshotWindow?.show();
-    snapshotWindow?.focus();
+    // Don't call .focus() — it auto-focuses the first focusable element in the
+    // popup (the Review Queue icon in the header), leaving a persistent focus
+    // ring that looks like the button is "selected". The popup is already
+    // visible and interactive without stealing focus.
   });
 
   const url = await getWindowUrl("snapshot-window.html");

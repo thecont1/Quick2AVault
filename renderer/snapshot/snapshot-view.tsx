@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, ScrollArea, Separator, Text } from "@glaze/core/components";
+import { ScrollArea, Text } from "@glaze/core/components";
 import { useTheme } from "@glaze/core/hooks";
 import { cn } from "@glaze/core/utils";
 import {
   AlertCircle,
+  Bot,
   CalendarClock,
   CheckCircle2,
   ClipboardList,
@@ -13,11 +14,15 @@ import {
   Loader2,
   RefreshCw,
   Settings,
+  ShoppingBag,
+  ShoppingCart,
+  Slash,
+  Tag,
   TrendingDown,
   TrendingUp,
+  UtensilsCrossed,
 } from "lucide-react";
 
-import { trainingControlPresentation } from "./training-control-model.js";
 
 type SnapshotPeriod = "month" | "financial_year";
 
@@ -107,7 +112,27 @@ function formatUpdated(iso: string | null): string {
   return `Updated ${Math.round(minutes / 60)}h ago`;
 }
 
-function HeroStat({
+type HeroTone = "income" | "spending" | "investments";
+
+const HERO_TONES: Record<HeroTone, { card: string; label: string; subtext: string }> = {
+  income: {
+    card: "border-emerald-600/30 bg-emerald-500/10 shadow-emerald-900/5",
+    label: "text-emerald-800 dark:text-emerald-300",
+    subtext: "text-emerald-900/60 dark:text-emerald-200/60",
+  },
+  spending: {
+    card: "border-orange-600/25 bg-orange-400/10 shadow-orange-900/5",
+    label: "text-orange-800 dark:text-orange-300",
+    subtext: "text-orange-900/60 dark:text-orange-200/60",
+  },
+  investments: {
+    card: "border-sky-600/25 bg-sky-500/10 shadow-sky-900/5",
+    label: "text-sky-800 dark:text-sky-300",
+    subtext: "text-sky-900/60 dark:text-sky-200/60",
+  },
+};
+
+function HeroRow({
   label,
   amount,
   tone,
@@ -116,100 +141,127 @@ function HeroStat({
 }: {
   label: string;
   amount: number;
-  tone: "positive" | "warning" | "neutral";
-  supporting?: string;
+  tone: HeroTone;
+  supporting: ReactNode;
   onOpen: () => void;
 }) {
+  const palette = HERO_TONES[tone];
   return (
     <button
       type="button"
       onClick={onOpen}
       className={cn(
-        "group min-w-0 rounded-xl border px-4 py-4 flex flex-col gap-1.5 text-left transition-transform hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
-        tone === "positive"
-          ? "border-green-9/30 bg-green-9/10"
-          : tone === "warning"
-            ? "border-orange-9/30 bg-orange-9/10"
-            : "border-panel bg-control-subtle",
+        "group flex items-center gap-3 min-w-0 rounded-2xl border px-4 py-3 text-left shadow-sm transition-all hover:-translate-y-px hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        palette.card,
       )}
       aria-label={`Inspect documents contributing to ${label}`}
     >
-      <span className="flex items-center justify-between w-full">
-        <Text variant="mini" color="tertiary" className="uppercase tracking-[0.14em] font-semibold">
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span
+          className={cn("text-[15px] font-bold tracking-[-0.01em] leading-none", palette.label)}
+          style={{ fontFamily: "Unbounded, 'Arial Black', ui-sans-serif, system-ui" }}
+        >
           {label}
-        </Text>
-        <FileSearch className="size-3.5 text-tertiary opacity-50 transition-opacity group-hover:opacity-100" />
+        </span>
+        <span className={cn("truncate text-[10.5px] leading-snug", palette.subtext)}>
+          {supporting}
+        </span>
       </span>
       <span
-        className="block w-full truncate text-[clamp(1.75rem,5vw,2.8rem)] font-black leading-none tracking-[-0.055em] tabular-nums"
+        className="shrink-0 text-right text-[clamp(1.4rem,4.5vw,1.9rem)] font-black leading-none tracking-[-0.03em] tabular-nums"
         style={{ fontFamily: "Unbounded, 'Arial Black', ui-sans-serif, system-ui" }}
         title={formatInr(amount)}
       >
         {formatInr(amount)}
       </span>
-      {supporting ? (
-        <Text variant="mini" color="tertiary" className="truncate">
-          {supporting}
-        </Text>
-      ) : null}
     </button>
   );
 }
 
 function SnapshotMenu({
-  trainingOn,
   pendingReviews,
+  trainingOn,
   toggleTraining,
+  onRefresh,
+  refreshPending,
+  canGenerate,
 }: {
-  trainingOn: boolean;
   pendingReviews: number;
+  trainingOn: boolean;
   toggleTraining: () => void;
+  onRefresh: () => void;
+  refreshPending: boolean;
+  canGenerate: boolean;
 }) {
-  const training = trainingControlPresentation(trainingOn);
   return (
     <div className="flex items-center gap-1">
+      {/* Document Review */}
       <div className="relative">
         <button
           type="button"
           onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings", "review-queue")}
           aria-label="Review Queue"
-          className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
+          className="flex items-center justify-center size-7 rounded-full text-tertiary transition-colors hover:text-primary hover:bg-control-subtle"
         >
           <ClipboardList className="size-4" />
         </button>
         {pendingReviews > 0 ? (
-          <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-semibold text-destructive-foreground">
+          <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-[9px] font-semibold text-destructive-foreground">
             {pendingReviews}
           </span>
         ) : null}
       </div>
+
+      {/* Document Browser */}
       <div className="relative">
         <button
           type="button"
           onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openDocuments")}
           aria-label="Browse Documents"
-          className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
+          className="flex items-center justify-center size-7 rounded-full text-tertiary transition-colors hover:text-primary hover:bg-control-subtle"
         >
           <FileSearch className="size-4" />
         </button>
       </div>
+
+      {/* Learning Mode — green when on, grey with slash when off */}
       <button
         type="button"
         onClick={toggleTraining}
-        aria-label={training.ariaLabel}
-        title={training.title}
+        aria-label={trainingOn ? "Turn off Learning Mode" : "Turn on Learning Mode"}
         className={cn(
-          "flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20",
-          trainingOn && "bg-white/20",
+          "relative flex items-center justify-center size-7 rounded-full transition-colors",
+          trainingOn
+            ? "bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30"
+            : "text-tertiary hover:text-primary hover:bg-control-subtle",
         )}
       >
         <GraduationCap className="size-4" />
+        {!trainingOn ? (
+          <Slash className="absolute size-3.5 stroke-2" />
+        ) : null}
       </button>
+
+      {/* Refresh / Generate */}
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={refreshPending}
+        aria-label={canGenerate ? "Generate snapshot" : "Refresh snapshot"}
+        className={cn(
+          "flex items-center justify-center size-7 rounded-full text-tertiary transition-colors hover:text-primary hover:bg-control-subtle",
+          refreshPending && "cursor-wait opacity-60",
+        )}
+      >
+        <RefreshCw className={cn("size-4", refreshPending && "animate-spin")} />
+      </button>
+
+      {/* Settings */}
       <button
         type="button"
         onClick={() => window.glazeAPI.glaze.ipc.invoke("window:openSettings", "settings")}
         aria-label="Open Settings"
-        className="flex items-center justify-center size-7 rounded-md transition-colors hover:bg-white/20"
+        className="flex items-center justify-center size-7 rounded-full text-tertiary transition-colors hover:text-primary hover:bg-control-subtle"
       >
         <Settings className="size-4" />
       </button>
@@ -217,10 +269,47 @@ function SnapshotMenu({
   );
 }
 
+const WATCH_ICON_RULES: [RegExp, typeof ShoppingCart][] = [
+  [/grocer|food\s*mart|kirana/i, ShoppingCart],
+  [/eat|din|restaurant|food|swiggy|zomato/i, UtensilsCrossed],
+  [/discretion/i, ShoppingBag],
+  [/\b(ai|llm|chatgpt|openai|anthropic|claude)\b|expense/i, Bot],
+];
+
+function watchIconFor(label: string): typeof ShoppingCart {
+  for (const [pattern, Icon] of WATCH_ICON_RULES) {
+    if (pattern.test(label)) return Icon;
+  }
+  return Tag;
+}
+
+const WATCH_BAR_TONES = ["bg-emerald-500", "bg-orange-400", "bg-sky-500", "bg-violet-400"];
+
+const PERIOD_STORAGE_KEY = "quick2a:snapshot-period";
+
+function readStoredPeriod(): SnapshotPeriod {
+  try {
+    return window.localStorage.getItem(PERIOD_STORAGE_KEY) === "financial_year"
+      ? "financial_year"
+      : "month";
+  } catch {
+    return "month";
+  }
+}
+
 export function SnapshotView() {
   useTheme();
   const queryClient = useQueryClient();
-  const [period, setPeriod] = useState<SnapshotPeriod>("month");
+  const [period, setPeriod] = useState<SnapshotPeriod>(readStoredPeriod);
+
+  const updatePeriod = (value: SnapshotPeriod) => {
+    setPeriod(value);
+    try {
+      window.localStorage.setItem(PERIOD_STORAGE_KEY, value);
+    } catch {
+      // storage unavailable (private window edge) — in-memory state still works
+    }
+  };
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -301,9 +390,8 @@ export function SnapshotView() {
     ? (BLOCKED_MESSAGE[response.aiBlocked] ?? BLOCKED_MESSAGE.disabled)
     : null;
   const watchCategories = (active?.watchCategories ?? []).slice(0, 6);
-  const incomeMessage = totals?.income
-    ? `${formatInr(totals.income)} came in during ${active?.label ?? "this period"}.`
-    : "No recognized income in this period yet.";
+  const maxWatchTotal = Math.max(0, ...watchCategories.map((c) => c.totalInr));
+  const docsProcessed = (count: number) => `${count} document${count === 1 ? "" : "s"} processed`;
   const openDocuments = (metric?: "income" | "spending" | "investments", docId?: number) => {
     if (!metric || !active) {
       void window.glazeAPI.glaze.ipc.invoke("window:openDocuments", docId ?? null);
@@ -323,51 +411,72 @@ export function SnapshotView() {
   return (
     <div className="h-full w-full p-2.5">
       <div className="h-full w-full flex flex-col overflow-hidden rounded-2xl bg-popover border border-panel shadow-2xl">
-        <header className="flex items-center gap-2 px-4 py-3 bg-accent text-accent-contrast shrink-0">
-          <span className="font-semibold text-sm flex-1">Your Money</span>
+        <header className="flex items-center gap-3 px-4 pb-2 pt-3.5 shrink-0 border-b border-panel/60">
+          <span
+            className="flex-1 font-bold text-lg leading-none tracking-[-0.01em]"
+            style={{ fontFamily: "Unbounded, 'Arial Black', ui-sans-serif, system-ui" }}
+          >
+            Your Money
+          </span>
           <SnapshotMenu
-            trainingOn={trainingMode.data ?? false}
             pendingReviews={pendingReviews}
+            trainingOn={trainingMode.data ?? false}
             toggleTraining={() => setTrainingMode.mutate(!(trainingMode.data ?? false))}
+            onRefresh={() => refresh.mutate()}
+            refreshPending={refresh.isPending}
+            canGenerate={!!active}
           />
         </header>
 
-        <div className="px-4 pt-3 pb-2 shrink-0 flex flex-col gap-2.5">
-          <div className="grid grid-cols-2 rounded-lg bg-control-subtle p-0.5" role="tablist">
-            {(
-              [
-                ["month", "This month"],
-                ["financial_year", "This financial year"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={period === value}
-                onClick={() => setPeriod(value)}
-                className={cn(
-                  "rounded-md px-2 py-1.5 text-xs font-medium transition-colors",
-                  period === value
-                    ? "bg-popover text-primary shadow-sm"
-                    : "text-secondary hover:text-primary",
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+        <div className="px-4 pt-3 pb-2.5 shrink-0 flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
-            <CalendarClock className="size-4 text-secondary" />
+            <CalendarClock className="size-4 text-accent" />
             <Text variant="large-strong" className="flex-1">
               {active?.label ?? "Current period"}
             </Text>
+            <div
+              role="group"
+              aria-label="Snapshot period"
+              className="flex h-9 items-center rounded-lg bg-control-subtle p-0.5 text-sm font-semibold"
+            >
+              <button
+                type="button"
+                role="switch"
+                aria-checked={period === "month"}
+                aria-label="View this month"
+                onClick={() => updatePeriod("month")}
+                className={cn(
+                  "flex h-8 items-center rounded-md px-3.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1",
+                  period === "month"
+                    ? "bg-accent text-accent-contrast shadow-sm"
+                    : "text-secondary hover:text-primary hover:bg-control-subtle/70",
+                )}
+              >
+                Month
+              </button>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={period === "financial_year"}
+                aria-label="View this financial year"
+                onClick={() => updatePeriod("financial_year")}
+                className={cn(
+                  "flex h-8 items-center rounded-md px-3.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1",
+                  period === "financial_year"
+                    ? "bg-accent text-accent-contrast shadow-sm"
+                    : "text-secondary hover:text-primary hover:bg-control-subtle/70",
+                )}
+              >
+                Year
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 pl-6">
             <Text variant="mini" color="tertiary">
               {refresh.isPending ? "Updating…" : formatUpdated(response?.generatedAt ?? null)}
             </Text>
           </div>
         </div>
-        <Separator />
 
         <ScrollArea className="flex-1 min-h-0">
           <main className="px-4 py-3 flex flex-col gap-4">
@@ -383,82 +492,104 @@ export function SnapshotView() {
             {totals ? (
               <>
                 <section className="flex flex-col gap-2">
-                  <HeroStat
+                  <HeroRow
                     label="Income"
                     amount={totals.income}
-                    tone="positive"
-                    supporting={incomeMessage}
+                    tone="income"
+                    supporting={docsProcessed(active?.drilldownIds?.income?.length ?? 0)}
                     onOpen={() => openDocuments("income")}
                   />
-                  <div className="grid grid-cols-2 gap-2">
-                    <HeroStat
-                      label="Spending / outflow"
-                      amount={totals.householdExpenses}
-                      tone="warning"
-                      supporting="Investments excluded"
-                      onOpen={() => openDocuments("spending")}
-                    />
-                    <HeroStat
-                      label="Investments"
-                      amount={totals.investments}
-                      tone={
-                        totals.investments > totals.income && totals.income > 0
-                          ? "warning"
-                          : "neutral"
-                      }
-                      supporting={
-                        period === "month"
-                          ? "Put into markets this month"
-                          : "Put into markets this FY"
-                      }
-                      onOpen={() => openDocuments("investments")}
-                    />
-                  </div>
+                  <HeroRow
+                    label="Spending"
+                    amount={totals.householdExpenses}
+                    tone="spending"
+                    supporting={docsProcessed(active?.drilldownIds?.spending?.length ?? 0)}
+                    onOpen={() => openDocuments("spending")}
+                  />
+                  <HeroRow
+                    label="Investments"
+                    amount={totals.investments}
+                    tone="investments"
+                    supporting={docsProcessed(active?.drilldownIds?.investments?.length ?? 0)}
+                    onOpen={() => openDocuments("investments")}
+                  />
                 </section>
 
-                <section className="flex flex-col gap-2">
+                <section className="flex flex-col gap-2.5">
                   <div className="flex items-center gap-2">
                     <Text variant="strong" className="flex-1">
-                      Watching
+                      Watchlist
                     </Text>
                     <button
                       type="button"
                       onClick={() =>
                         window.glazeAPI.glaze.ipc.invoke("window:openSettings", "finance")
                       }
-                      className="text-xs text-secondary hover:text-primary"
+                      className="rounded-full border border-panel px-2.5 py-0.5 text-[11px] text-secondary transition-colors hover:border-accent/50 hover:text-primary"
                     >
-                      Edit in Settings
+                      Edit
                     </button>
                   </div>
                   {watchCategories.length > 0 ? (
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                      {watchCategories.map((category) => (
-                        <div
-                          key={category.id}
-                          className="flex items-center gap-2 min-w-0 py-1 border-b border-panel/70"
-                        >
-                          <span className="size-1.5 rounded-full bg-accent shrink-0" />
-                          <Text variant="small" className="flex-1 truncate">
-                            {category.label}
-                          </Text>
-                          <div className="flex flex-col items-end shrink-0">
-                            <Text variant="small-strong" className="tabular-nums">
-                              {formatInr(category.totalInr)}
-                            </Text>
-                            <Text variant="mini" color="tertiary">
-                              {category.documentCount} doc{category.documentCount === 1 ? "" : "s"}
-                              {category.scheduledEntryCount > 0
-                                ? ` + ${category.scheduledEntryCount} scheduled`
-                                : ""}
+                    <div className="flex flex-col gap-3">
+                      {watchCategories.map((category, index) => {
+                        const Icon = watchIconFor(category.label);
+                        const percent =
+                          maxWatchTotal > 0
+                            ? Math.min(100, Math.round((category.totalInr / maxWatchTotal) * 100))
+                            : 0;
+                        const barTone = WATCH_BAR_TONES[index % WATCH_BAR_TONES.length];
+                        return (
+                          <div key={category.id} className="flex items-center gap-3 min-w-0">
+                            <span className="flex shrink-0 items-center justify-center size-8 rounded-full bg-control-subtle text-secondary">
+                              <Icon className="size-4" />
+                            </span>
+                            <div className="min-w-0 flex-1 flex flex-col gap-1">
+                              <div className="flex items-baseline justify-between gap-2">
+                                <Text variant="small-strong" className="truncate">
+                                  {category.label}
+                                </Text>
+                                <Text
+                                  variant="mini"
+                                  color="tertiary"
+                                  className="shrink-0 tabular-nums"
+                                >
+                                  {category.totalInr > 0
+                                    ? `${formatInr(category.totalInr)} spent in this period`
+                                    : "No spending yet this period"}
+                                </Text>
+                              </div>
+                              <div
+                                className="relative h-1.5 w-full overflow-hidden rounded-full bg-panel"
+                                role="progressbar"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={percent}
+                                aria-label={`${category.label} usage ${percent}%`}
+                              >
+                                <div
+                                  className={cn(
+                                    "h-full rounded-full transition-[width] duration-500",
+                                    barTone,
+                                  )}
+                                  style={{ width: `${percent}%` }}
+                                />
+                              </div>
+                            </div>
+                            <Text
+                              variant="mini"
+                              color="tertiary"
+                              className="w-9 shrink-0 text-right tabular-nums"
+                            >
+                              {percent}%
                             </Text>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <Text variant="small" color="secondary">
-                      Choose categories in Settings.
+                      No spending yet this period. Choose categories to watch in Settings.
                     </Text>
                   )}
                 </section>
@@ -564,19 +695,6 @@ export function SnapshotView() {
             )}
           </main>
         </ScrollArea>
-
-        <Separator />
-        <footer className="px-4 py-2.5 shrink-0">
-          <Button
-            variant="accent"
-            className="w-full"
-            onClick={() => refresh.mutate()}
-            disabled={refresh.isPending}
-          >
-            <RefreshCw className={cn("size-4", refresh.isPending && "animate-spin")} />
-            {refresh.isPending ? "Updating…" : active ? "Refresh numbers" : "Generate snapshot"}
-          </Button>
-        </footer>
       </div>
     </div>
   );
