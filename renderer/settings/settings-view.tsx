@@ -175,7 +175,7 @@ function AppLogo() {
   );
 }
 
-// ── Training Mode ─────────────────────────────────────────────────────────
+// ── Learning Mode ─────────────────────────────────────────────────────────
 
 type RuleType =
   | "vendor_category"
@@ -206,7 +206,7 @@ interface TrainingStats {
   reviewed: number;
   ruleCount: number;
   mode: boolean;
-  /** True while Training Mode is still on its first-run default (never toggled). */
+  /** True while Learning Mode is still on its first-run default (never toggled). */
   isDefault?: boolean;
 }
 
@@ -367,7 +367,7 @@ function TrainingSection() {
   const setMode = useMutation({
     mutationFn: (on: boolean) => window.glazeAPI.glaze.ipc.invoke("training:setMode", on),
     onSuccess: invalidate,
-    onError: (error) => toast.error(`Couldn't change Training Mode: ${error}`),
+    onError: (error) => toast.error(`Couldn't change Learning Mode: ${error}`),
   });
   const addRule = useMutation({
     mutationFn: (vars: { ruleType: RuleType; matchKey: string; value: string }) =>
@@ -413,7 +413,7 @@ function TrainingSection() {
       <div className="flex items-center gap-2">
         <GraduationCap className="size-4 text-secondary" />
         <Text variant="strong" className="flex-1">
-          Training Mode
+          Learning Mode
         </Text>
         <div className="flex gap-1">
           {[
@@ -439,7 +439,7 @@ function TrainingSection() {
       <Text variant="small" color="tertiary">
         When on, the orb asks a few quick questions about each new document and learns reusable
         rules. Confirmed rules are applied automatically and won't be asked again. A readable
-        summary is saved to RULES.md in your vault. You can turn Training Mode off any time once the
+        summary is saved to RULES.md in your vault. You can turn Learning Mode off any time once the
         app has learned enough about your financial world.
       </Text>
 
@@ -448,7 +448,7 @@ function TrainingSection() {
         <div className="flex items-start gap-2 rounded-lg border border-panel bg-control-subtle px-3 py-2">
           <GraduationCap className="size-4 text-accent shrink-0 mt-0.5" />
           <Text variant="small" color="secondary">
-            Training Mode is on to help Quick2Afvault learn your financial world faster from your
+            Learning Mode is on to help Quick2Afvault learn your financial world faster from your
             first documents. Leave it on for a while, then turn it off here whenever you'd like.
           </Text>
         </div>
@@ -489,7 +489,7 @@ function TrainingSection() {
         </div>
       ) : (
         <Text variant="small" color="secondary">
-          No rules learned yet. Turn on Training Mode and drop a document to start teaching the app.
+          No rules learned yet. Turn on Learning Mode and drop a document to start teaching the app.
         </Text>
       )}
 
@@ -2864,7 +2864,9 @@ export function SettingsView() {
           {stats && stats.total > 0 ? (
             confirmPurge ? (
               <div className="flex items-center gap-2 rounded-card border border-destructive/30 bg-destructive/10 px-3 py-2">
-                <Text variant="small">This removes all documents and derived data. Settings and learned rules are kept.</Text>
+                <Text variant="small">
+                  This removes all documents and derived data. Settings and learned rules are kept.
+                </Text>
                 <div className="ml-auto flex gap-1">
                   <Button size="small" variant="transparent" onClick={() => setConfirmPurge(false)}>
                     Cancel
