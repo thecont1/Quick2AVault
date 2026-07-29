@@ -6,7 +6,7 @@
  * right. Hovering a row updates the preview + summary (fast browsing); clicking
  * pins the document and opens the full, editable Evidence Card (stable study).
  */
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
@@ -83,25 +83,67 @@ const LANE_OPTIONS: { value: Lane; label: string }[] = [
 // ── Contact-sheet preview ─────────────────────────────────────────────────
 
 // How much the hover magnifier enlarges the document under the cursor.
-const PREVIEW_ZOOM = 2.6;
-const clampPct = (n: number) => Math.min(100, Math.max(0, n));
+const PREVIEW_ZOOM = 3;
 
 /**
  * Recognizable preview with a hover magnifier: while the pointer is over the
  * image it enlarges the region under the cursor and pans as the pointer moves,
- * so fine print can be inspected without opening the file. A higher-resolution
- * thumbnail is loaded so the zoom stays sharp; clicking still opens the original.
+ * so fine print can be inspected without opening the file.
+ *
+ * Implementation: the <img> is laid out at PREVIEW_ZOOM × the container size
+ * inside an overflow-hidden wrapper, and panned via translate(). Pan offsets
+ * are written directly to CSS custom properties via requestAnimationFrame —
+ * no React re-renders during mouse movement, so the pan is buttery smooth.
  */
 function Preview({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [errored, setErrored] = useState(false);
   const [zooming, setZooming] = useState(false);
-  const [origin, setOrigin] = useState({ x: 50, y: 50 });
-  // The image's on-screen box, captured (unscaled) on enter so pointer→origin
-  // math stays stable while the image is transformed.
-  const rectRef = useRef<DOMRect | null>(null);
-  const src = getFileThumbnailUrl(row.rawPath, { size: 1600, scaleFactor: 2, fallback: "icon" });
+  const [lensPos, setLensPos] = useState({ x: 0, y: 0 });
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const containerRectRef = useRef<DOMRect | null>(null);
+  const imgRectRef = useRef<DOMRect | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const src = getFileThumbnailUrl(row.rawPath, { size: 1024, scaleFactor: 4, fallback: "icon" });
   const canZoom = !errored && loaded;
+
+  // Lens radius in px — the circular magnifier window.
+  const LENS_RADIUS = 80;
+
+  // Update lens position via rAF — no React re-renders during mouse movement.
+  const scheduleLens = useCallback((clientX: number, clientY: number) => {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const containerRect = containerRectRef.current;
+      if (!containerRect) return;
+      setLensPos({ x: clientX - containerRect.left, y: clientY - containerRect.top });
+    });
+  }, []);
+
+  // Clean up any pending rAF on unmount.
+  useEffect(() => () => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+  }, []);
+
+  // Capture the img element's actual rendered rect (after object-contain
+  // letterboxing) so the lens maps to the image, not the container.
+  const captureImgRect = useCallback(() => {
+    const img = imgRef.current;
+    if (img) imgRectRef.current = img.getBoundingClientRect();
+  }, []);
+
+  // The lens background is sized to imgRect × PREVIEW_ZOOM and positioned so
+  // the point under the cursor (in imgRect space) maps to the lens center.
+  const imgRect = imgRectRef.current;
+  const containerRect = containerRectRef.current;
+  // Cursor position relative to the img element's top-left.
+  const cursorInImgX = imgRect && containerRect ? lensPos.x - (imgRect.left - containerRect.left) : 0;
+  const cursorInImgY = imgRect && containerRect ? lensPos.y - (imgRect.top - containerRect.top) : 0;
+  const bgW = imgRect ? imgRect.width * PREVIEW_ZOOM : 0;
+  const bgH = imgRect ? imgRect.height * PREVIEW_ZOOM : 0;
+  const bgX = imgRect ? LENS_RADIUS - cursorInImgX * PREVIEW_ZOOM : 0;
+  const bgY = imgRect ? LENS_RADIUS - cursorInImgY * PREVIEW_ZOOM : 0;
 
   return (
     <button
@@ -109,44 +151,80 @@ function Preview({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void 
       onClick={onOpen}
       title="Open the original file"
       className={cn(
-        "group relative flex h-[min(52vh,480px)] min-h-[340px] w-full items-center justify-center overflow-hidden rounded-card border border-separator bg-well",
+        "group relative flex h-[min(62vh,576px)] min-h-[408px] w-full items-center justify-center overflow-hidden rounded-card border border-separator bg-well",
         canZoom && "cursor-zoom-in",
       )}
+      onMouseEnter={(e) => {
+        if (!canZoom) return;
+        containerRectRef.current = e.currentTarget.getBoundingClientRect();
+        captureImgRect();
+        setZooming(true);
+      }}
+      onMouseMove={(e) => {
+        if (!canZoom) return;
+        scheduleLens(e.clientX, e.clientY);
+      }}
+      onMouseLeave={() => {
+        if (rafRef.current !== null) {
+          cancelAnimationFrame(rafRef.current);
+          rafRef.current = null;
+        }
+        setZooming(false);
+      }}
     >
       {!errored ? (
-        <img
-          key={row.rawPath}
-          src={src}
-          alt={row.filename}
-          draggable={false}
-          decoding="async"
-          onLoad={() => setLoaded(true)}
-          onError={() => setErrored(true)}
-          onMouseEnter={(e) => {
-            if (!canZoom) return;
-            rectRef.current = e.currentTarget.getBoundingClientRect();
-            setZooming(true);
-          }}
-          onMouseMove={(e) => {
-            if (!canZoom) return;
-            const rect = rectRef.current;
-            if (!rect) return;
-            setOrigin({
-              x: clampPct(((e.clientX - rect.left) / rect.width) * 100),
-              y: clampPct(((e.clientY - rect.top) / rect.height) * 100),
-            });
-          }}
-          onMouseLeave={() => setZooming(false)}
-          style={{
-            transform: zooming ? `scale(${PREVIEW_ZOOM})` : "scale(1)",
-            transformOrigin: `${origin.x}% ${origin.y}%`,
-            transition: "transform 220ms ease-out, opacity 400ms ease-out",
-          }}
-          className={cn(
-            "max-h-full max-w-full object-contain will-change-transform",
-            loaded ? "opacity-100" : "opacity-0",
-          )}
-        />
+        <div
+          className="relative flex items-center justify-center w-full h-full"
+        >
+          <img
+            ref={imgRef}
+            key={row.rawPath}
+            src={src}
+            alt={row.filename}
+            draggable={false}
+            decoding="async"
+            onLoad={() => {
+              setLoaded(true);
+              captureImgRect();
+            }}
+            onError={() => setErrored(true)}
+            className={cn(
+              "max-h-full max-w-full object-contain",
+              loaded ? "opacity-100" : "opacity-0",
+            )}
+          />
+          {/* Magnifying glass lens — a circular window that shows a high-res
+              zoomed crop of the document under the cursor. The document image
+              itself stays static; only the lens moves and magnifies. */}
+          {canZoom && zooming ? (
+            <div
+              className="pointer-events-none absolute rounded-full border-2 border-accent shadow-xl"
+              style={{
+                width: `${LENS_RADIUS * 2}px`,
+                height: `${LENS_RADIUS * 2}px`,
+                left: lensPos.x - LENS_RADIUS,
+                top: lensPos.y - LENS_RADIUS,
+                boxShadow: "0 0 0 2000px rgba(0,0,0,0.3)",
+              }}
+            >
+              <div
+                className="absolute inset-0 rounded-full"
+                style={{
+                  backgroundImage: `url(${src})`,
+                  backgroundRepeat: "no-repeat",
+                  backgroundPosition: `${bgX}px ${bgY}px`,
+                  backgroundSize: `${bgW}px ${bgH}px`,
+                  imageRendering: "pixelated",
+                }}
+              />
+              {/* Crosshair */}
+              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+                <div className="h-3 w-px bg-white/60" />
+                <div className="h-px w-3 bg-white/60 -mt-px" />
+              </div>
+            </div>
+          ) : null}
+        </div>
       ) : (
         <div className="flex flex-col items-center gap-2 text-tertiary">
           <FileText className="size-10" strokeWidth={1.5} />
@@ -512,13 +590,15 @@ export function DocumentsView() {
   }, [queryClient]);
 
   // Default the pinned document to the first row once data arrives.
-  useEffect(() => {
-    if (pinnedId == null && filtered.length > 0) setPinnedId(filtered[0].docId);
-  }, [pinnedId, filtered]);
+  // REMOVED: we no longer auto-pin. Documents show in abridged view by default;
+  // the user clicks "Edit" to switch to the detailed edit view.
+  // useEffect(() => {
+  //   if (pinnedId == null && filtered.length > 0) setPinnedId(filtered[0].docId);
+  // }, [pinnedId, filtered]);
 
   useEffect(() => {
     if (filtered.length > 0 && !filtered.some((row) => row.docId === pinnedId)) {
-      setPinnedId(filtered[0].docId);
+      setPinnedId(null);
     }
   }, [filtered, pinnedId]);
 
@@ -723,33 +803,62 @@ export function DocumentsView() {
                   : "Hover a document to preview it, or click one to inspect and edit every field."
               }
             />
-          ) : (
+          ) : showingPinned ? (
+            // ── Edit view (pinned) — full EvidenceCard ─────────────────────
             <>
               <Preview
                 key={activeRow.docId}
                 row={activeRow}
                 onOpen={() => openFile(activeRow.docId)}
               />
-
-              {showingPinned ? (
-                detailQuery.isLoading || !detailQuery.data ? (
-                  <div className="flex flex-col gap-2">
-                    <div className="h-4 w-40 rounded-md bg-well" />
-                    <div className="h-4 w-64 rounded-md bg-well" />
-                    <div className="h-24 w-full rounded-lg bg-well" />
-                  </div>
-                ) : (
-                  <EvidenceCard
-                    detail={detailQuery.data}
-                    onChanged={() => {
-                      void detailQuery.refetch();
-                      void rowsQuery.refetch();
-                    }}
-                  />
-                )
+              <div className="flex items-center justify-between">
+                <Text variant="small" color="secondary">
+                  Editing {activeRow.filename}
+                </Text>
+                <Button
+                  size="small"
+                  variant="outline"
+                  onClick={() => setPinnedId(null)}
+                >
+                  Back to browse
+                </Button>
+              </div>
+              {detailQuery.isLoading || !detailQuery.data ? (
+                <div className="flex flex-col gap-2">
+                  <div className="h-4 w-40 rounded-md bg-well" />
+                  <div className="h-4 w-64 rounded-md bg-well" />
+                  <div className="h-24 w-full rounded-lg bg-well" />
+                </div>
               ) : (
-                <PeekSummary row={activeRow} prefs={prefs} />
+                <EvidenceCard
+                  detail={detailQuery.data}
+                  onChanged={() => {
+                    void detailQuery.refetch();
+                    void rowsQuery.refetch();
+                  }}
+                />
               )}
+            </>
+          ) : (
+            // ── Abridged view (hovered) — Preview + PeekSummary + Edit button ──
+            <>
+              <Preview
+                key={activeRow.docId}
+                row={activeRow}
+                onOpen={() => openFile(activeRow.docId)}
+              />
+              <div className="flex items-center justify-between">
+                <PeekSummary row={activeRow} prefs={prefs} />
+                <Button
+                  size="small"
+                  variant="outline"
+                  className="gap-1.5"
+                  onClick={() => setPinnedId(activeRow.docId)}
+                >
+                  <Pencil className="size-3.5" />
+                  Edit
+                </Button>
+              </div>
             </>
           )}
         </div>
