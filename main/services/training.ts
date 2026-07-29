@@ -1,5 +1,5 @@
 /**
- * Training Mode: a user-enabled mode that asks a short, targeted set of
+ * Learning Mode: a user-enabled mode that asks a short, targeted set of
  * questions about each freshly-ingested document so the app can learn the user's
  * financial world. Answers become reusable "learned rules" (with confidence and
  * supporting evidence) that suppress redundant questions and are applied
@@ -43,6 +43,7 @@ import {
 import {
   confirmNameForPerson,
   ensurePerson,
+  ensurePersonIfName,
   listPeople,
   resolveNameToPersonId,
   setPersonRoles,
@@ -95,7 +96,7 @@ const MAX_DOC_CHARS = 6000;
 // ── Mode toggle ─────────────────────────────────────────────────────────
 
 /**
- * Training Mode defaults to ON for a brand-new install so the app can start
+ * Learning Mode defaults to ON for a brand-new install so the app can start
  * learning the user's financial world from the very first drops. Once the user
  * makes an explicit choice (either On or Off), that choice is stored and always
  * wins — we never silently re-enable it for someone who turned it off.
@@ -106,7 +107,7 @@ export function isTrainingMode(): boolean {
   return stored === "1";
 }
 
-/** True while Training Mode is still on its first-run default (never toggled). */
+/** True while Learning Mode is still on its first-run default (never toggled). */
 export function isTrainingDefault(): boolean {
   return getSetting(TRAINING_MODE_KEY) == null;
 }
@@ -199,7 +200,7 @@ function matchRules(rules: LearnedRule[], haystack: string): LearnedRule[] {
 }
 
 /**
- * Prepare Training Mode for a freshly-ingested document: apply any confident
+ * Prepare Learning Mode for a freshly-ingested document: apply any confident
  * rules silently, then generate targeted questions for what's still ambiguous.
  * Stores a review row (pending when there are questions, "auto" when the doc is
  * already understood). Returns whether the user should be prompted.
@@ -225,12 +226,8 @@ export async function prepareTraining(docId: number): Promise<{ shouldAsk: boole
   for (const rule of autoApplied) {
     if (rule.ruleType === "person_variant") {
       // Canonicalise the name variant onto its person so the snapshot reflects it.
-      confirmNameForPerson(
-        rule.matchKey,
-        ensurePerson(rule.value, "learned_rule"),
-        "learned_rule",
-        { docId },
-      );
+      const pid = ensurePersonIfName(rule.value, "learned_rule");
+      if (pid != null) confirmNameForPerson(rule.matchKey, pid, "learned_rule", { docId });
     }
     // vendor_category / keyword_doctype / source_scope act as known facts that
     // keep us from re-asking; they need no per-document write here.
@@ -273,6 +270,13 @@ export async function prepareTraining(docId: number): Promise<{ shouldAsk: boole
         "set shouldAsk to false and return no questions. Prefer multiple-choice (single), yes/no, or chips; use " +
         "free text only as a last resort. Keep questions concrete and about THIS document. Never invent people " +
         "or facts.\n\n" +
+        "QUESTION SHAPE — critical for a tiny popup where users answer in one click:\n" +
+        "• Each prompt must be ONE short sentence (~12 words max) with a SINGLE ask. NEVER chain " +
+        "clauses with 'or', 'and how', 'also', or '; if so'.\n" +
+        "• Use yesno ONLY when the literal answers 'Yes' and 'No' fully answer the prompt. If the user " +
+        "would need to pick between named alternatives (e.g. 'vendor or one-off?', 'personal or business?'), " +
+        "use kind=single and put the alternatives as short options. An either/or construction NEVER fits yesno.\n" +
+        "• Options must be 1–3 words each; no full sentences, no trailing explanations.\n\n" +
         "PERSON INTELLIGENCE — prioritise these when identity is ambiguous:\n" +
         "• If a person named in this document looks like it MIGHT be the same real person as an existing known " +
         "person (e.g. reordered first/last name, or initials), ask a person_identity question with matchKey = the " +
@@ -406,7 +410,7 @@ export async function saveAnswers(
       if (isNegative && lowered !== "no") {
         setDocumentOverride(docId, null);
       } else {
-        ensurePerson(value); // ensure a canonical person exists so it resolves
+        ensurePersonIfName(value); // only create a person when the answer is a real name
         setDocumentOverride(docId, value);
       }
       continue;
@@ -418,12 +422,12 @@ export async function saveAnswers(
       if (!detected) continue;
       if (isNegative) {
         // Different person → give the detected name its own canonical identity.
-        const pid = ensurePerson(detected);
+        ensurePerson(detected);
         setDocumentOverride(docId, detected);
-        void pid;
       } else {
         // Same as the chosen existing person → link + learn the mapping.
-        const personId = ensurePerson(value);
+        const personId = ensurePersonIfName(value);
+        if (personId == null) continue; // answer wasn't a usable name — skip person-linking
         confirmNameForPerson(detected, personId, "user_confirmed", { docId });
         setDocumentOverride(docId, value);
         const res = upsertConfirmedRule({
@@ -441,7 +445,8 @@ export async function saveAnswers(
     if (q.target === "person_role") {
       // Assign role(s) to the named person. value may be a comma-joined chip list.
       const targetName = q.matchKey?.trim() || value;
-      const personId = resolveNameToPersonId(targetName) ?? ensurePerson(targetName);
+      const personId = resolveNameToPersonId(targetName) ?? ensurePersonIfName(targetName);
+      if (personId == null) continue; // not a plausible name — don't conjure a person
       const roles = parseRoles(Array.isArray(ans.value) ? ans.value : value);
       if (roles.length > 0) {
         setPersonRoles(personId, roles);
@@ -464,7 +469,8 @@ export async function saveAnswers(
 
     // A name-variant rule also links the variant onto its canonical person.
     if (q.target === "person_variant") {
-      confirmNameForPerson(q.matchKey, ensurePerson(value), "user_confirmed", { docId });
+      const pid = ensurePersonIfName(value);
+      if (pid != null) confirmNameForPerson(q.matchKey, pid, "user_confirmed", { docId });
     }
   }
 
@@ -509,7 +515,7 @@ export async function writeRulesMarkdown(): Promise<void> {
   const lines: string[] = [];
   lines.push("# Quick2Afvault — Learned Rules");
   lines.push("");
-  lines.push("_Auto-generated by Training Mode. What the app has learned about your documents._");
+  lines.push("_Auto-generated by Learning Mode. What the app has learned about your documents._");
   lines.push("");
   lines.push(`- Documents reviewed: ${stats.reviewed}`);
   lines.push(`- Rules learned: ${stats.ruleCount}`);
@@ -518,7 +524,7 @@ export async function writeRulesMarkdown(): Promise<void> {
 
   if (rules.length === 0) {
     lines.push(
-      "No rules learned yet. Turn on Training Mode and drop a document to start teaching the app.",
+      "No rules learned yet. Turn on Learning Mode and drop a document to start teaching the app.",
     );
   } else {
     for (const type of Object.keys(TYPE_HEADINGS) as RuleType[]) {

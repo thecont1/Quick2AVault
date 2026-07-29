@@ -9,7 +9,7 @@
  * Entity resolution matches a detected name against existing people using exact
  * alias match, reordered first/last names, and initials/shortened variants.
  * High-confidence matches link silently; uncertain ones create a candidate that
- * Training Mode can ask about. User-confirmed fields (name, roles, aliases) are
+ * Learning Mode can ask about. User-confirmed fields (name, roles, aliases) are
  * never overwritten by a later AI guess.
  *
  * Never throws — identity work is best-effort on top of an already-stored doc.
@@ -239,7 +239,7 @@ export function resolvePersonForName(
       addEvidence({
         personId: person.id,
         kind: "ai_inferred",
-        detail: `Possibly the same person as "${other.displayName}" — confirm in Training Mode`,
+        detail: `Possibly the same person as "${other.displayName}" — confirm in Learning Mode`,
         docId: ctx.docId ?? null,
       });
       return {
@@ -342,18 +342,61 @@ function listEvidenceFor(
 
 // ── Management (all user actions → confirmed sources) ──────────────────────
 
+/**
+ * Reject strings that are sentences/answers rather than human or org names.
+ * Prevents Learning Mode free-text answers like "Yes" or "I received it —
+ * I'm the customer" from being stored as canonical person names.
+ */
+function looksLikeSentence(value: string): boolean {
+  const v = value.trim();
+  if (v.length === 0) return true;
+  if (v.length > 60) return true; // no real person/org name runs that long
+  const lower = v.toLowerCase();
+  if (/^(yes|no|n\/a|na|ok|okay|sure)$/.test(lower)) return true;
+  // first-person pronouns — a name never contains these
+  if (/\b(i('| a)?m|i'?ll|i'?ve|me|my|mine|myself|we|our|ours|us|ourselves)\b/i.test(v)) return true;
+  // sentence-leading prepositions / articles / conjunctions a name wouldn't start with
+  if (/^(for|receipt|personal|subscription|invoice|this|that|here|there|the|a|an)\b/i.test(v)) return true;
+  // descriptive verbs that signal a sentence, not an entity
+  if (/\b(received|sent|paid|paying|issued|invoiced|subscribed|know|paid|customer|service)\b/i.test(v))
+    return true;
+  if (/\([^)]{15,}\)/.test(v)) return true; // long parenthetical = explanation
+  if (/[.!?]$/.test(v) && v.split(/\s+/).length > 3) return true;
+  if (v.split(/\s+/).filter(Boolean).length > 5) return true;
+  return false;
+}
+
+/**
+ * Guard for rules / learned values before they're turned into people.
+ * Returned id is the matched/created person, or null when the value is not a
+ * plausible name (callers then simply skip person-creation for that answer).
+ */
+export function ensurePersonIfName(
+  name: string,
+  source: FieldSource = "user_confirmed",
+): number | null {
+  if (!isPlausiblePersonName(name)) return null;
+  return ensurePerson(name, source);
+}
+
+/** True when `value` is safe to use as a canonical person display name. */
+export function isPlausiblePersonName(value: string): boolean {
+  return !looksLikeSentence(value);
+}
+
 /** Ensure a person exists whose canonical name is `name`; returns its id. */
 export function ensurePerson(name: string, source: FieldSource = "user_confirmed"): number {
-  const norm = normalizeName(name);
+  const trimmed = name.trim();
+  const norm = normalizeName(trimmed);
   const existing = findAliasByNormalized(norm);
   if (existing) return existing.personId;
   const person = insertPerson({
-    displayName: name.trim(),
+    displayName: trimmed,
     confidence: source === "ai_inferred" ? 0.7 : 1,
     nameSource: source,
     status: source === "ai_inferred" ? "candidate" : "confirmed",
   });
-  upsertAlias({ personId: person.id, alias: name.trim(), normalized: norm, source });
+  upsertAlias({ personId: person.id, alias: trimmed, normalized: norm, source });
   return person.id;
 }
 
