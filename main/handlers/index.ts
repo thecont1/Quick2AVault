@@ -116,6 +116,7 @@ import {
   connectGmail,
   disconnectGmail,
   getGmailStatus,
+  setGmailClientId,
   setGmailPaused,
   syncGmailNow,
 } from "../services/gmail.js";
@@ -236,6 +237,10 @@ export function registerHandlers(): void {
     setGmailPaused(paused === true),
   );
   ipcMain.handle("gmail:disconnect", async () => disconnectGmail());
+  ipcMain.handle("gmail:setClientId", async (_event, clientId: unknown, clientSecret: unknown) => {
+    setGmailClientId(clientId, clientSecret);
+    return getGmailStatus();
+  });
 
   // Consumed once by the settings renderer on mount to scroll to a section.
   ipcMain.handle("settings:takeFocusSection", async () => {

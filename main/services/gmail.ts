@@ -26,6 +26,8 @@ import { createGmailSyncSource } from "./gmail-api.js";
 
 const GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
+const CLIENT_ID_KEY = "gmail.oauth_client_id";
+const CLIENT_SECRET_KEY = "gmail.oauth_client_secret";
 const LOCAL_PART_KEY = "gmail.local_part";
 const PAUSED_KEY = "gmail.paused";
 const HISTORY_KEY = "gmail.history_id";
@@ -57,25 +59,70 @@ export interface GmailStatus {
   documentCount: number;
   eventCount: number;
   oauthConfigured: boolean;
+  clientId: string | null;
 }
 
 let runtimeState: GmailConnectionState | null = null;
 let syncPromise: Promise<GmailStatus> | null = null;
 let syncTimer: ReturnType<typeof setInterval> | null = null;
 
+interface OAuthConfigFile {
+  installed?: { client_id?: string; client_secret?: string };
+  client_id?: string;
+  client_secret?: string;
+}
+
+let cachedConfig: OAuthConfigFile | null | undefined;
+
+function loadOAuthConfigFile(): OAuthConfigFile | null {
+  if (cachedConfig !== undefined) return cachedConfig;
+  try {
+    const filePath = path.join(app.getPath("userData"), "gmail-oauth.json");
+    const raw = require("node:fs").readFileSync(filePath, "utf-8");
+    cachedConfig = JSON.parse(raw) as OAuthConfigFile;
+  } catch {
+    cachedConfig = null;
+  }
+  return cachedConfig;
+}
+
 function oauthClientId(): string | null {
+  const fromDb = getSetting(CLIENT_ID_KEY);
+  if (fromDb?.trim()) return fromDb.trim();
+  const cfg = loadOAuthConfigFile();
+  const fromFile = cfg?.installed?.client_id ?? cfg?.client_id;
+  if (fromFile?.trim()) return fromFile.trim();
   const value = process.env.QUICK2AVAULT_GMAIL_CLIENT_ID ?? process.env.GOOGLE_OAUTH_CLIENT_ID;
   return value?.trim() || null;
 }
 
+function oauthClientSecret(): string | null {
+  const fromDb = getSetting(CLIENT_SECRET_KEY);
+  if (fromDb?.trim()) return fromDb.trim();
+  const cfg = loadOAuthConfigFile();
+  const fromFile = cfg?.installed?.client_secret ?? cfg?.client_secret;
+  if (fromFile?.trim()) return fromFile.trim();
+  return null;
+}
+
+export function setGmailClientId(clientId: unknown, clientSecret?: unknown): void {
+  const id = typeof clientId === "string" ? clientId.trim() : "";
+  if (id) setSetting(CLIENT_ID_KEY, id);
+  else deleteSetting(CLIENT_ID_KEY);
+  const secret = typeof clientSecret === "string" ? clientSecret.trim() : "";
+  if (secret) setSetting(CLIENT_SECRET_KEY, secret);
+  else deleteSetting(CLIENT_SECRET_KEY);
+}
+
 function oauthService(): GmailDesktopOAuth {
   const clientId = oauthClientId();
-  if (!clientId) {
+  const clientSecret = oauthClientSecret();
+  if (!clientId || !clientSecret) {
     throw new Error(
-      "Gmail OAuth is not configured in this build. Set QUICK2AVAULT_GMAIL_CLIENT_ID to the Google desktop OAuth client ID.",
+      "Gmail OAuth is not configured. Enter a Google desktop OAuth client ID and secret in Settings first.",
     );
   }
-  return new GmailDesktopOAuth(clientId, PROVIDER_ID);
+  return new GmailDesktopOAuth(clientId, clientSecret, PROVIDER_ID);
 }
 
 function configuredLocalPart(): string | null {
@@ -119,7 +166,8 @@ export async function getGmailStatus(): Promise<GmailStatus> {
     lastSyncAt: getSetting(LAST_SYNC_KEY),
     lastError: getSetting(LAST_ERROR_KEY),
     ...gmailImportTotals(mailbox),
-    oauthConfigured: oauthClientId() != null,
+    oauthConfigured: oauthClientId() != null && oauthClientSecret() != null,
+    clientId: oauthClientId(),
   };
 }
 
@@ -152,6 +200,11 @@ function gmailSource(accessToken: string) {
 export async function connectGmail(localPartInput: unknown): Promise<GmailStatus> {
   const normalized = normalizeGmailLocalPart(localPartInput);
   if (!normalized.ok) throw new Error(normalized.error);
+  if (!oauthClientId() || !oauthClientSecret()) {
+    throw new Error(
+      "Gmail OAuth is not configured. Enter a Google desktop OAuth client ID and secret in Settings first.",
+    );
+  }
   const mailbox = deriveGmailAddress(normalized.localPart);
   setSetting(LOCAL_PART_KEY, normalized.localPart);
   setSetting(PAUSED_KEY, "false");
