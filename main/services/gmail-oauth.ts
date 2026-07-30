@@ -38,6 +38,7 @@ export class GmailDesktopOAuth {
 
   constructor(
     private readonly clientId: string,
+    private readonly clientSecret: string,
     private readonly providerId: string,
   ) {}
 
@@ -59,6 +60,7 @@ export class GmailDesktopOAuth {
     const payload = await tokenRequest(
       new URLSearchParams({
         client_id: this.clientId,
+        client_secret: this.clientSecret,
         code,
         code_verifier: verifier,
         grant_type: "authorization_code",
@@ -77,6 +79,7 @@ export class GmailDesktopOAuth {
     const payload = await tokenRequest(
       new URLSearchParams({
         client_id: this.clientId,
+        client_secret: this.clientSecret,
         refresh_token: tokens.refreshToken,
         grant_type: "refresh_token",
       }),
