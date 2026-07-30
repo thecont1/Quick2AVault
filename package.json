@@ -75,12 +75,12 @@
         "mode": "optional"
       }
     },
-    "sdkVersion": "0.11.1.0",
+    "sdkVersion": "0.12.0.0",
     "createdAt": "2026-07-26T13:23:35.192Z",
     "lastMigration": "ai-tsconfig-paths",
     "host": {
-      "minVersion": "0.11.1.0"
+      "minVersion": "0.12.0.0"
     },
-    "updatedAt": 1785296960184
+    "updatedAt": 1785307763810
   }
 }

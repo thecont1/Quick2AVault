@@ -102,6 +102,7 @@ interface GmailStatus {
   documentCount: number;
   eventCount: number;
   oauthConfigured: boolean;
+  clientId: string | null;
 }
 
 interface DocumentRecord {
@@ -2138,10 +2139,16 @@ function GmailMailboxSection() {
   });
   const status = statusQuery.data;
   const [localPart, setLocalPart] = useState("");
+  const [clientIdInput, setClientIdInput] = useState("");
+  const [clientSecretInput, setClientSecretInput] = useState("");
 
   useEffect(() => {
     if (status?.localPart) setLocalPart(status.localPart);
   }, [status?.localPart]);
+
+  useEffect(() => {
+    if (status?.clientId) setClientIdInput(status.clientId);
+  }, [status?.clientId]);
 
   useEffect(() => {
     const unsubscribe = window.glazeAPI.glaze.ipc.on("gmail:statusChanged", () => {
@@ -2177,8 +2184,26 @@ function GmailMailboxSection() {
     },
     onError: (error) => toast.error(`Couldn't disconnect Gmail: ${error}`),
   });
+  const saveClientId = useMutation({
+    mutationFn: () =>
+      window.glazeAPI.glaze.ipc.invoke<GmailStatus>(
+        "gmail:setClientId",
+        clientIdInput.trim(),
+        clientSecretInput.trim(),
+      ),
+    onSuccess: (next) => {
+      queryClient.setQueryData(["gmailStatus"], next);
+      toast.success("OAuth credentials saved.");
+    },
+    onError: (error) => toast.error(`Couldn't save credentials: ${error}`),
+  });
 
-  const busy = connect.isPending || sync.isPending || pause.isPending || disconnect.isPending;
+  const busy =
+    connect.isPending ||
+    sync.isPending ||
+    pause.isPending ||
+    disconnect.isPending ||
+    saveClientId.isPending;
   const statusLabel: Record<GmailStatus["connection"], string> = {
     not_configured: "Not configured",
     disconnected: "Ready to connect",
@@ -2201,6 +2226,44 @@ function GmailMailboxSection() {
         </div>
         {status ? <Badge>{statusLabel[status.connection]}</Badge> : null}
       </div>
+
+      {status?.oauthConfigured === false ? (
+        <div className="flex flex-col gap-2 rounded-card border border-separator p-3">
+          <Text variant="small" color="red">
+            A Google desktop OAuth client ID and secret are required before Gmail can connect.
+          </Text>
+          <Label>
+            OAuth client ID
+            <Input
+              value={clientIdInput}
+              onChange={(event) => setClientIdInput(event.target.value)}
+              placeholder="123456789-xxxxx.apps.googleusercontent.com"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+          </Label>
+          <Label>
+            OAuth client secret
+            <Input
+              value={clientSecretInput}
+              onChange={(event) => setClientSecretInput(event.target.value)}
+              placeholder="GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxxx"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              type="password"
+            />
+          </Label>
+          <Button
+            size="small"
+            disabled={busy || !clientIdInput.trim() || !clientSecretInput.trim()}
+            onClick={() => saveClientId.mutate()}
+          >
+            Save credentials
+          </Button>
+        </div>
+      ) : null}
 
       {status?.mailbox ? (
         <>
@@ -2289,16 +2352,11 @@ function GmailMailboxSection() {
           </Label>
           <Button
             variant="accent"
-            disabled={busy || !localPart.trim()}
+            disabled={busy || !localPart.trim() || !status?.oauthConfigured}
             onClick={() => connect.mutate()}
           >
             Connect Gmail
           </Button>
-          {status?.oauthConfigured === false ? (
-            <Text variant="small" color="red">
-              This build needs a Google desktop OAuth client ID before Gmail can connect.
-            </Text>
-          ) : null}
         </div>
       )}
 
