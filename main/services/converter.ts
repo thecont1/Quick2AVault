@@ -1,8 +1,9 @@
 /**
  * File -> Markdown conversion.
  *
- * Each supported file is first turned into a plain-text representation, then
- * Glaze AI polishes it into clean, well-structured Markdown. If AI is
+ * Each supported file is first converted to Markdown by anydoc (Word, Excel,
+ * PowerPoint, OpenDocument, RTF, EPUB, CSV, PDF), then Glaze AI polishes it
+ * into clean, well-structured Markdown. If AI is
  * unavailable/blocked, we fall back to the deterministic representation so the
  * user always gets a usable .md file.
  */
@@ -10,16 +11,49 @@ import * as fs from "node:fs/promises";
 
 import { generateText, glaze, GlazeAIError } from "@glaze/core/ai";
 import { logger } from "@glaze/core/backend";
-import pdfParse from "pdf-parse/lib/pdf-parse.js";
+import { toMarkdownBytes } from "@firecrawl/anydoc";
 
-import { parseCsvBuffer, parseXlsx } from "./spreadsheet.js";
-
-export type FileType = "pdf" | "xlsx" | "csv" | "txt" | "image";
+// Canonical format names mirror anydoc's `Format` values (legacy .doc/.ppt are
+// distinct parsers, while container variants like .docm/.xlsm/.ppsx map onto
+// docx/xlsx/pptx), so FileType can be passed straight to the converter as the
+// explicit format.
+export type FileType =
+  | "pdf"
+  | "doc"
+  | "docx"
+  | "ppt"
+  | "pptx"
+  | "xlsx"
+  | "odt"
+  | "ods"
+  | "odp"
+  | "rtf"
+  | "epub"
+  | "csv"
+  | "txt"
+  | "image";
 
 const EXTENSION_MAP: Record<string, FileType> = {
   ".pdf": "pdf",
+  ".doc": "doc",
+  ".docx": "docx",
+  ".docm": "docx",
+  ".ppt": "ppt",
+  ".pps": "ppt",
+  ".pot": "ppt",
+  ".pptx": "pptx",
+  ".pptm": "pptx",
+  ".ppsx": "pptx",
+  ".ppsm": "pptx",
   ".xlsx": "xlsx",
   ".xls": "xlsx",
+  ".xlsm": "xlsx",
+  ".xlsb": "xlsx",
+  ".odt": "odt",
+  ".ods": "ods",
+  ".odp": "odp",
+  ".rtf": "rtf",
+  ".epub": "epub",
   ".csv": "csv",
   ".txt": "txt",
   ".md": "txt",
@@ -55,45 +89,12 @@ export interface ConversionResult {
   aiBlocked?: string;
 }
 
-/** Build a Markdown table from an array of rows. */
-function rowsToMarkdownTable(rows: unknown[][]): string {
-  const clean = rows.filter((r) => Array.isArray(r) && r.some((c) => c !== null && c !== ""));
-  if (clean.length === 0) return "_(empty)_";
-
-  const colCount = clean.reduce((max, r) => Math.max(max, r.length), 0);
-  const cell = (v: unknown) =>
-    String(v ?? "")
-      .replace(/\|/g, "\\|")
-      .replace(/\r?\n/g, " ")
-      .trim();
-
-  const header = clean[0];
-  const headerCells = Array.from(
-    { length: colCount },
-    (_, i) => cell(header[i]) || `Column ${i + 1}`,
-  );
-  const lines = [
-    `| ${headerCells.join(" | ")} |`,
-    `| ${headerCells.map(() => "---").join(" | ")} |`,
-  ];
-  for (const row of clean.slice(1)) {
-    const cells = Array.from({ length: colCount }, (_, i) => cell(row[i]));
-    lines.push(`| ${cells.join(" | ")} |`);
-  }
-  return lines.join("\n");
-}
-
-/** Turn spreadsheet sections into Markdown tables. */
-function spreadsheetSectionsToMarkdown(
-  spreadsheetSections: Array<{ name: string; rows: unknown[][] }>,
-): string {
-  const sections: string[] = [];
-  for (const { name, rows } of spreadsheetSections) {
-    if (spreadsheetSections.length > 1) sections.push(`## ${name}`);
-    sections.push(rowsToMarkdownTable(rows));
-  }
-  return sections.join("\n\n");
-}
+// Formats converted by anydoc into GitHub-Flavored Markdown. The explicit
+// format is passed because CSV carries no content marker for auto-detection.
+// (AnyDoc's Format is a declared const enum, so the value is cast, not
+// imported — FileType string values match it exactly.)
+type AnyDocFormat = Exclude<FileType, "txt" | "image">;
+type AnyDocFormatParam = Parameters<typeof toMarkdownBytes>[1];
 
 /**
  * Produce a plain, deterministic text representation of the file's content.
@@ -104,27 +105,25 @@ function spreadsheetSectionsToMarkdown(
 export async function extractText(filePath: string, type: FileType): Promise<string> {
   try {
     switch (type) {
-      case "pdf": {
-        const buffer = await fs.readFile(filePath);
-        const parsed = await pdfParse(buffer);
-        return parsed.text.trim();
-      }
-      case "xlsx": {
-        const buffer = await fs.readFile(filePath);
-        return spreadsheetSectionsToMarkdown(await parseXlsx(buffer));
-      }
-      case "csv": {
-        const buffer = await fs.readFile(filePath);
-        return spreadsheetSectionsToMarkdown(parseCsvBuffer(buffer));
-      }
       case "txt": {
         return (await fs.readFile(filePath, "utf-8")).trim();
       }
       case "image":
         return "";
+      default: {
+        const buffer = await fs.readFile(filePath);
+        return (await toMarkdownBytes(buffer, type as AnyDocFormat as AnyDocFormatParam)).trim();
+      }
     }
   } catch (error) {
-    logger.warn("converter", "Failed to extract file content", { filePath, error: String(error) });
+    // anydoc rejects with a structured code ("unsupported", "malformed",
+    // "encrypted", "resourceLimit", "missingPart"); log it for diagnosis while
+    // keeping the never-throws contract so triage/OCR fallbacks still run.
+    logger.warn("converter", "Failed to extract file content", {
+      filePath,
+      code: (error as { code?: string }).code ?? "unknown",
+      error: String(error),
+    });
     return "";
   }
 }
@@ -135,7 +134,16 @@ function fallbackMarkdown(filename: string, representation: string): string {
 
 const TYPE_LABEL: Record<FileType, string> = {
   pdf: "PDF document",
+  doc: "Word document",
+  docx: "Word document",
+  ppt: "presentation",
+  pptx: "presentation",
   xlsx: "spreadsheet",
+  odt: "OpenDocument text",
+  ods: "spreadsheet",
+  odp: "presentation",
+  rtf: "rich text document",
+  epub: "e-book",
   csv: "CSV data",
   txt: "text document",
   image: "image",

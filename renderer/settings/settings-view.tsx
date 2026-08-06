@@ -142,7 +142,16 @@ const REASSIGN_UNIDENTIFIED = "__unidentified__";
 
 const TYPE_LABEL: Record<string, string> = {
   pdf: "PDF",
+  doc: "Word",
+  docx: "Word",
+  ppt: "PowerPoint",
+  pptx: "PowerPoint",
   xlsx: "Spreadsheet",
+  odt: "OpenDocument",
+  ods: "Spreadsheet",
+  odp: "Presentation",
+  rtf: "Rich Text",
+  epub: "E-book",
   csv: "CSV",
   txt: "Text",
 };

@@ -76,7 +76,7 @@ export function notifyIngestOutcome(results: IngestResult[]): void {
         : `Skipped ${pluralize(duplicates.length, "duplicate")}.`;
   } else if (unsupported.length > 0) {
     title = "Unsupported file";
-    body = "Drop PDF, XLSX, CSV, or TXT files.";
+    body = "Drop PDF, Word, PowerPoint, Excel, OpenDocument, RTF, EPUB, CSV, or TXT files.";
   } else if (errored.length > 0) {
     title = "Couldn't add file";
     body = errored[0].error ? errored[0].error.slice(0, 120) : "Something went wrong.";

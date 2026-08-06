@@ -17,19 +17,17 @@
     "test": "tsx main/services/converter.smoke.ts"
   },
   "dependencies": {
+    "@firecrawl/anydoc": "0.1.6",
     "@radix-ui/colors": "^3.0.0",
     "@tanstack/react-query": "^5.87.4",
     "@tanstack/react-router": "^1.131.36",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "csv-parse": "^6.1.0",
     "lucide-react": "^0.542.0",
-    "pdf-parse": "^1.1.1",
     "radix-ui": "^1.4.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "read-excel-file": "^9.3.4",
     "tailwind-merge": "^3.3.1"
   },
   "devDependencies": {
@@ -75,12 +73,12 @@
         "mode": "optional"
       }
     },
-    "sdkVersion": "0.12.0.0",
+    "sdkVersion": "0.13.0.0",
     "createdAt": "2026-07-26T13:23:35.192Z",
     "lastMigration": "ai-tsconfig-paths",
     "host": {
-      "minVersion": "0.12.0.0"
+      "minVersion": "0.13.0.0"
     },
-    "updatedAt": 1785307763810
+    "updatedAt": 1785438175059
   }
 }
