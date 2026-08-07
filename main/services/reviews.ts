@@ -50,7 +50,7 @@ import { convertToInr, CURRENCY_NONE } from "./currency.js";
 import type { DocumentExtraction } from "./extraction.js";
 import { TREATMENT_LABEL } from "./accounting.js";
 import { directionFor, IMPACT_LABEL } from "./impact.js";
-import { confirmNameForPerson, ensurePerson } from "./people.js";
+import { confirmNameForPerson, ensurePersonIfName } from "./people.js";
 import { financialYearKey, fyLabel, getFinancePrefs } from "./preferences.js";
 import { writeRulesMarkdown } from "./training.js";
 
@@ -432,6 +432,7 @@ export function recordPersonReview(input: {
   confidence: number;
   status: ReviewStatus;
   reason: string;
+  finalValue?: string | null;
 }): void {
   const existing = getFieldReview(input.docId, "person");
   if (
@@ -449,6 +450,7 @@ export function recordPersonReview(input: {
     source: "ai_inferred",
     reason: input.reason,
     suggestedValue: input.suggested ?? input.extracted,
+    finalValue: input.finalValue ?? null,
     status: input.status,
   });
 }
@@ -597,7 +599,11 @@ function applyPersonResolution(
     setDocumentOverride(docId, null);
     return { ok: true };
   }
-  const personId = ensurePerson(finalValue);
+  // Guard against junk fragments ("Vidya's account") becoming confirmed people.
+  const personId = ensurePersonIfName(finalValue);
+  if (personId == null) {
+    return { ok: false, message: `"${finalValue}" doesn't look like a person name.` };
+  }
   setDocumentOverride(docId, finalValue);
 
   // Correcting to a different name than was detected teaches a reusable mapping.

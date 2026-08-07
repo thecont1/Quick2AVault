@@ -1361,6 +1361,21 @@ export function findDocumentById(id: number): DocumentRecord | null {
   return row ? mapRow(row) : null;
 }
 
+/** Distinct non-null values previously seen for a review field (for dropdown suggestions). */
+export function listDistinctFieldValues(field: string): string[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT COALESCE(final_value, extracted_value) AS v, COUNT(*) AS freq
+       FROM document_field_reviews
+       WHERE field = ? AND COALESCE(final_value, extracted_value) IS NOT NULL
+       GROUP BY v
+       ORDER BY freq DESC, v ASC
+       LIMIT 200`,
+    )
+    .all(field) as Row[];
+  return rows.map((r) => String(r.v));
+}
+
 export function getStats(): { total: number; converted: number } {
   const row = getDb()
     .prepare(
@@ -1519,6 +1534,16 @@ export function setSetting(key: string, value: string): void {
 
 export function deleteSetting(key: string): void {
   getDb().prepare("DELETE FROM app_settings WHERE key = ?").run(key);
+}
+
+const LAST_ACTIVITY_KEY = "last_vault_activity";
+
+export function getLastActivity(): string | null {
+  return getSetting(LAST_ACTIVITY_KEY);
+}
+
+export function setLastActivity(timestamp?: string): void {
+  setSetting(LAST_ACTIVITY_KEY, timestamp ?? new Date().toISOString());
 }
 
 export function hasGmailImport(mailbox: string, messageId: string): boolean {
@@ -1892,6 +1917,26 @@ export function deleteFieldReviewsForDoc(docId: number): void {
 }
 
 /**
+ * Replace old person names in document_field_reviews (extracted_value,
+ * suggested_value, final_value) with a canonical display name. Used by
+ * the one-time persons cleanup to fix stale field review values.
+ */
+export function replacePersonFieldValues(
+  oldNames: string[],
+  newName: string,
+): void {
+  const db = getDb();
+  const cols = ["extracted_value", "suggested_value", "final_value"] as const;
+  for (const old of oldNames) {
+    for (const col of cols) {
+      db.prepare(
+        `UPDATE document_field_reviews SET ${col} = ? WHERE field = 'person' AND ${col} = ?`,
+      ).run(newName, old);
+    }
+  }
+}
+
+/**
  * Distinct document ids that still have at least one pending field, newest first.
  * Only active documents count — excluded/irrelevant docs drop out of the queue.
  */
@@ -2109,10 +2154,29 @@ export function updatePerson(
 export function setSelfPerson(id: number): void {
   const database = getDb();
   const now = new Date().toISOString();
-  database.prepare("UPDATE persons SET is_self = 0, updated_at = ? WHERE is_self = 1").run(now);
+  // Strip "self" role from the previous Self person before clearing the flag.
+  const prev = database
+    .prepare("SELECT id, roles FROM persons WHERE is_self = 1 AND id != ?")
+    .get(id) as Row | undefined;
+  if (prev) {
+    const roles = parseRoles(prev.roles as string);
+    const filtered = roles.filter((r) => r !== "self");
+    database
+      .prepare("UPDATE persons SET is_self = 0, roles = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(filtered) as string, now, Number(prev.id));
+  } else {
+    database.prepare("UPDATE persons SET is_self = 0, updated_at = ? WHERE is_self = 1").run(now);
+  }
   database
     .prepare("UPDATE persons SET is_self = 1, status = 'confirmed', updated_at = ? WHERE id = ?")
     .run(now, id);
+}
+
+/** Clear the "Self" flag on everyone. */
+export function clearSelfPerson(): void {
+  getDb()
+    .prepare("UPDATE persons SET is_self = 0, updated_at = ? WHERE is_self = 1")
+    .run(new Date().toISOString());
 }
 
 export function deletePerson(id: number): void {
@@ -2120,6 +2184,20 @@ export function deletePerson(id: number): void {
   database.prepare("DELETE FROM person_aliases WHERE person_id = ?").run(id);
   database.prepare("DELETE FROM person_evidence WHERE person_id = ?").run(id);
   database.prepare("DELETE FROM persons WHERE id = ?").run(id);
+}
+
+/** Run a function inside a DB transaction. Rolls back on error. */
+export function runTransaction<T>(fn: () => T): T {
+  const db_ = getDb();
+  db_.exec("BEGIN TRANSACTION");
+  try {
+    const result = fn();
+    db_.exec("COMMIT");
+    return result;
+  } catch (err) {
+    db_.exec("ROLLBACK");
+    throw err;
+  }
 }
 
 // ── Person aliases ───────────────────────────────────────────────────────

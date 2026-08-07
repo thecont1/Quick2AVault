@@ -15,6 +15,8 @@ import { logger } from "@glaze/core/backend";
 
 import {
   countDocsNeedingReview,
+  findPerson,
+  getLastActivity,
   getSnapshotCache,
   listActiveDocuments,
   listAllContractNoteTrades,
@@ -33,6 +35,7 @@ import {
 import {
   buildAliasIndex,
   consolidateCandidateDuplicates,
+  listAllAliases,
   resolveNameToPersonId,
   resolvePersonForName,
   seedPeopleFromExisting,
@@ -246,6 +249,8 @@ export interface SnapshotResponse {
   snapshot: SnapshotData | null;
   /** ISO timestamp of when the underlying attribution was generated. */
   generatedAt: string | null;
+  /** ISO timestamp of the most recent vault activity (file drop, Gmail sync, refresh). */
+  lastActivity: string | null;
   /** GlazeAIError.state when the AI step was blocked. */
   aiBlocked?: string;
   /** Generic (non-AI-consent) failure message. */
@@ -340,6 +345,7 @@ function aggregate(attributions: Attribution[]): SnapshotData {
   // Canonical person resolution: every raw name resolves to a stored person via
   // its alias index, so reorders/variants and user merges collapse instantly.
   const aliasIndex = buildAliasIndex();
+  const allAliases = listAllAliases();
   const personById = new Map(listPersons().map((p) => [p.id, p]));
 
   type Bucket = {
@@ -374,7 +380,7 @@ function aggregate(attributions: Attribution[]): SnapshotData {
   for (const attr of attributions) {
     // A manual per-document pin wins over the AI's attribution.
     const rawName = docMap.has(attr.docId) ? docMap.get(attr.docId)! : attr.person;
-    const personId = resolveNameToPersonId(rawName, aliasIndex);
+    const personId = resolveNameToPersonId(rawName, aliasIndex, allAliases);
     const person = personId != null ? personById.get(personId) : undefined;
     // Display: canonical person name when resolved; else the raw name (transient).
     const effective = person ? person.displayName : rawName;
@@ -576,6 +582,7 @@ function buildFinancialLayers(
   };
   const periods: Record<SnapshotPeriod, PeriodSnapshot> = {
     month: periodFor("month"),
+    previous_month: periodFor("previous_month"),
     financial_year: periodFor("financial_year"),
   };
 
@@ -882,6 +889,7 @@ export function getCachedSnapshot(): SnapshotResponse {
   return {
     snapshot: attributions ? aggregate(attributions) : null,
     generatedAt: attributions ? (cache?.generatedAt ?? null) : null,
+    lastActivity: getLastActivity(),
     fallback: buildFallback(),
   };
 }
@@ -901,7 +909,7 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
       JSON.stringify({ version: 2, attributions: [] } satisfies CachedAttributions),
       now,
     );
-    return { snapshot: aggregate([]), generatedAt: now, fallback };
+    return { snapshot: aggregate([]), generatedAt: now, lastActivity: getLastActivity(), fallback };
   }
 
   const { text: documentsText, docs } = await buildAiInput();
@@ -958,14 +966,29 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
             status: "conflict",
             reason: res.uncertain.reason,
           });
-        } else {
+        } else if (res.personId == null) {
+          // Implausible name — don't confirm the raw fragment as a person.
           recordPersonReview({
             docId: a.docId,
             extracted: a.person,
-            suggested: a.person,
+            suggested: null,
+            confidence: 0,
+            status: "conflict",
+            reason: "Detected name does not look like a person.",
+          });
+        } else {
+          // Auto-linked: use the canonical person's display name as the
+          // final value so the Evidence Card shows the resolved identity.
+          const canonical = res.personId != null ? findPerson(res.personId) : null;
+          const displayName = canonical?.displayName ?? a.person;
+          recordPersonReview({
+            docId: a.docId,
+            extracted: a.person,
+            suggested: displayName,
             confidence: 0.9,
             status: "confirmed",
             reason: "",
+            finalValue: displayName,
           });
         }
       } else {
@@ -992,7 +1015,7 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
       people: snapshot.people.length,
       unidentified: snapshot.unidentified?.documentCount ?? 0,
     });
-    return { snapshot, generatedAt: now, fallback };
+    return { snapshot, generatedAt: now, lastActivity: getLastActivity(), fallback };
   } catch (error) {
     const previousSnapshot = previous ? aggregate(previous) : null;
     if (error instanceof GlazeAIError) {
@@ -1000,6 +1023,7 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
       return {
         snapshot: previousSnapshot,
         generatedAt: cache?.generatedAt ?? null,
+        lastActivity: getLastActivity(),
         aiBlocked: error.state,
         fallback,
       };
@@ -1008,6 +1032,7 @@ export async function refreshSnapshot(): Promise<SnapshotResponse> {
     return {
       snapshot: previousSnapshot,
       generatedAt: cache?.generatedAt ?? null,
+      lastActivity: getLastActivity(),
       error: String(error),
       fallback,
     };

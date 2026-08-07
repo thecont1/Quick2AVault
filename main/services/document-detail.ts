@@ -37,7 +37,7 @@ import {
   type ReviewField,
   type ReviewStatus,
 } from "./database.js";
-import { buildAliasIndex, listPeople, resolveNameToPersonId, type PersonEntity } from "./people.js";
+import { buildAliasIndex, listAllAliases, listPeople, resolveNameToPersonId, type PersonEntity } from "./people.js";
 // getAttributionMap reads the snapshot cache (person/category/period per doc) — no AI.
 import { getAttributionMap } from "./snapshot.js";
 
@@ -45,14 +45,14 @@ import { getAttributionMap } from "./snapshot.js";
 
 /** Human-readable label per review field. */
 export const FIELD_LABEL: Record<ReviewField, string> = {
-  person: "Canonical person",
+  person: "Person",
   doc_type: "Document type",
-  vendor: "Vendor / institution",
+  vendor: "Vendor",
   doc_date: "Document date",
   fin_year: "Financial year",
   amount: "Amount",
   fx: "Currency conversion",
-  accounting: "Accounting hint",
+  accounting: "Accounting",
   impact: "Financial impact",
 };
 
@@ -98,6 +98,8 @@ export interface DocumentBrowserRow {
   lifecycleState: LifecycleState;
   /** One-line explanation of the triage decision, or null. */
   triageReason: string | null;
+  /** Whether the document was ingested from Gmail or a file import. */
+  source: "gmail" | "file";
 }
 
 export interface DetailField {
@@ -248,6 +250,7 @@ export function listDocumentBrowser(): DocumentBrowserRow[] {
   const overrides = new Map(listDocumentOverrides().map((o) => [o.docId, o.person]));
   const attribution = getAttributionMap();
   const aliasIndex = buildAliasIndex();
+  const allAliases = listAllAliases();
   const peopleById = new Map(listPeople().map((p) => [p.id, p]));
 
   return docs.map((doc) => {
@@ -258,7 +261,7 @@ export function listDocumentBrowser(): DocumentBrowserRow[] {
     const rawName = overrides.has(doc.id)
       ? overrides.get(doc.id)!
       : (attribution.get(doc.id)?.person ?? null);
-    const personId = resolveNameToPersonId(rawName, aliasIndex);
+    const personId = resolveNameToPersonId(rawName, aliasIndex, allAliases);
     const entity = personId != null ? peopleById.get(personId) : undefined;
 
     const hasManualOverride =
@@ -298,6 +301,7 @@ export function listDocumentBrowser(): DocumentBrowserRow[] {
       isContractNote: doc.isContractNote,
       lifecycleState: doc.lifecycleState,
       triageReason: doc.triageReason,
+      source: isGmailSourced(doc.id) ? "gmail" : "file",
     };
   });
 }
@@ -448,4 +452,26 @@ export async function openDocumentMarkdown(docId: number): Promise<string> {
     });
     return "Couldn't open the file.";
   }
+}
+
+/** Read the full Markdown content of a document. */
+export async function readDocumentMarkdown(docId: number): Promise<string | null> {
+  const doc = findDocumentById(docId);
+  if (!doc || !doc.markdownPath) return null;
+  try {
+    return await fs.readFile(doc.markdownPath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/** Check if a document was ingested from Gmail by looking up gmail_imports by hash. */
+export function isGmailSourced(docId: number): boolean {
+  const doc = findDocumentById(docId);
+  if (!doc) return false;
+  // Gmail body events are written as .eml / .html / .txt with "gmail-attachment" or
+  // temp-derived names. The rawPath for Gmail docs won't be in a user-chosen folder.
+  // We check by seeing if the original filename looks Gmail-derived.
+  const name = doc.originalFilename.toLowerCase();
+  return name.startsWith("gmail-") || name.includes("gmail-attachment") || name.endsWith(".eml");
 }

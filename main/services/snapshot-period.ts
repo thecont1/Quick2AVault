@@ -1,4 +1,4 @@
-export type SnapshotPeriod = "month" | "financial_year";
+export type SnapshotPeriod = "month" | "previous_month" | "financial_year";
 
 export type RecurringFrequency = "weekly" | "monthly" | "quarterly" | "annually" | "custom";
 
@@ -59,6 +59,18 @@ export function snapshotPeriodInfo(
       label: now.toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
       startDate: `${year}-${String(month).padStart(2, "0")}-01`,
       endDate: isoDate(new Date(year, month, 0)),
+    };
+  }
+
+  if (period === "previous_month") {
+    const prev = new Date(year, month - 2, 1);
+    const prevYear = prev.getFullYear();
+    const prevMonth = prev.getMonth() + 1;
+    return {
+      period,
+      label: prev.toLocaleDateString("en-IN", { month: "long", year: "numeric" }),
+      startDate: `${prevYear}-${String(prevMonth).padStart(2, "0")}-01`,
+      endDate: isoDate(new Date(prevYear, prevMonth, 0)),
     };
   }
 

@@ -18,6 +18,7 @@ import {
   insertDocument,
   insertDuplicateEvent,
   saveContractNote,
+  setLastActivity,
   updateDocumentProcessing,
   type FinancialImpact,
 } from "./database.js";
@@ -190,6 +191,7 @@ export async function intakeFile(
     await fs.copyFile(sourcePath, rawDest);
 
     logger.info("vault", "Received file", { filename });
+    setLastActivity();
     return {
       filename,
       status: "accepted",
@@ -305,6 +307,7 @@ export async function processIntake(job: ProcessJob): Promise<IngestResult> {
     });
 
     logger.info("vault", "Processed file", { filename, markdownSuccess: success });
+    setLastActivity();
     return {
       filename,
       status: "ingested",

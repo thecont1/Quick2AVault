@@ -35,6 +35,7 @@ import {
   FileSearch,
   FileText,
   LineChart,
+  Loader2,
   Pencil,
   Search,
   Star,
@@ -256,6 +257,87 @@ function Preview({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void 
         </Text>
       </span>
     </button>
+  );
+}
+
+// ── Preview pane with document/markdown toggle ───────────────────────────
+
+function PreviewPane({ row, onOpen }: { row: DocumentBrowserRow; onOpen: () => void }) {
+  const [view, setView] = useState<"document" | "markdown">("document");
+  const isGmail = row.source === "gmail";
+
+  const { data: markdownContent, isLoading: markdownLoading, isError: markdownError } = useQuery({
+    queryKey: ["documents", "markdown", row.docId],
+    queryFn: () => invoke<string | null>("documents:readMarkdown", row.docId),
+    enabled: view === "markdown" || isGmail,
+  });
+
+  useEffect(() => {
+    if (isGmail) setView("markdown");
+  }, [isGmail]);
+
+  return (
+    <div className="flex flex-col gap-2">
+      {!isGmail && (
+        <div
+          role="group"
+          aria-label="Preview view"
+          className="flex items-center gap-1 self-end rounded-lg bg-control-subtle p-0.5 text-xs font-semibold"
+        >
+          <button
+            type="button"
+            role="radio"
+            aria-checked={view === "document"}
+            onClick={() => setView("document")}
+            className={cn(
+              "rounded-md px-2.5 py-1 transition-colors",
+              view === "document" ? "bg-accent text-accent-contrast shadow-sm" : "text-secondary hover:text-primary",
+            )}
+          >
+            Document
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={view === "markdown"}
+            onClick={() => setView("markdown")}
+            className={cn(
+              "rounded-md px-2.5 py-1 transition-colors",
+              view === "markdown" ? "bg-accent text-accent-contrast shadow-sm" : "text-secondary hover:text-primary",
+            )}
+          >
+            Markdown
+          </button>
+        </div>
+      )}
+      {view === "document" && !isGmail ? (
+        <Preview row={row} onOpen={onOpen} />
+      ) : (
+        <div className="h-[min(62vh,576px)] min-h-[408px] w-full overflow-auto rounded-card border border-separator bg-well p-4">
+          {markdownLoading ? (
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="size-5 animate-spin text-tertiary" />
+            </div>
+          ) : markdownError ? (
+            <div className="flex h-full items-center justify-center">
+              <Text variant="small" color="tertiary">
+                Failed to load markdown content.
+              </Text>
+            </div>
+          ) : markdownContent ? (
+            <pre className="whitespace-pre-wrap text-[13px] leading-relaxed text-primary font-mono">
+              {markdownContent}
+            </pre>
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <Text variant="small" color="tertiary">
+                No markdown content available.
+              </Text>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -806,7 +888,7 @@ export function DocumentsView() {
           ) : showingPinned ? (
             // ── Edit view (pinned) — full EvidenceCard ─────────────────────
             <>
-              <Preview
+              <PreviewPane
                 key={activeRow.docId}
                 row={activeRow}
                 onOpen={() => openFile(activeRow.docId)}
@@ -842,7 +924,7 @@ export function DocumentsView() {
           ) : (
             // ── Abridged view (hovered) — Preview + PeekSummary + Edit button ──
             <>
-              <Preview
+              <PreviewPane
                 key={activeRow.docId}
                 row={activeRow}
                 onOpen={() => openFile(activeRow.docId)}

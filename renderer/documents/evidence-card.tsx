@@ -7,8 +7,8 @@
  * existing Review Queue resolve handler, so corrections learn rules and never
  * overwrite a value the user already confirmed.
  */
-import { useState, type ReactNode } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useRef, useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
   Button,
@@ -129,6 +129,9 @@ function SummaryRow({
 }
 
 /** A reviewable field with confirm / correct / later actions. */
+/** Fields that should use a dropdown with known values + custom entry. */
+const DROPDOWN_FIELDS = new Set(["doc_type", "vendor", "person"]);
+
 function FieldRow({
   docId,
   field,
@@ -141,9 +144,19 @@ function FieldRow({
   const [correcting, setCorrecting] = useState(false);
   const [draft, setDraft] = useState(field.value ?? field.suggestedValue ?? "");
   const [showWhy, setShowWhy] = useState(false);
+  const [customMode, setCustomMode] = useState(false);
+  const cancelRef = useRef(false);
   const queryClient = useQueryClient();
   const meta = STATUS_META[field.status];
   const pending = isPending(field.status);
+
+  const useDropdown = DROPDOWN_FIELDS.has(field.field);
+  const { data: knownValues = [] } = useQuery({
+    queryKey: ["documents", "fieldValues", field.field],
+    queryFn: () => invoke<string[]>("documents:fieldValues", field.field),
+    enabled: useDropdown && correcting,
+    staleTime: Infinity,
+  });
 
   const resolve = useMutation({
     mutationFn: (input: { action: "confirm" | "correct" | "defer"; value?: string }) =>
@@ -162,6 +175,10 @@ function FieldRow({
   });
 
   const commit = () => {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      return;
+    }
     const next = draft.trim();
     if (next && next !== field.value) resolve.mutate({ action: "correct", value: next });
     setCorrecting(false);
@@ -185,20 +202,76 @@ function FieldRow({
       </div>
 
       {correcting ? (
-        <div className="flex items-center gap-1.5">
-          <Input
-            size="small"
-            autoFocus
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commit();
-              if (e.key === "Escape") setCorrecting(false);
-            }}
-            onBlur={commit}
-            placeholder={`Correct ${field.label.toLowerCase()}`}
-            className="flex-1"
-          />
+        <div className="flex flex-col gap-1.5">
+          {useDropdown && !customMode ? (
+            <div className="flex items-center gap-1.5">
+              <Select
+                value={draft || undefined}
+                onValueChange={(v) => {
+                  if (v === "__custom__") {
+                    setCustomMode(true);
+                    setDraft("");
+                  } else {
+                    setDraft(v);
+                    resolve.mutate({ action: "correct", value: v });
+                    setCorrecting(false);
+                  }
+                }}
+              >
+                <SelectTrigger size="small" variant="filled" className="flex-1" autoFocus>
+                  <SelectValue placeholder={`Choose ${field.label.toLowerCase()}…`} />
+                </SelectTrigger>
+                <SelectContent>
+                  {knownValues.map((v) => (
+                    <SelectItem key={v} value={v}>
+                      {v}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value="__custom__">Custom…</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                size="small"
+                variant="transparent"
+                onClick={() => {
+                  setCustomMode(true);
+                  setDraft("");
+                }}
+              >
+                <Pencil className="size-3.5" />
+                Custom
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <Input
+                size="small"
+                autoFocus
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commit();
+                  if (e.key === "Escape") {
+                    cancelRef.current = true;
+                    if (useDropdown) setCustomMode(false);
+                    setCorrecting(false);
+                  }
+                }}
+                onBlur={commit}
+                placeholder={`Enter ${field.label.toLowerCase()}`}
+                className="flex-1"
+              />
+              {useDropdown && customMode ? (
+                <Button
+                  size="small"
+                  variant="transparent"
+                  onClick={() => setCustomMode(false)}
+                >
+                  List
+                </Button>
+              ) : null}
+            </div>
+          )}
         </div>
       ) : (
         <div className="flex items-center gap-2">
@@ -253,6 +326,7 @@ function FieldRow({
           variant="transparent"
           onClick={() => {
             setDraft(field.value ?? field.suggestedValue ?? "");
+            setCustomMode(false);
             setCorrecting(true);
           }}
           disabled={resolve.isPending}
@@ -392,7 +466,7 @@ function AccountingBlock({
         <div className="flex items-center gap-2">
           <Scale className="size-4 text-tertiary" />
           <Text variant="small-strong" className="flex-1">
-            Accounting hint
+            Accounting
           </Text>
           {userTouched ? <Badge color="blue">Edited by you</Badge> : null}
           {acc ? (
@@ -407,7 +481,7 @@ function AccountingBlock({
 
         <div className="flex items-center gap-2">
           <Text variant="small" color="tertiary" className="w-28 shrink-0">
-            Suggested treatment
+            Treatment
           </Text>
           {treatment ? (
             <Badge color={treatmentColor(treatment)}>{TREATMENT_LABEL[treatment]}</Badge>
@@ -447,14 +521,11 @@ function AccountingBlock({
         ) : null}
 
         <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-          <Text variant="small" color="tertiary">
-            Set treatment
-          </Text>
           <Select
             value={treatment ?? undefined}
             onValueChange={(v) => resolve.mutate({ action: "correct", value: v })}
           >
-            <SelectTrigger size="small" variant="filled" className="w-56">
+            <SelectTrigger size="small" variant="filled" className="w-56" aria-label="Set treatment">
               <SelectValue placeholder="Choose a treatment…" />
             </SelectTrigger>
             <SelectContent>
@@ -497,7 +568,7 @@ function AccountingBlock({
         <div className="flex items-center gap-1 text-tertiary">
           <Info className="size-3 shrink-0" />
           <Text variant="small" color="tertiary">
-            Suggested treatment — an accounting hint, not a booked entry or accounting advice.
+            Advisory hint — not a booked entry or accounting advice.
           </Text>
         </div>
       </div>
@@ -954,7 +1025,7 @@ export function EvidenceCard({
                 <Star className="size-3" /> Self
               </Badge>
             ) : null}
-            {p.roles.map((r) => (
+            {p.roles.filter((r) => r !== "self").map((r) => (
               <Badge key={r} color="secondary">
                 {ROLE_LABEL[r]}
               </Badge>
@@ -1131,23 +1202,6 @@ export function EvidenceCard({
             ))
         )}
       </div>
-
-      {/* Evidence excerpt */}
-      {detail.markdownExcerpt ? (
-        <>
-          <Separator />
-          <div className="flex flex-col gap-1.5">
-            <Text variant="small-strong" color="secondary">
-              Source excerpt
-            </Text>
-            <div className="rounded-lg bg-well px-3 py-2 max-h-40 overflow-auto">
-              <Text variant="small" color="secondary" className="whitespace-pre-wrap break-words">
-                {detail.markdownExcerpt}
-              </Text>
-            </div>
-          </div>
-        </>
-      ) : null}
 
       {/* Audit trail */}
       <Separator />

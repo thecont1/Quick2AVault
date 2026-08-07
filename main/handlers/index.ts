@@ -41,9 +41,11 @@ import {
   getStats,
   getTrainingStats,
   insertRecurringEntry,
+  listDistinctFieldValues,
   listDocuments,
   listRecurringEntries,
   removeDocumentOverride,
+  runTransaction,
   setDocumentOverride,
   updateRecurringEntry,
   PERSON_ROLES,
@@ -72,9 +74,11 @@ import {
 } from "../services/reviews.js";
 import {
   getDocumentDetail,
+  isGmailSourced,
   listDocumentBrowser,
   openDocumentFile,
   openDocumentMarkdown,
+  readDocumentMarkdown,
 } from "../services/document-detail.js";
 import { listDuplicateEvents } from "../services/database.js";
 import {
@@ -86,6 +90,7 @@ import {
 } from "../services/lifecycle.js";
 import {
   addPersonAlias,
+  cleanupPersons,
   confirmNameForPerson,
   deletePersonEntity,
   ensurePerson,
@@ -329,7 +334,7 @@ export function registerHandlers(): void {
         (input.metric === "income" ||
           input.metric === "spending" ||
           input.metric === "investments") &&
-        (input.period === "month" || input.period === "financial_year") &&
+        (input.period === "month" || input.period === "previous_month" || input.period === "financial_year") &&
         typeof input.label === "string" &&
         typeof input.startDate === "string" &&
         typeof input.endDate === "string" &&
@@ -365,6 +370,24 @@ export function registerHandlers(): void {
     const id = Number(docId);
     if (!Number.isFinite(id)) return "Invalid document.";
     return await openDocumentMarkdown(id);
+  });
+
+  ipcMain.handle("documents:readMarkdown", async (_event, docId: unknown) => {
+    const id = Number(docId);
+    if (!Number.isFinite(id)) return null;
+    return await readDocumentMarkdown(id);
+  });
+
+  ipcMain.handle("documents:isGmailSourced", (_event, docId: unknown) => {
+    const id = Number(docId);
+    if (!Number.isFinite(id)) return false;
+    return isGmailSourced(id);
+  });
+
+  ipcMain.handle("documents:fieldValues", (_event, field: unknown) => {
+    if (typeof field !== "string") return [];
+    if (!REVIEW_FIELDS.includes(field as ReviewField)) return [];
+    return listDistinctFieldValues(field);
   });
 
   // ── Lifecycle actions (exclude / restore / reprocess / delete) ────────
@@ -569,6 +592,54 @@ export function registerHandlers(): void {
       setDocumentOverride(id, null);
     } else if (typeof target === "string" && target.trim().length > 0) {
       setDocumentOverride(id, target.trim());
+    }
+  });
+
+  // One-time cleanup: consolidate persons to a known canonical set.
+  // Requires explicit confirmation to prevent accidental mass deletion.
+  ipcMain.handle("people:cleanup", async (_event, specs: unknown, options?: unknown) => {
+    if (!Array.isArray(specs)) {
+      return { ok: false, message: "Expected an array of cleanup specs." };
+    }
+    const confirm = (options as Record<string, unknown> | null | undefined)?.confirm === true;
+    if (!confirm) {
+      return { ok: false, message: "Confirmation required: pass { confirm: true }." };
+    }
+    const valid: { displayName: string; aliases: string[] }[] = [];
+    const errors: string[] = [];
+    const seenNorms = new Set<string>();
+    for (let i = 0; i < specs.length; i++) {
+      const s = specs[i];
+      if (s == null || typeof s !== "object") {
+        errors.push(`Spec ${i}: not an object.`);
+        continue;
+      }
+      const rawDisplay = (s as Record<string, unknown>).displayName;
+      if (typeof rawDisplay !== "string" || !rawDisplay.trim()) {
+        errors.push(`Spec ${i}: missing or empty displayName.`);
+        continue;
+      }
+      const displayName = rawDisplay.trim();
+      const norm = displayName.toLowerCase().replace(/\s+/g, " ").trim();
+      if (seenNorms.has(norm)) {
+        errors.push(`Spec ${i}: duplicate displayName "${displayName}".`);
+        continue;
+      }
+      seenNorms.add(norm);
+      const rawAliases = (s as Record<string, unknown>).aliases;
+      const aliases = Array.isArray(rawAliases)
+        ? rawAliases.map(String).map((a) => a.trim()).filter(Boolean)
+        : [];
+      valid.push({ displayName, aliases });
+    }
+    if (valid.length === 0) {
+      return { ok: false, message: "No valid cleanup specs provided.", errors };
+    }
+    try {
+      const result = runTransaction(() => cleanupPersons(valid));
+      return { ok: true, applied: valid.length, ...result, errors };
+    } catch (err) {
+      return { ok: false, message: `Cleanup failed: ${String(err)}`, errors };
     }
   });
 

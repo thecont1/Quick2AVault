@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button, ScrollArea, Text } from "@glaze/core/components";
 import { useTheme } from "@glaze/core/hooks";
 import { cn } from "@glaze/core/utils";
-import { CheckCircle2, FileText, Loader2, PowerOff, SkipForward } from "lucide-react";
+import { CheckCircle2, FileText, Loader2, Mail, PowerOff, SkipForward } from "lucide-react";
 
 type QuestionKind = "single" | "yesno" | "chips" | "text";
 
@@ -17,6 +17,8 @@ interface TrainingQuestion {
 interface PendingReview {
   docId: number;
   filename: string;
+  summary: string;
+  source: "gmail" | "file";
   questions: TrainingQuestion[];
 }
 
@@ -277,12 +279,23 @@ export function TrainingView() {
           </div>
         ) : review ? (
           <>
-            {/* Which document this is about */}
-            <div className="flex items-center gap-1.5 px-4 pt-2.5 pb-1 shrink-0">
-              <FileText className="size-3.5 text-tertiary shrink-0" />
-              <Text variant="mini" color="tertiary" className="truncate" title={review.filename}>
-                {review.filename}
-              </Text>
+            {/* Document context summary */}
+            <div className="flex items-start gap-1.5 px-4 pt-2.5 pb-1 shrink-0">
+              {review.source === "gmail" ? (
+                <Mail className="size-3.5 text-accent shrink-0 mt-0.5" />
+              ) : (
+                <FileText className="size-3.5 text-tertiary shrink-0 mt-0.5" />
+              )}
+              <div className="flex flex-col gap-0.5 min-w-0">
+                {review.summary ? (
+                  <Text variant="small" color="secondary" className="leading-snug">
+                    {review.summary}
+                  </Text>
+                ) : null}
+                <Text variant="mini" color="tertiary" className="truncate" title={review.filename}>
+                  {review.filename}
+                </Text>
+              </div>
             </div>
 
             {/* Questions */}
