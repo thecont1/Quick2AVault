@@ -31,6 +31,9 @@ import {
   listPersons,
   reassignAliases,
   reassignEvidence,
+  replacePersonFieldValues,
+  setDocumentOverride,
+  clearSelfPerson,
   setSelfPerson,
   updatePerson,
   upsertAlias,
@@ -119,7 +122,8 @@ const AUTO_LINK_SCORE = 0.85;
 const SUGGEST_SCORE = 0.6;
 
 /** Best fuzzy match for a raw name among existing aliases, or null. */
-export function matchName(rawName: string, aliases = listAliases()): NameMatch | null {
+export function matchName(rawName: string, aliases?: PersonAlias[]): NameMatch | null {
+  if (!aliases) aliases = listAliases();
   const norm = normalizeName(rawName);
   if (!norm) return null;
 
@@ -156,13 +160,26 @@ export function buildAliasIndex(): Map<string, number> {
   return map;
 }
 
-/** Resolve a raw name to a persisted person id via exact alias, or null. */
+/** Load all aliases once — pass to resolveNameToPersonId to avoid per-name DB queries. */
+export function listAllAliases(): PersonAlias[] {
+  return listAliases();
+}
+
+/** Resolve a raw name to a persisted person id via exact alias, or null.
+ *  Pass a preloaded `aliases` array to avoid a DB query on each fuzzy fallback. */
 export function resolveNameToPersonId(
   name: string | null,
   index = buildAliasIndex(),
+  aliases?: PersonAlias[],
 ): number | null {
   if (!name) return null;
-  return index.get(normalizeName(name)) ?? null;
+  const norm = normalizeName(name);
+  if (!norm) return null;
+  const exact = index.get(norm);
+  if (exact != null) return exact;
+  // Fuzzy fallback: try reordered/initials match against known aliases.
+  const match = matchName(name, aliases);
+  return match && match.score >= AUTO_LINK_SCORE ? match.personId : null;
 }
 
 // ── Ingestion-time resolution (creates / links people) ─────────────────────
@@ -193,6 +210,9 @@ export function resolvePersonForName(
   const name = rawName.trim();
   const norm = normalizeName(name);
   if (!norm) return { personId: null };
+  // Never create/link people for document fragments ("Vidya's account",
+  // "Forwarding only", etc.) — only plausible names become persons.
+  if (!isPlausiblePersonName(name)) return { personId: null };
   const where = ctx.filename ? `"${ctx.filename}"` : "a document";
 
   const existing = findAliasByNormalized(norm);
@@ -363,6 +383,17 @@ function looksLikeSentence(value: string): boolean {
   if (/\([^)]{15,}\)/.test(v)) return true; // long parenthetical = explanation
   if (/[.!?]$/.test(v) && v.split(/\s+/).length > 3) return true;
   if (v.split(/\s+/).filter(Boolean).length > 5) return true;
+  // possessives — "Vidya's", "Vidya's account" are document fragments, not names
+  if (/'s\b/i.test(v) || /’s\b/i.test(v)) return true;
+  // slashes — "Household/shared" is a label, not a name
+  if (/\//.test(v)) return true;
+  // generic descriptors — email headers, account labels, not people
+  if (
+    /\b(forwarding|forwarded|only|shared|household|account|statement|summary|notification|alert|update|digest|newsletter|no-?reply)\b/i.test(
+      v,
+    )
+  )
+    return true;
   return false;
 }
 
@@ -421,6 +452,12 @@ export function renamePerson(id: number, name: string): void {
 
 export function setPersonRoles(id: number, roles: PersonRole[]): void {
   if (!findPerson(id)) return;
+  if (roles.includes("self")) {
+    setSelfPerson(id);
+  } else {
+    const person = findPerson(id);
+    if (person?.isSelf) clearSelfPerson();
+  }
   updatePerson(id, { roles, rolesSource: "user_confirmed", status: "confirmed" });
   addEvidence({
     personId: id,
@@ -635,6 +672,12 @@ export function seedPeopleFromExisting(): void {
   for (const ov of listDocumentOverrides()) if (ov.person) names.add(ov.person);
   if (names.size === 0) return;
 
+  // Skip document fragments / labels — they must never seed a person.
+  for (const n of Array.from(names)) {
+    if (!isPlausiblePersonName(n)) names.delete(n);
+  }
+  if (names.size === 0) return;
+
   const groups = new Map<string, Set<string>>();
   for (const name of names) {
     const root = follow(name);
@@ -664,4 +707,138 @@ export function seedPeopleFromExisting(): void {
       detail: "Imported from existing document history",
     });
   }
+}
+
+// ── One-time cleanup: consolidate persons to a known set ──────────────────
+
+interface CanonicalPersonSpec {
+  displayName: string;
+  aliases: string[];
+}
+
+/**
+ * Consolidate all persons into exactly the specified set. For each canonical
+ * person: ensure it exists with the given display name, attach all aliases,
+ * and merge any existing person whose aliases overlap. Any person not in the
+ * target set is deleted (its aliases/evidence are reassigned or removed).
+ *
+ * Also updates document_overrides so any pinned person name is replaced with
+ * the canonical display name when it matches one of the aliases.
+ */
+export function cleanupPersons(specs: CanonicalPersonSpec[]): {
+    deletedCount: number;
+    mergedCount: number;
+  } {
+  if (specs.length === 0) {
+    return { deletedCount: 0, mergedCount: 0 };
+  }
+
+  const allPersons = listPersons();
+  let mergedCount = 0;
+
+  // Phase 1: Ensure canonical persons exist and attach all aliases.
+  const canonicalIds: number[] = [];
+  for (const spec of specs) {
+    const norm = normalizeName(spec.displayName);
+    // Find or create the canonical person.
+    let personId: number | null = null;
+    const existingAlias = findAliasByNormalized(norm);
+    if (existingAlias) {
+      personId = existingAlias.personId;
+      // Rename if needed.
+      const p = findPerson(personId);
+      if (p && p.displayName !== spec.displayName) {
+        updatePerson(personId, {
+          displayName: spec.displayName,
+          nameSource: "user_confirmed",
+          status: "confirmed",
+          confidence: 1,
+        });
+      }
+    } else {
+      // Check if any existing person has this as a reordered name.
+      const match = matchName(spec.displayName);
+      if (match && match.score >= AUTO_LINK_SCORE) {
+        personId = match.personId;
+        updatePerson(personId, {
+          displayName: spec.displayName,
+          nameSource: "user_confirmed",
+          status: "confirmed",
+          confidence: 1,
+        });
+      } else {
+        const p = insertPerson({
+          displayName: spec.displayName,
+          confidence: 1,
+          nameSource: "user_confirmed",
+          status: "confirmed",
+        });
+        personId = p.id;
+      }
+    }
+
+    // Attach the display name as a confirmed alias.
+    upsertAlias({
+      personId,
+      alias: spec.displayName,
+      normalized: norm,
+      source: "user_confirmed",
+    });
+
+    // Attach all specified aliases.
+    for (const alias of spec.aliases) {
+      const aliasNorm = normalizeName(alias);
+      if (!aliasNorm) continue;
+      // If this alias currently belongs to another person, merge that person.
+      const existing = findAliasByNormalized(aliasNorm);
+      if (existing && existing.personId !== personId) {
+        mergePersons(existing.personId, personId);
+        mergedCount++;
+      }
+      upsertAlias({
+        personId,
+        alias,
+        normalized: aliasNorm,
+        source: "user_confirmed",
+      });
+    }
+
+    canonicalIds.push(personId);
+  }
+
+  // Phase 2: Delete any person not in the canonical set.
+  const canonicalSet = new Set(canonicalIds);
+  let deletedCount = 0;
+  for (const p of allPersons) {
+    if (!canonicalSet.has(p.id)) {
+      // Check if this person still exists (may have been merged already).
+      if (findPerson(p.id)) {
+        deletePerson(p.id);
+        deletedCount++;
+      }
+    }
+  }
+
+  // Phase 3: Update document_overrides to use canonical display names.
+  const overrides = listDocumentOverrides();
+  for (const spec of specs) {
+    const aliasNorms = new Set([
+      normalizeName(spec.displayName),
+      ...spec.aliases.map(normalizeName),
+    ]);
+    for (const ov of overrides) {
+      if (ov.person && aliasNorms.has(normalizeName(ov.person)) && ov.person !== spec.displayName) {
+        setDocumentOverride(ov.docId, spec.displayName);
+      }
+    }
+  }
+
+  // Phase 4: Replace old person names in document_field_reviews so the
+  // Person dropdown in Evidence Card only shows canonical display names.
+  for (const spec of specs) {
+    const oldNames = [spec.displayName, ...spec.aliases];
+    replacePersonFieldValues(oldNames, spec.displayName);
+  }
+
+  return { deletedCount, mergedCount };
 }

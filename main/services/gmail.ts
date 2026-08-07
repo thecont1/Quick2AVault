@@ -10,6 +10,7 @@ import {
   gmailImportTotals,
   hasGmailImport,
   saveGmailImport,
+  setLastActivity,
   setSetting,
 } from "./database.js";
 import { enqueueInternalFiles } from "./ingest-queue.js";
@@ -375,6 +376,7 @@ async function performSync(): Promise<GmailStatus> {
       await runIncrementalGmailSync(port, null);
     }
     setSetting(LAST_SYNC_KEY, new Date().toISOString());
+    setLastActivity();
     deleteSetting(LAST_ERROR_KEY);
     runtimeState = "connected";
     broadcastStatus();

@@ -26,6 +26,7 @@ import {
   getSetting,
   getTrainingReview,
   getTrainingStats,
+  listFieldReviews,
   listLearnedRules,
   resetTraining,
   saveTrainingReview,
@@ -87,6 +88,8 @@ export interface TrainingAnswer {
 export interface PendingReview {
   docId: number;
   filename: string;
+  summary: string;
+  source: "gmail" | "file";
   questions: TrainingQuestion[];
 }
 
@@ -421,9 +424,10 @@ export async function saveAnswers(
       const detected = q.matchKey?.trim();
       if (!detected) continue;
       if (isNegative) {
-        // Different person → give the detected name its own canonical identity.
-        ensurePerson(detected);
-        setDocumentOverride(docId, detected);
+        // Different person → give the detected name its own canonical identity,
+        // but only when it's actually a plausible name (skip junk fragments).
+        const pid = ensurePersonIfName(detected);
+        if (pid != null) setDocumentOverride(docId, detected);
       } else {
         // Same as the chosen existing person → link + learn the mapping.
         const personId = ensurePersonIfName(value);
@@ -560,6 +564,48 @@ export async function writeRulesMarkdown(): Promise<void> {
 
 // ── Pending review access (for the popup) ────────────────────────────────
 
+/** Build a one-line summary like "₹2,484 paid to Amazon on 2024-03-15". */
+function buildDocSummary(docId: number): string {
+  const reviews = listFieldReviews(docId);
+  const get = (field: string): string | null => {
+    const r = reviews.find((rv) => rv.field === field);
+    return (r?.finalValue ?? r?.extractedValue) ?? null;
+  };
+
+  const amountRaw = get("amount");
+  const vendor = get("vendor");
+  const date = get("doc_date");
+
+  // Format amount as Indian currency (preserve negative sign for refunds/credits).
+  let amount: string | null = null;
+  if (amountRaw) {
+    const negative = amountRaw.trim().startsWith("-");
+    const num = Number(amountRaw.replace(/[^0-9.]/g, ""));
+    if (Number.isFinite(num)) {
+      const absVal = Math.abs(num);
+      amount = `${negative ? "-" : ""}₹${absVal.toLocaleString("en-IN")}`;
+    } else {
+      amount = amountRaw;
+    }
+  }
+
+  const parts: string[] = [];
+  if (amount) parts.push(`${amount} involving`);
+  if (vendor) parts.push(vendor);
+  if (date) parts.push(`on ${date}`);
+
+  return parts.join(" ");
+}
+
+function docSource(docId: number): "gmail" | "file" {
+  const doc = findDocumentById(docId);
+  if (!doc) return "file";
+  const name = doc.originalFilename.toLowerCase();
+  return name.startsWith("gmail-") || name.includes("gmail-attachment") || name.endsWith(".eml")
+    ? "gmail"
+    : "file";
+}
+
 export function nextPendingReview(): PendingReview | null {
   const rec = getNextPendingReview();
   if (!rec) return null;
@@ -574,6 +620,8 @@ export function nextPendingReview(): PendingReview | null {
   return {
     docId: rec.docId,
     filename: doc?.originalFilename ?? `Document ${rec.docId}`,
+    summary: buildDocSummary(rec.docId),
+    source: docSource(rec.docId),
     questions,
   };
 }

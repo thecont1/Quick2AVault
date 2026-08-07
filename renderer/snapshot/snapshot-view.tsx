@@ -3,28 +3,25 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ScrollArea, Text } from "@glaze/core/components";
 import { useTheme } from "@glaze/core/hooks";
 import { cn } from "@glaze/core/utils";
+import { Treemap, ResponsiveContainer } from "recharts";
 import {
   AlertCircle,
-  Bot,
   CalendarClock,
   CheckCircle2,
+  ChevronRight,
   ClipboardList,
   FileSearch,
   GraduationCap,
   Loader2,
   RefreshCw,
   Settings,
-  ShoppingBag,
-  ShoppingCart,
   Slash,
-  Tag,
   TrendingDown,
   TrendingUp,
-  UtensilsCrossed,
 } from "lucide-react";
 
 
-type SnapshotPeriod = "month" | "financial_year";
+type SnapshotPeriod = "month" | "previous_month" | "financial_year";
 
 interface SnapshotTotals {
   income: number;
@@ -79,6 +76,7 @@ interface SnapshotData {
 interface SnapshotResponse {
   snapshot: SnapshotData | null;
   generatedAt: string | null;
+  lastActivity: string | null;
   aiBlocked?: string;
   error?: string;
   fallback: { totalDocuments: number };
@@ -110,6 +108,12 @@ function formatUpdated(iso: string | null): string {
   if (minutes < 1) return "Updated just now";
   if (minutes < 60) return `Updated ${minutes}m ago`;
   return `Updated ${Math.round(minutes / 60)}h ago`;
+}
+
+function effectiveTimestamp(generatedAt: string | null, lastActivity: string | null): string | null {
+  const candidates = [generatedAt, lastActivity].filter((v): v is string => v != null);
+  if (candidates.length === 0) return null;
+  return candidates.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
 }
 
 type HeroTone = "income" | "spending" | "investments";
@@ -269,29 +273,158 @@ function SnapshotMenu({
   );
 }
 
-const WATCH_ICON_RULES: [RegExp, typeof ShoppingCart][] = [
-  [/grocer|food\s*mart|kirana/i, ShoppingCart],
-  [/eat|din|restaurant|food|swiggy|zomato/i, UtensilsCrossed],
-  [/discretion/i, ShoppingBag],
-  [/\b(ai|llm|chatgpt|openai|anthropic|claude)\b|expense/i, Bot],
+const WATCH_BAR_TONES = [
+  "bg-emerald-500",
+  "bg-orange-400",
+  "bg-sky-500",
+  "bg-violet-400",
+  "bg-rose-500",
+  "bg-amber-400",
+  "bg-teal-500",
+  "bg-fuchsia-500",
 ];
 
-function watchIconFor(label: string): typeof ShoppingCart {
-  for (const [pattern, Icon] of WATCH_ICON_RULES) {
-    if (pattern.test(label)) return Icon;
-  }
-  return Tag;
-}
-
-const WATCH_BAR_TONES = ["bg-emerald-500", "bg-orange-400", "bg-sky-500", "bg-violet-400"];
+const TONE_BG: Record<string, string> = {
+  "bg-emerald-500": "#10b981",
+  "bg-orange-400": "#fb923c",
+  "bg-sky-500": "#0ea5e9",
+  "bg-violet-400": "#a78bfa",
+  "bg-rose-500": "#f43f5e",
+  "bg-amber-400": "#fbbf24",
+  "bg-teal-500": "#14b8a6",
+  "bg-fuchsia-500": "#d946ef",
+};
 
 const PERIOD_STORAGE_KEY = "quick2a:snapshot-period";
 
+interface TreemapDatum {
+  id: string;
+  label: string;
+  totalInr: number;
+  percent: number;
+  index: number;
+}
+
+function WatchTreemapContent(props: Record<string, unknown>) {
+  const x = props.x as number;
+  const y = props.y as number;
+  const width = props.width as number;
+  const height = props.height as number;
+  const label = props.label as string | undefined;
+  const totalInr = props.totalInr as number | undefined;
+  const percent = props.percent as number | undefined;
+  const index = props.index as number | undefined;
+  if (width < 4 || height < 4 || !label) return null;
+  const tone = WATCH_BAR_TONES[(index ?? 0) % WATCH_BAR_TONES.length];
+  const fill = TONE_BG[tone] ?? "#6b7280";
+  const showLabel = width >= 60 && height >= 32;
+  const showAmount = width >= 60 && height >= 48;
+  const showPercent = width >= 40 && height >= 20;
+
+  return (
+    <g>
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        fill={fill}
+        fillOpacity={0.9}
+        stroke="white"
+        strokeWidth={0.5}
+      />
+      {showLabel && (
+        <text
+          x={x + 8}
+          y={y + 16}
+          fill="white"
+          fontSize={11}
+          fontWeight={700}
+        >
+          {label.length > 16 ? label.slice(0, 15) + "…" : label}
+        </text>
+      )}
+      {showAmount && (
+        <text x={x + 8} y={y + 32} fill="white" fontSize={10} fontWeight={500} fillOpacity={0.9}>
+          {formatInr(totalInr ?? 0)}
+        </text>
+      )}
+      {showPercent && (
+        <text
+          x={x + width - 8}
+          y={y + 16}
+          fill="white"
+          fontSize={11}
+          fontWeight={700}
+          textAnchor="end"
+          fillOpacity={0.95}
+        >
+          {percent ?? 0}%
+        </text>
+      )}
+    </g>
+  );
+}
+
+function WatchTreemap({
+  data,
+  onSelect,
+}: {
+  data: TreemapDatum[];
+  onSelect: () => void;
+}) {
+  if (data.length === 0) return null;
+  const treemapData = data.map((d) => ({ ...d, name: d.label, size: d.totalInr }));
+  return (
+    <div className="flex flex-col gap-2">
+      <div
+        className="w-full overflow-hidden border border-panel"
+        style={{ height: Math.max(120, Math.min(200, data.length * 48)) }}
+      >
+        <ResponsiveContainer width="100%" height="100%">
+          <Treemap
+            data={treemapData}
+            dataKey="size"
+            content={<WatchTreemapContent />}
+            isAnimationActive={false}
+            onClick={onSelect}
+          />
+        </ResponsiveContainer>
+      </div>
+      <div
+        className="grid px-0.5"
+        style={{
+          gridTemplateColumns: `repeat(${Math.ceil(data.length / 2)}, 1fr)`,
+          columnGap: "0.75rem",
+          rowGap: "0.125rem",
+        }}
+      >
+        {data.map((d) => {
+          const tone = WATCH_BAR_TONES[d.index % WATCH_BAR_TONES.length];
+          const fill = TONE_BG[tone] ?? "#6b7280";
+          return (
+            <div key={d.id} className="flex items-center gap-1.5">
+              <span
+                className="size-2.5 shrink-0 rounded-[1px]"
+                style={{ backgroundColor: fill }}
+              />
+              <span className="text-[11px] text-secondary">{d.label}</span>
+              <span className="text-[11px] tabular-nums text-tertiary ml-auto">
+                {d.percent}%
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function readStoredPeriod(): SnapshotPeriod {
   try {
-    return window.localStorage.getItem(PERIOD_STORAGE_KEY) === "financial_year"
-      ? "financial_year"
-      : "month";
+    const stored = window.localStorage.getItem(PERIOD_STORAGE_KEY);
+    if (stored === "financial_year" || stored === "previous_month") return stored;
+    return "month";
   } catch {
     return "month";
   }
@@ -389,8 +522,12 @@ export function SnapshotView() {
   const blocked = response?.aiBlocked
     ? (BLOCKED_MESSAGE[response.aiBlocked] ?? BLOCKED_MESSAGE.disabled)
     : null;
-  const watchCategories = (active?.watchCategories ?? []).slice(0, 6);
-  const maxWatchTotal = Math.max(0, ...watchCategories.map((c) => c.totalInr));
+  const allWatchCategories = active?.watchCategories ?? [];
+  const watchCategories = allWatchCategories.slice(0, 6);
+  const watchTotalSum = allWatchCategories.reduce((sum, c) => sum + c.totalInr, 0);
+  const watchPercentages = watchCategories.map((c) =>
+    watchTotalSum > 0 ? Math.round((c.totalInr / watchTotalSum) * 100) : 0,
+  );
   const docsProcessed = (count: number) => `${count} document${count === 1 ? "" : "s"} processed`;
   const openDocuments = (metric?: "income" | "spending" | "investments", docId?: number) => {
     if (!metric || !active) {
@@ -431,9 +568,25 @@ export function SnapshotView() {
         <div className="px-4 pt-3 pb-2.5 shrink-0 flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
             <CalendarClock className="size-4 text-accent" />
-            <Text variant="large-strong" className="flex-1">
-              {active?.label ?? "Current period"}
-            </Text>
+            {(period === "month" || period === "previous_month") ? (
+              <button
+                type="button"
+                onClick={() =>
+                  updatePeriod(period === "month" ? "previous_month" : "month")
+                }
+                className="flex flex-1 items-center gap-1 text-left hover:opacity-80 transition-opacity"
+                aria-label={`Switch to ${period === "month" ? "previous" : "current"} month`}
+              >
+                <Text variant="large-strong">
+                  {active?.label ?? "Current period"}
+                </Text>
+                <ChevronRight className="size-4 text-tertiary" />
+              </button>
+            ) : (
+              <Text variant="large-strong" className="flex-1">
+                {active?.label ?? "Current period"}
+              </Text>
+            )}
             <div
               role="group"
               aria-label="Snapshot period"
@@ -442,12 +595,12 @@ export function SnapshotView() {
               <button
                 type="button"
                 role="switch"
-                aria-checked={period === "month"}
-                aria-label="View this month"
+                aria-checked={period === "month" || period === "previous_month"}
+                aria-label="View by month"
                 onClick={() => updatePeriod("month")}
                 className={cn(
                   "flex h-8 items-center rounded-md px-3.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-1",
-                  period === "month"
+                  period === "month" || period === "previous_month"
                     ? "bg-accent text-accent-contrast shadow-sm"
                     : "text-secondary hover:text-primary hover:bg-control-subtle/70",
                 )}
@@ -473,7 +626,14 @@ export function SnapshotView() {
           </div>
           <div className="flex items-center gap-2 pl-6">
             <Text variant="mini" color="tertiary">
-              {refresh.isPending ? "Updating…" : formatUpdated(response?.generatedAt ?? null)}
+              {refresh.isPending
+                ? "Updating…"
+                : formatUpdated(
+                    effectiveTimestamp(
+                      response?.generatedAt ?? null,
+                      response?.lastActivity ?? null,
+                    ),
+                  )}
             </Text>
           </div>
         </div>
@@ -530,62 +690,34 @@ export function SnapshotView() {
                       Edit
                     </button>
                   </div>
-                  {watchCategories.length > 0 ? (
-                    <div className="flex flex-col gap-3">
-                      {watchCategories.map((category, index) => {
-                        const Icon = watchIconFor(category.label);
-                        const percent =
-                          maxWatchTotal > 0
-                            ? Math.min(100, Math.round((category.totalInr / maxWatchTotal) * 100))
-                            : 0;
-                        const barTone = WATCH_BAR_TONES[index % WATCH_BAR_TONES.length];
-                        return (
-                          <div key={category.id} className="flex items-center gap-3 min-w-0">
-                            <span className="flex shrink-0 items-center justify-center size-8 rounded-full bg-control-subtle text-secondary">
-                              <Icon className="size-4" />
-                            </span>
-                            <div className="min-w-0 flex-1 flex flex-col gap-1">
-                              <div className="flex items-baseline justify-between gap-2">
-                                <Text variant="small-strong" className="truncate">
-                                  {category.label}
-                                </Text>
-                                <Text
-                                  variant="mini"
-                                  color="tertiary"
-                                  className="shrink-0 tabular-nums"
-                                >
-                                  {category.totalInr > 0
-                                    ? `${formatInr(category.totalInr)} spent in this period`
-                                    : "No spending yet this period"}
-                                </Text>
-                              </div>
-                              <div
-                                className="relative h-1.5 w-full overflow-hidden rounded-full bg-panel"
-                                role="progressbar"
-                                aria-valuemin={0}
-                                aria-valuemax={100}
-                                aria-valuenow={percent}
-                                aria-label={`${category.label} usage ${percent}%`}
-                              >
-                                <div
-                                  className={cn(
-                                    "h-full rounded-full transition-[width] duration-500",
-                                    barTone,
-                                  )}
-                                  style={{ width: `${percent}%` }}
-                                />
-                              </div>
-                            </div>
-                            <Text
-                              variant="mini"
-                              color="tertiary"
-                              className="w-9 shrink-0 text-right tabular-nums"
-                            >
-                              {percent}%
-                            </Text>
-                          </div>
-                        );
-                      })}
+                  {watchCategories.length > 0 && watchTotalSum > 0 ? (
+                    <WatchTreemap
+                      data={watchCategories.map((category, index) => ({
+                        id: category.id,
+                        label: category.label,
+                        totalInr: category.totalInr,
+                        percent: watchPercentages[index] ?? 0,
+                        index,
+                      }))}
+                      onSelect={() =>
+                        window.glazeAPI.glaze.ipc.invoke("window:openSettings", "finance")
+                      }
+                    />
+                  ) : watchCategories.length > 0 ? (
+                    <div className="flex flex-col gap-1.5">
+                      {watchCategories.map((category) => (
+                        <div
+                          key={category.id}
+                          className="flex items-center justify-between rounded-lg border border-panel bg-control-subtle/40 px-3 py-2"
+                        >
+                          <Text variant="small-strong" className="truncate">
+                            {category.label}
+                          </Text>
+                          <Text variant="mini" color="tertiary" className="shrink-0 tabular-nums">
+                            No spending yet this period
+                          </Text>
+                        </div>
+                      ))}
                     </div>
                   ) : (
                     <Text variant="small" color="secondary">

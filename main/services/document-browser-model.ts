@@ -15,6 +15,7 @@ export interface DocumentDrilldown {
 export interface BrowserDocument {
   docId: number;
   category: string | null;
+  vendor: string | null;
   docDate: string | null;
   dateIngested: string;
   lifecycleState: string;
@@ -48,11 +49,11 @@ export function applyDocumentDrilldown<T extends BrowserDocument>(
 
 const rowDate = (row: BrowserDocument): string => row.docDate ?? row.dateIngested;
 
-/** Group by category; category and row ordering are deterministic. */
+/** Group by vendor (merchant); grouping and row ordering are deterministic. */
 export function groupDocumentRows<T extends BrowserDocument>(rows: T[]): DocumentGroup<T>[] {
   const groups = new Map<string, T[]>();
   for (const row of rows) {
-    const label = row.category?.trim() || "Uncategorized";
+    const label = row.vendor?.trim() || "Unknown merchant";
     const group = groups.get(label) ?? [];
     group.push(row);
     groups.set(label, group);
@@ -63,8 +64,8 @@ export function groupDocumentRows<T extends BrowserDocument>(rows: T[]): Documen
       .slice()
       .sort((a, b) => rowDate(b).localeCompare(rowDate(a)) || b.docId - a.docId),
   })).sort((a, b) => {
-    if (a.label === "Uncategorized") return 1;
-    if (b.label === "Uncategorized") return -1;
+    if (a.label === "Unknown merchant") return 1;
+    if (b.label === "Unknown merchant") return -1;
     return a.label.localeCompare(b.label);
   });
 }

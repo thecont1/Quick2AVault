@@ -642,7 +642,6 @@ function PersonCard({
   others,
   onRename,
   onSetRoles,
-  onMarkSelf,
   onAddAlias,
   onRemoveAlias,
   onSplitAlias,
@@ -653,7 +652,6 @@ function PersonCard({
   others: PersonEntity[];
   onRename: (name: string) => void;
   onSetRoles: (roles: PersonRole[]) => void;
-  onMarkSelf: () => void;
   onAddAlias: (alias: string) => void;
   onRemoveAlias: (aliasId: number) => void;
   onSplitAlias: (aliasId: number) => void;
@@ -862,17 +860,6 @@ function PersonCard({
           </button>
         ) : null}
         <div className="ml-auto flex items-center gap-1.5">
-          {!person.isSelf ? (
-            <Button
-              size="small"
-              variant="transparent"
-              onClick={onMarkSelf}
-              title="Mark this person as yourself"
-            >
-              <Star className="size-3.5" />
-              Self
-            </Button>
-          ) : null}
           {others.length > 0 ? (
             <Select value="" onValueChange={(v) => onMerge(Number(v))}>
               <SelectTrigger size="small" variant="filled" className="w-[130px]">
@@ -951,11 +938,6 @@ function PeopleSection() {
     onSuccess: invalidate,
     onError: (e) => toast.error(`Couldn't set roles: ${e}`),
   });
-  const markSelf = useMutation({
-    mutationFn: (id: number) => window.glazeAPI.glaze.ipc.invoke("people:markSelf", id),
-    onSuccess: invalidate,
-    onError: (e) => toast.error(`Couldn't mark Self: ${e}`),
-  });
   const addAlias = useMutation({
     mutationFn: (v: { id: number; alias: string }) =>
       window.glazeAPI.glaze.ipc.invoke("people:addAlias", v.id, v.alias),
@@ -998,7 +980,7 @@ function PeopleSection() {
       </div>
       <Text variant="small" color="tertiary">
         Canonical people the app has discovered. Merge duplicates, split a mistaken merge, add name
-        variants, assign roles, and mark yourself as Self — used to resolve future documents.
+        variants, assign roles (including Self) — used to resolve future documents.
         Changes apply to the Financial Snapshot instantly.
       </Text>
       {people.length === 0 ? (
@@ -1015,7 +997,6 @@ function PeopleSection() {
               others={people.filter((p) => p.id !== person.id)}
               onRename={(name) => rename.mutate({ id: person.id, name })}
               onSetRoles={(roles) => setRoles.mutate({ id: person.id, roles })}
-              onMarkSelf={() => markSelf.mutate(person.id)}
               onAddAlias={(alias) => addAlias.mutate({ id: person.id, alias })}
               onRemoveAlias={(aliasId) => removeAlias.mutate(aliasId)}
               onSplitAlias={(aliasId) => splitAlias.mutate({ id: person.id, aliasId })}
@@ -2889,7 +2870,7 @@ export function SettingsView() {
                           window.glazeAPI.glaze.ipc.invoke("window:openDocuments", doc.id)
                         }
                       >
-                        <FileSearch className="size-4" />
+                        <FileSearch className="size-6" />
                       </Button>
                     </TableCell>
                   </TableRow>

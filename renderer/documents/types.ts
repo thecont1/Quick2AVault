@@ -154,6 +154,7 @@ export interface DocumentBrowserRow {
   isContractNote: boolean;
   lifecycleState: LifecycleState;
   triageReason: string | null;
+  source: "gmail" | "file";
 }
 
 export interface DetailField {
@@ -254,14 +255,14 @@ export const SOURCE_LABEL: Record<FieldSource, string> = {
 };
 
 export const FIELD_LABEL: Record<ReviewField, string> = {
-  person: "Canonical person",
+  person: "Person",
   doc_type: "Document type",
-  vendor: "Vendor / institution",
+  vendor: "Vendor",
   doc_date: "Document date",
   fin_year: "Financial year",
   amount: "Amount",
   fx: "Currency conversion",
-  accounting: "Accounting hint",
+  accounting: "Accounting",
   impact: "Financial impact",
 };
 
