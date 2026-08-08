@@ -87,6 +87,12 @@ class _VaultHomeState extends State<VaultHome> {
   bool _review = false;
   bool _learningOn = true;
   int _reviewCount = 0;
+  /// True when the last fetch failed, so the figures on screen describe an
+  /// older request than the period the user has selected. Surfaced in the UI —
+  /// silently stale numbers are worse than an error.
+  bool _stale = false;
+  /// Guards against overlapping reconnect loops.
+  bool _reconnecting = false;
 
   @override
   void initState() {
@@ -181,6 +187,9 @@ class _VaultHomeState extends State<VaultHome> {
         _txns = results[1] as List<Txn>;
         _periods = results[2] as Periods;
         _treemap = results[3] as TreemapData;
+        // A successful fetch is the only proof the daemon is reachable.
+        _daemonUp = true;
+        _stale = false;
       });
       final l = await _api.learning();
       if (mounted) {
@@ -195,7 +204,45 @@ class _VaultHomeState extends State<VaultHome> {
       // reads as "your vault is empty" — indistinguishable from real data loss,
       // and alarming when the ledger is in fact intact. Say what is wrong.
       if (mounted) setState(() => _authError = e.toString());
-    } catch (_) {/* transient; the SSE stream will trigger another */}
+    } catch (_) {
+      // A failed refresh USED to be swallowed here with "the SSE stream will
+      // trigger another". It will not: when the daemon is down the stream is
+      // down too. The visible symptom was the period selector appearing to do
+      // nothing — the button highlighted because _period had changed, the
+      // fetch failed, and the figures silently kept their old values.
+      //
+      // So: mark the data stale, mark the daemon unreachable, and start
+      // polling for its return. The UI can then say the numbers are frozen
+      // instead of quietly lying about which period they describe.
+      if (!mounted) return;
+      setState(() {
+        _stale = true;
+        _daemonUp = false;
+      });
+      _scheduleReconnect();
+    }
+  }
+
+  /// Poll for the daemon after a failed fetch.
+  ///
+  /// Guarded by _reconnecting so a burst of failures (four parallel requests)
+  /// cannot start four overlapping loops.
+  void _scheduleReconnect() {
+    if (_reconnecting) return;
+    _reconnecting = true;
+    Future.delayed(const Duration(seconds: 2), () async {
+      if (!mounted) {
+        _reconnecting = false;
+        return;
+      }
+      _reconnecting = false;
+      final up = await _api.health();
+      if (up) {
+        await _refresh();
+      } else {
+        _scheduleReconnect();
+      }
+    });
   }
 
   Future<void> _toggleLearning() async {
@@ -226,7 +273,11 @@ class _VaultHomeState extends State<VaultHome> {
           'TransactionRecorded', 'MatchProposed', 'AnalysisComplete',
           'DocumentReceived', 'DocumentDuplicate',
         };
-        if (refreshOn.contains(e.type)) _refresh();
+        // 'Ready' is the daemon's hello — it arrives on every (re)connect.
+        // Refreshing on it is how the app recovers after the daemon restarts:
+        // without this the stream reconnected, the dot went green, and the
+        // figures stayed frozen at whatever they were before the outage.
+        if (e.type == 'Ready' || refreshOn.contains(e.type)) _refresh();
       },
       onError: (_) {
         if (mounted) setState(() => _connected = false);
@@ -319,7 +370,15 @@ class _VaultHomeState extends State<VaultHome> {
             snapshot: _snap,
             // Non-null means the daemon rejected our token, so every figure
             // below is a placeholder rather than a reading of the vault.
-            authError: _authError,
+            // Staleness rides the same banner: in both cases the numbers on
+            // screen do not describe the period the user asked for.
+            authError: _authError != null
+                ? 'Cannot read the vault — the daemon rejected this app\'s '
+                    'token. Your data is intact; the totals below are not real.'
+                : (_stale
+                    ? 'Daemon unreachable — showing the last figures fetched, '
+                        'not ${_period.month ?? _period.fy ?? _period.quick ?? "the selected period"}.'
+                    : null),
             // The popup renders the same treemap data as the viewer, as a
             // compact band. Without this the data was fetched and discarded.
             treemap: _treemap,

@@ -527,6 +527,11 @@ class _IconButton extends StatelessWidget {
 /// returned 401, which is indistinguishable from real data loss and reads as
 /// "all my data is gone". Zero is a legitimate value; "I could not read your
 /// vault" is not zero.
+/// A banner for "the numbers below are not what you asked for".
+///
+/// It USED to ignore its `message` and hardcode an auth-specific sentence, so
+/// any other fault — a dead daemon, a stale period — would have been reported
+/// to the user as a rejected token. The message now actually renders.
 class _AuthBanner extends StatelessWidget {
   final String message;
   const _AuthBanner({required this.message});
@@ -536,14 +541,18 @@ class _AuthBanner extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         color: const Color(0xFFFDF2F2),
-        child: Row(children: [
-          const Icon(Icons.lock_outline, size: 14, color: Color(0xFFB42318)),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Padding(
+            padding: EdgeInsets.only(top: 1),
+            child: Icon(Icons.warning_amber_rounded,
+                size: 14, color: Color(0xFFB42318)),
+          ),
           const SizedBox(width: 8),
-          const Expanded(
+          Expanded(
             child: Text(
-              'Cannot read the vault — the daemon rejected this app\'s token. '
-              'Your data is intact; the totals below are not real.',
-              style: TextStyle(fontSize: 11.5, color: Color(0xFFB42318), height: 1.35),
+              message,
+              style: const TextStyle(
+                  fontSize: 11.5, color: Color(0xFFB42318), height: 1.35),
             ),
           ),
         ]),

@@ -37,7 +37,14 @@ Widget _popup({String? authError, Snapshot? snapshot, int reviewCount = 0}) => M
 
 void main() {
   testWidgets('a 401 shows an explanation, not a silent zero', (tester) async {
-    await tester.pumpWidget(_popup(authError: 'GET /v1/snapshot -> 401'));
+    // The banner renders whatever message it is given — main.dart composes the
+    // human sentence for an auth failure. It used to hardcode this text and
+    // ignore its parameter, which meant any OTHER fault (dead daemon, stale
+    // period) was also reported to the user as a rejected token.
+    await tester.pumpWidget(_popup(
+      authError: 'Cannot read the vault — the daemon rejected this app\'s '
+          'token. Your data is intact; the totals below are not real.',
+    ));
     await tester.pump();
 
     expect(
