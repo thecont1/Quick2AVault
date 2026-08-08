@@ -253,6 +253,64 @@ export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: numbe
 }
 
 /**
+ * Re-file a document's archive copies under its ECONOMIC date once analysis
+ * knows it.
+ *
+ * At P0 we only know when the file arrived, so it lands in Raw/<received>/.
+ * But a user hunting for "that Airtel bill from June" thinks in transaction
+ * dates, not the day they happened to drag it in. Once P2 extracts
+ * occurred_at, the originals move to Raw/<occurred>/ and Markdown/<occurred>/.
+ *
+ * Never destructive: on any failure the existing paths are left untouched.
+ */
+async function refileByEconomicDate(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+  occurredAt: string,
+): Promise<void> {
+  const day = occurredAt.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return;
+
+  const doc = db
+    .prepare("SELECT raw_path, markdown_path FROM documents WHERE id=?")
+    .get(documentId) as { raw_path: string; markdown_path: string | null } | undefined;
+  if (!doc) return;
+
+  try {
+    let newRaw = doc.raw_path;
+    if (doc.raw_path && path.basename(path.dirname(doc.raw_path)) !== day) {
+      const dir = ports.paths.rawDir(day);
+      const dest = await uniquePath(dir, path.basename(doc.raw_path));
+      await moveFile(doc.raw_path, dest);
+      newRaw = dest;
+    }
+
+    let newMd = doc.markdown_path;
+    if (doc.markdown_path && path.basename(path.dirname(doc.markdown_path)) !== day) {
+      const dir = ports.paths.markdownDir(day);
+      const dest = await uniquePath(dir, path.basename(doc.markdown_path));
+      await moveFile(doc.markdown_path, dest);
+      newMd = dest;
+    }
+
+    if (newRaw !== doc.raw_path || newMd !== doc.markdown_path) {
+      db.prepare("UPDATE documents SET raw_path=?, markdown_path=? WHERE id=?")
+        .run(newRaw, newMd, documentId);
+      ports.logger.info("re-filed under transaction date", {
+        document_id: documentId,
+        date: day,
+      });
+    }
+  } catch (err) {
+    ports.logger.warn("re-file failed; archive left as-is", {
+      document_id: documentId,
+      err: (err as Error)?.message,
+    });
+  }
+}
+
+/**
  * P2 — analysis. Claude reads canonical markdown v1 and returns extraction
  * JSON. Then: match against existing transactions (many documents, one rupee)
  * or record a new one.
@@ -307,6 +365,12 @@ export async function runAnalyseJob(
   if (x.doc_type === "irrelevant" || x.amount_minor === null) {
     ports.logger.info("analyse: no money movement", { document_id: documentId, doc_type: x.doc_type });
     return;
+  }
+
+  // File the archive under the ECONOMIC date now that we know it, so Finder
+  // folders match how the user thinks about their documents.
+  if (x.occurred_at) {
+    await refileByEconomicDate(db, ports, documentId, x.occurred_at);
   }
 
   // ── the money shot: match before recording ──────────────────────────────

@@ -18,10 +18,15 @@ export interface ApiOptions {
   host?: string;
   token: string;
   version: string;
+  /** Surfaced read-only on the Setup page so the user can see what's active. */
+  ai?: { available: boolean; model: string };
+  dropDir?: string;
 }
 
 export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   const startedAt = Date.now();
+  const ai = opts.ai ?? { available: false, model: "(none)" };
+  const dropDir = opts.dropDir ?? "";
 
   const send = (res: ServerResponse, code: number, body: unknown) => {
     const b = JSON.stringify(body);
@@ -212,6 +217,69 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, { merged: true, kind: into.kind, into: into.display_name });
       }
 
+
+      // ── settings (Setup page) ────────────────────────────────────────────
+      // AI provider config lives in app_settings so it survives restarts and
+      // can be changed from any client. The API key is NEVER returned — only
+      // whether one is set, and its last 4 characters for recognition.
+      if (p === "/v1/settings" && req.method === "GET") {
+        const rows = db.prepare("SELECT key, value FROM app_settings").all() as {
+          key: string;
+          value: string;
+        }[];
+        const kv = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+        const envKey = process.env.ANTHROPIC_API_KEY ?? "";
+        const storedKey = kv["ai.api_key"] ?? "";
+        const effective = storedKey || envKey;
+        return send(res, 200, {
+          ai: {
+            base_url: kv["ai.base_url"] ?? "",
+            model: kv["ai.model"] ?? process.env.Q2AV_MODEL ?? "claude-sonnet-5",
+            api_key_set: !!effective,
+            api_key_hint: effective ? `…${effective.slice(-4)}` : "",
+            api_key_source: storedKey ? "settings" : envKey ? "environment" : "none",
+            available: ai.available,
+            active_model: ai.model,
+          },
+          vault: {
+            root: ports.paths.vaultRoot(),
+            drop: dropDir,
+            db: ports.paths.dbPath(),
+          },
+          jurisdiction: {
+            id: kv["jurisdiction.id"] ?? "IN",
+            name: "India",
+            currency: "INR",
+            fy_start_month: 4,
+            fy_label: "1 Apr – 31 Mar",
+            grouping: "lakh/crore",
+            date_format: "DD-MM-YYYY",
+          },
+        });
+      }
+
+      if (p === "/v1/settings" && req.method === "POST") {
+        const b = await readJson(req);
+        const set = db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)");
+        const saved: string[] = [];
+        for (const [field, key] of [
+          ["base_url", "ai.base_url"],
+          ["model", "ai.model"],
+          ["api_key", "ai.api_key"],
+        ] as const) {
+          const v = b[field];
+          if (typeof v === "string" && v.length > 0) {
+            set.run(key, v);
+            saved.push(field);
+          }
+        }
+        ports.logger.info("settings updated", { fields: saved });
+        return send(res, 200, {
+          saved,
+          // Provider is constructed at startup; a restart picks up new values.
+          restart_required: saved.some((f) => f !== "model"),
+        });
+      }
 
       // ── queries ──────────────────────────────────────────────────────────
       switch (p) {
@@ -453,11 +521,33 @@ async function readJson(req: IncomingMessage): Promise<Record<string, string>> {
  * entirely — money moving between accounts I own is not income or spending.
  * status='scheduled' is excluded too: that's the v1.1.1 double-count lesson,
  * and it stays excluded until scheduled<->actual reconciliation exists.
+ *
+ * INVESTMENTS are separated from spending. Buying shares is not consumption —
+ * the money changes form, it doesn't leave your net worth. Lumping contract
+ * notes into "Spending" made a Rs 2L portfolio look like a shopping spree.
  */
 export function snapshot(db: DatabaseSync, fy?: string | null) {
   const where = fy ? "AND fy_key = ?" : "";
   const args = fy ? [fy] : [];
-  const sum = (dir: string) =>
+
+  // A transaction counts as investment when it carries an instrument or is
+  // categorised as one (contract notes, SIPs, fund purchases).
+  const INVEST = `(instrument_entity_id IS NOT NULL
+                   OR lower(COALESCE(category_id,'')) LIKE '%invest%'
+                   OR lower(COALESCE(impact_bucket,'')) LIKE '%invest%')`;
+
+  const sum = (dir: string, invest: boolean) =>
+    (
+      db
+        .prepare(
+          `SELECT COALESCE(SUM(amount_minor),0) v FROM transactions
+           WHERE direction=? AND status <> 'scheduled'
+             AND ${invest ? INVEST : `NOT ${INVEST}`} ${where}`,
+        )
+        .get(dir, ...args) as { v: number }
+    ).v;
+
+  const plainSum = (dir: string) =>
     (
       db
         .prepare(
@@ -467,11 +557,19 @@ export function snapshot(db: DatabaseSync, fy?: string | null) {
         .get(dir, ...args) as { v: number }
     ).v;
 
+  const invested = sum("out", true);
+  const divested = sum("in", true);
+
   return {
     fy_key: fy ?? null,
-    spending_minor: sum("out"),
-    income_minor: sum("in"),
-    transfers_minor: sum("transfer"),
+    spending_minor: sum("out", false),
+    income_minor: sum("in", false),
+    transfers_minor: plainSum("transfer"),
+    // Net into investments: purchases minus redemptions.
+    investments_minor: invested,
+    investments_out_minor: invested,
+    investments_in_minor: divested,
+    investments_net_minor: invested - divested,
     currency: "INR",
     counts: {
       documents: (db.prepare("SELECT COUNT(*) n FROM documents").get() as { n: number }).n,
@@ -481,6 +579,6 @@ export function snapshot(db: DatabaseSync, fy?: string | null) {
       entities: (db.prepare("SELECT COUNT(*) n FROM entities").get() as { n: number }).n,
       evidence_links: (db.prepare("SELECT COUNT(*) n FROM transaction_documents").get() as { n: number }).n,
     },
-    note: "totals derive from transactions; transfers and scheduled rows excluded",
+    note: "totals derive from transactions; transfers excluded, investments separated from spending",
   };
 }

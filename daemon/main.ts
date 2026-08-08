@@ -45,8 +45,19 @@ async function main() {
 
   ports.logger.info("Quick2AVault daemon", { version: VERSION, vault: ports.paths.vaultRoot() });
 
+  // Settings saved from the Setup page take precedence over environment vars,
+  // so a user who pastes a key into the app doesn't have to touch a shell.
+  const stored = Object.fromEntries(
+    (db.prepare("SELECT key, value FROM app_settings").all() as { key: string; value: string }[])
+      .map((r) => [r.key, r.value]),
+  );
+
   const ai = createAnthropicProvider(
-    { apiKey: process.env.ANTHROPIC_API_KEY, baseUrl: process.env.Q2AV_AI_BASE_URL, model: process.env.Q2AV_MODEL },
+    {
+      apiKey: stored["ai.api_key"] || process.env.ANTHROPIC_API_KEY,
+      baseUrl: stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL,
+      model: stored["ai.model"] || process.env.Q2AV_MODEL,
+    },
     ports.logger,
   );
   ports.logger.info("ai provider", { available: ai.available, model: ai.model });
@@ -54,14 +65,21 @@ async function main() {
   const worker = new JobWorker(db, ports, ai);
   worker.start();
 
-  const api = createApi(db, ports, { port: PORT, token: TOKEN, version: VERSION });
+  const dropDir = DROP ?? path.join(ports.paths.vaultRoot(), "Drop");
+
+  const api = createApi(db, ports, {
+    port: PORT,
+    token: TOKEN,
+    version: VERSION,
+    ai: { available: ai.available, model: ai.model },
+    dropDir,
+  });
   await api.listen();
   ports.logger.info(`Core API listening`, { url: `http://127.0.0.1:${PORT}` });
   // Printed plainly so the operator can copy it into the health probe.
   console.log(`\n  token: ${TOKEN}\n  probe: Q2AV_TOKEN=${TOKEN} ./daemon-health.sh\n`);
 
   // ── magic folder ───────────────────────────────────────────────────────────
-  const dropDir = DROP ?? path.join(ports.paths.vaultRoot(), "Drop");
   fs.mkdirSync(dropDir, { recursive: true });
   ports.logger.info("watching drop folder", { dropDir });
 
