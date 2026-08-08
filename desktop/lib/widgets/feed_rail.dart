@@ -37,8 +37,13 @@ class FeedRail extends StatelessWidget {
       };
 
   @override
-  Widget build(BuildContext context) => Container(
-        width: 340,
+  Widget build(BuildContext context) {
+    // The rail is fixed at a comfortable reading width, but never more than a
+    // third of the window — below ~1040px the ledger needs the room more.
+    final maxRail = MediaQuery.of(context).size.width / 3;
+    final width = maxRail < 300 ? maxRail.clamp(220.0, 300.0) : 320.0;
+    return Container(
+      width: width,
         decoration: const BoxDecoration(
           border: Border(left: BorderSide(color: VaultColors.line)),
         ),
@@ -99,4 +104,5 @@ class FeedRail extends StatelessWidget {
           ),
         ]),
       );
+  }
 }

@@ -38,7 +38,10 @@ class TxnCard extends StatelessWidget {
             Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
               _Tag(text: txn.direction.toUpperCase(), color: dirColor),
               const SizedBox(width: 11),
+              // Never wrap or ellipsize the amount — it is the point of the row.
               Text(rupees(txn.amountMinor),
+                  maxLines: 1,
+                  softWrap: false,
                   style: moneyStyle.copyWith(fontSize: 19, color: VaultColors.ink)),
               if (txn.multiEvidence) ...[
                 const SizedBox(width: 10),

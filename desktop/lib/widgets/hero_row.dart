@@ -124,9 +124,19 @@ class _Hero extends StatelessWidget {
                   color: VaultColors.dim,
                   fontWeight: FontWeight.w600)),
           const SizedBox(height: 9),
-          Text(value,
+          // Money must NEVER wrap mid-number ("₹960." / "09"). At narrow widths
+          // we scale the glyphs down instead of breaking the figure.
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              value,
+              maxLines: 1,
+              softWrap: false,
               style: moneyStyle.copyWith(
-                  fontSize: 28, color: color ?? VaultColors.ink)),
+                  fontSize: 28, color: color ?? VaultColors.ink),
+            ),
+          ),
           const SizedBox(height: 7),
           Text(note,
               style: const TextStyle(fontSize: 11.5, color: VaultColors.faint, height: 1.4)),
