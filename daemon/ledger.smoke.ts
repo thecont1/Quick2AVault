@@ -9,7 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import * as assert from "node:assert";
 
 import { openDatabase } from "./schema.js";
-import { resolveEntity } from "./ledger.js";
+import { resolveEntity, isPlausibleOwnedAccount } from "./ledger.js";
 import { createLogger, createEventBus, systemClock, createPaths } from "./adapters.js";
 import type { Ports } from "./ports.js";
 
@@ -97,6 +97,37 @@ check("bare 'wallet' does not swallow a named wallet", () => {
   const a = resolveEntity(db, ports, "Swiggy Money Wallet", "account");
   const b = resolveEntity(db, ports, "Paytm Wallet", "account");
   assert.notStrictEqual(a, b, "unrelated wallets merged");
+});
+
+// ── owned-account plausibility (found by running 69 real documents) ─────────
+check("real accounts are accepted", () => {
+  for (const s of [
+    "HDFC Bank Credit Card ending 1668",
+    "HDFC Bank Savings Account ...1767",
+    "Swiggy Money Wallet (swiggy@axisbank)",
+    "HDFC Bank Account 50100725481665",
+    "Cash",
+  ]) {
+    assert.ok(isPlausibleOwnedAccount(s), `should accept: ${s}`);
+  }
+});
+
+check("counterparty ledgers are REJECTED as accounts", () => {
+  // Each of these was invented as an "account" on a real document, which
+  // turned a share sale or salary credit into a bogus transfer.
+  for (const s of [
+    "Client ledger balance with Paytm Money Limited",
+    "Client ledger/settlement account with Paytm Money Limited",
+    "Client trading/ledger account with Paytm Money Limited",
+    "Paytm Money Limited (broker) - net amount payable by client",
+    "Employer (UNext) payroll",
+    "Sale proceeds of equity shares (Global Health Limited)",
+    "Sale proceeds from equity trades net of purchases, brokerage, taxes and levies",
+    "Card/online payment (pay online link)",
+    "Third party online payment",
+  ]) {
+    assert.ok(!isPlausibleOwnedAccount(s), `should reject: ${s}`);
+  }
 });
 
 console.log(`\n  ${passed} passed, ${failed} failed\n`);

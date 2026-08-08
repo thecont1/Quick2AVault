@@ -162,7 +162,43 @@ Rules that matter more than anything else:
    Money"/"Swiggy UPI Wallet" the stored-value account you own are THREE
    DIFFERENT ENTITIES. Label each occurrence by what it is in THIS document.
 
-4. WALLET TOP-UPS ARE NOT PURCHASES. If the document shows money moving from
+   AN "account" MUST BE A REAL, NAMEABLE STORE OF FUNDS YOU OWN — something
+   with an institution and ideally an identifying number, like "HDFC Bank
+   Savings ...1767" or "HDFC Credit Card ending 1668". It is NOT:
+     - a counterparty's internal ledger ("client ledger balance with X",
+       "settlement account with broker Y", "net amount receivable")
+     - a payment method or rail ("card/online payment", "pay online link",
+       "third party online payment", "UPI")
+     - an employer's payroll ("employer payroll", "salary account of company")
+     - a description of where money came from ("sale proceeds of equity")
+   If you cannot name the institution AND say the user owns it, DO NOT emit an
+   account party. Leave source_of_funds_text as the printed text instead. A
+   wrong account invents a fake transfer and removes the money from the
+   user's real income or spending totals.
+
+4. DIRECTION IS ABOUT THE USER'S MONEY, AND "transfer" IS NARROW.
+   - direction="in"       money ARRIVES for the user: salary/payslip, a refund,
+                          interest, a sale credited to them, a client paying an
+                          invoice the user ISSUED.
+   - direction="out"      the user pays someone: purchases, bills, fees.
+   - direction="transfer" ONLY when money moves between TWO accounts THE USER
+                          OWNS and the total the user holds is unchanged
+                          (bank -> own wallet top-up, savings -> own card
+                          payment). If the money comes from or goes to anyone
+                          else, it is NOT a transfer.
+   A SALARY CREDIT OR PAYSLIP IS direction="in", never a transfer — the
+   employer is an organisation, not an account you own.
+
+5. INVESTMENTS ARE NOT SPENDING.
+   A broker contract note or trade confirmation is not a purchase of goods.
+     - BUY  of shares/units  -> direction="out", doc_type="contract_note",
+       and the security is an INSTRUMENT party (kind="instrument"), with the
+       broker as the organisation counterparty.
+     - SELL of shares/units  -> direction="in".
+   Report the trade's net amount, and set category_hint="investment" so it can
+   be separated from consumption. Never label a security as an "account".
+
+6. WALLET TOP-UPS ARE NOT PURCHASES. If the document shows money moving from
    your bank/card INTO a wallet balance ("ADD MONEY", "load", "top-up", balance
    before/after), set is_wallet_topup=true and direction="transfer". The
    counterparty is NOT the wallet brand — there is no counterparty, because the
@@ -170,11 +206,11 @@ Rules that matter more than anything else:
    normal purchase: is_wallet_topup=false, direction="out", and the
    source_of_funds is the wallet.
 
-5. CAPTURE EVERY REFERENCE ID you can see — order number, invoice number,
+7. CAPTURE EVERY REFERENCE ID you can see — order number, invoice number,
    approval/auth code, UTR, wallet transaction ref. These are how two documents
    describing one payment get matched. A missing ID costs a match.
 
-6. If the document is not financial, set doc_type="irrelevant" and leave
+8. If the document is not financial, set doc_type="irrelevant" and leave
    monetary fields null.
 
 Report what the document says. Do not infer amounts that are not printed.`;

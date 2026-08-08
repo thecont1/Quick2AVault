@@ -60,8 +60,12 @@ class MenubarController with TrayListener, WindowListener {
         'assets/tray_icon_Template.png',
         isTemplate: true,
       );
-    } catch (e) {
-      // Last resort so the item still exists and the app is reachable.
+      // Belt and braces: if the icon fails to RENDER (wrong pixel size, bad
+      // alpha), the status item still exists but shows nothing — an invisible
+      // menubar app with no way in. A short title guarantees a visible hit
+      // target. macOS shows icon + title together, which is fine.
+      await trayManager.setTitle('₹');
+    } catch (_) {
       await trayManager.setTitle('₹');
     }
   }

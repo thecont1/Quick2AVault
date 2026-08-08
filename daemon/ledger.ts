@@ -133,6 +133,28 @@ function looksLikeOwnedAccount(text: string): boolean {
   return /\b(wallet|balance|savings|current|credit card|debit card|a\/c|account|money)\b/i.test(text);
 }
 
+/**
+ * Reject "accounts" that are really counterparty ledgers, payment rails, or
+ * prose. The extractor sometimes invents these, and the cost is severe: a
+ * bogus owned-account turns a salary credit or a share sale into a TRANSFER,
+ * silently removing it from Income/Spending.
+ *
+ * An account we accept must name an institution or carry an account number.
+ */
+const NOT_AN_ACCOUNT =
+  /\b(client ledger|ledger balance|settlement account|net amount|receivable|payable|payroll|sale proceeds|proceeds|pay online|online payment|third party|payment link|trading\/ledger)\b/i;
+
+const ACCOUNT_EVIDENCE =
+  /(\d{4})|\b(bank|card|wallet|upi|savings|current|cash|a\/c)\b/i;
+
+export function isPlausibleOwnedAccount(name: string): boolean {
+  const s = name.trim();
+  if (s.length < 3 || s.length > 90) return false;
+  if (NOT_AN_ACCOUNT.test(s)) return false;
+  if (!ACCOUNT_EVIDENCE.test(s)) return false;
+  return true;
+}
+
 export interface RecordResult {
   transaction_id: string;
   direction: string;
@@ -159,21 +181,52 @@ export function recordTransaction(
   // A top-up moves money between two accounts I own. There is no counterparty
   // and it must never touch Income/Spending. Detection uses the model's
   // is_wallet_topup plus corroborating structural signals.
-  const isTransfer =
+  //
+  // GUARD: a transfer requires BOTH sides to be plausible owned accounts. The
+  // extractor sometimes labels an employer's payroll or a broker's client
+  // ledger as an "account"; without this check a salary credit or a share sale
+  // becomes a transfer and vanishes from Income.
+  const srcParty0 = x.parties.find((p) => p.role === "source_of_funds" && p.kind === "account");
+  const srcName0 = srcParty0?.name ?? x.source_of_funds_text ?? null;
+  const destName0 = x.destination_of_funds_text ?? null;
+  const bothSidesOwned =
+    !!srcName0 && !!destName0 &&
+    isPlausibleOwnedAccount(srcName0) && isPlausibleOwnedAccount(destName0);
+
+  const claimsTransfer =
     x.is_wallet_topup ||
     x.direction === "transfer" ||
-    x.doc_type === "wallet_topup_confirmation" ||
-    (!!x.destination_of_funds_text && looksLikeOwnedAccount(x.destination_of_funds_text) && !!x.source_of_funds_text);
+    x.doc_type === "wallet_topup_confirmation";
 
-  const direction = isTransfer ? "transfer" : (x.direction ?? "out");
+  const isTransfer = claimsTransfer && bothSidesOwned;
+
+  if (claimsTransfer && !isTransfer) {
+    ports.logger.warn("rejected implausible transfer — booking by stated direction", {
+      document_id: documentId,
+      source: srcName0,
+      destination: destName0,
+    });
+  }
+
+  const direction = isTransfer
+    ? "transfer"
+    : x.direction === "transfer"
+      ? "out" // claimed transfer but not between owned accounts
+      : (x.direction ?? "out");
 
   // ── entities ──────────────────────────────────────────────────────────────
   const partyOf = (role: ExtractedParty["role"], kind?: Kind) =>
     x.parties.find((p) => p.role === role && (!kind || p.kind === kind));
 
-  // Source of funds is an ACCOUNT I own — never a merchant.
+  // Source of funds is an ACCOUNT I own — never a merchant, and never a
+  // counterparty's internal ledger. Implausible names are dropped rather than
+  // creating a fake account entity that pollutes every later match.
   const srcParty = partyOf("source_of_funds", "account");
-  const srcName = srcParty?.name ?? x.source_of_funds_text ?? null;
+  const srcNameRaw = srcParty?.name ?? x.source_of_funds_text ?? null;
+  const srcName = srcNameRaw && isPlausibleOwnedAccount(srcNameRaw) ? srcNameRaw : null;
+  if (srcNameRaw && !srcName) {
+    ports.logger.warn("dropped implausible source account", { name: srcNameRaw, document_id: documentId });
+  }
   const sourceAccountId = srcName
     ? resolveEntity(db, ports, srcName, "account", { subtype: srcParty?.subtype ?? guessAccountSubtype(srcName) })
     : null;
