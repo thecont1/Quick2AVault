@@ -118,8 +118,9 @@ class _PersonEditorState extends State<PersonEditor> {
         builder: (ctx) => AlertDialog(
           title: const Text('Still in use'),
           content: Text(
-            '${e.message}\n\nDeleting anyway unlinks them from '
-            '${e.documents} document(s). The documents themselves are kept.',
+            '${e.message}\n\nDeleting anyway reassigns their evidence to '
+            '"Unidentified" on ${e.documents} document(s) — links are kept, '
+            'not dropped.',
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -213,7 +214,6 @@ class _PersonEditorState extends State<PersonEditor> {
           label: const Text('Delete'),
           style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
         ),
-        const Spacer(),
         TextButton(
           onPressed: _busy ? null : () => Navigator.of(context).maybePop(),
           child: const Text('Cancel'),

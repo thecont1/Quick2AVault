@@ -264,5 +264,84 @@ check("delete removes the person and their aliases", () => {
   db.close();
 });
 
+// Work Order 04 §Track C: force-delete must REASSIGN document_parties to an
+// "Unidentified" placeholder, never leave the row pointing at a dead entity_id
+// and never silently drop it. This mirrors the exact reassignment logic in
+// api.ts's DELETE /v1/people/:id?force=1 handler.
+const UNIDENTIFIED_ID = "ent_unidentified_person";
+function forceDeletePerson(db: ReturnType<typeof openDatabase>, id: string) {
+  const already = db.prepare("SELECT 1 FROM entities WHERE id=?").get(UNIDENTIFIED_ID);
+  if (!already) {
+    db.prepare(
+      `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
+       VALUES (?, 'person', 'Unidentified', 'confirmed', 1.0, 0, ?)`,
+    ).run(UNIDENTIFIED_ID, "2026-08-09T00:00:00.000Z");
+  }
+  const rows = db
+    .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
+    .all(id) as { document_id: string; role: string }[];
+  for (const r of rows) {
+    db.prepare(
+      "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+    ).run(r.document_id, UNIDENTIFIED_ID, r.role);
+  }
+  db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
+  db.prepare("DELETE FROM entities WHERE id=?").run(id);
+}
+
+function seedDocForPerson(db: ReturnType<typeof openDatabase>, docId: string) {
+  db.prepare(
+    `INSERT INTO documents (id, sha256, original_filename, raw_path, doc_type, received_at)
+     VALUES (?,?,?,?,'merchant_invoice',?)`,
+  ).run(docId, `sha_${docId}`, `${docId}.pdf`, `/tmp/${docId}.pdf`, "2026-08-09T00:00:00.000Z");
+}
+
+check("force-delete REASSIGNS document_parties to Unidentified, never orphans the FK", () => {
+  const db = freshDb();
+  seedPerson(db, "ent_a", "Alice");
+  seedDocForPerson(db, "doc_1");
+  db.prepare(
+    "INSERT INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+  ).run("doc_1", "ent_a", "counterparty");
+
+  forceDeletePerson(db, "ent_a");
+
+  eq(n(db, "entities"), 1, "only the Unidentified placeholder remains");
+  const link = db
+    .prepare("SELECT entity_id, role FROM document_parties WHERE document_id='doc_1'")
+    .get() as { entity_id: string; role: string } | undefined;
+  if (!link) throw new Error("document_parties row was deleted, not reassigned");
+  eq(link.entity_id, UNIDENTIFIED_ID, "must point at Unidentified, not a dangling id");
+  eq(link.role, "counterparty", "role is preserved across the reassignment");
+
+  // No dangling FK: the entity the row points at must actually exist.
+  const target = db.prepare("SELECT id FROM entities WHERE id=?").get(link.entity_id);
+  if (!target) throw new Error("document_parties points at an entity that does not exist");
+  db.close();
+});
+
+check("force-delete across TWO deleted people on the same document+role converges, no PK collision", () => {
+  const db = freshDb();
+  seedPerson(db, "ent_a", "Alice");
+  seedPerson(db, "ent_b", "Bob");
+  seedDocForPerson(db, "doc_1");
+  db.prepare(
+    "INSERT INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+  ).run("doc_1", "ent_a", "counterparty");
+  db.prepare(
+    "INSERT INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+  ).run("doc_1", "ent_b", "counterparty");
+
+  forceDeletePerson(db, "ent_a");
+  forceDeletePerson(db, "ent_b"); // would violate the (doc,entity,role) PK if not for INSERT OR IGNORE
+
+  const rows = db
+    .prepare("SELECT entity_id FROM document_parties WHERE document_id='doc_1'")
+    .all() as { entity_id: string }[];
+  eq(rows.length, 1, "both reassignments converge on the single Unidentified row, no duplicate/crash");
+  eq(rows[0].entity_id, UNIDENTIFIED_ID);
+  db.close();
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

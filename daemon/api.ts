@@ -954,6 +954,32 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           });
         }
         if (refs > 0) {
+          // Force-delete REASSIGNS document_parties to a well-known
+          // "Unidentified" placeholder person rather than deleting the rows.
+          // entity_id is NOT NULL and part of the primary key, so there is no
+          // FK-preserving way to null it out — and simply deleting the rows
+          // would silently detach evidence, which the work order forbids.
+          const UNIDENTIFIED_ID = "ent_unidentified_person";
+          const already = db.prepare("SELECT 1 FROM entities WHERE id=?").get(UNIDENTIFIED_ID);
+          if (!already) {
+            db.prepare(
+              `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
+               VALUES (?, 'person', 'Unidentified', 'confirmed', 1.0, 0, ?)`,
+            ).run(UNIDENTIFIED_ID, ports.clock.isoNow());
+          }
+          // A document may already have an Unidentified party in the same
+          // role (e.g. two deleted people both appeared as counterparty on
+          // the same document) — the composite primary key would collide, so
+          // reassign one at a time and let INSERT OR IGNORE absorb duplicates,
+          // then drop whatever the reassignment couldn't place.
+          const rows = db
+            .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
+            .all(id) as { document_id: string; role: string }[];
+          for (const r of rows) {
+            db.prepare(
+              "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+            ).run(r.document_id, UNIDENTIFIED_ID, r.role);
+          }
           db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
         }
         try {
@@ -962,8 +988,13 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           /* optional */
         }
         db.prepare("DELETE FROM entities WHERE id=?").run(id);
-        ports.logger.warn("person deleted", { id, name: row.display_name, unlinked: refs });
-        return send(res, 200, { deleted: id, unlinked_documents: refs });
+        ports.logger.warn("person deleted", { id, name: row.display_name, reassigned: refs });
+        return send(res, 200, {
+          deleted: id,
+          // "unlinked" is misleading now: force-delete REASSIGNS to
+          // Unidentified rather than dropping the evidence link.
+          reassigned_documents: refs,
+        });
       }
 
       // Merge two people into one, keeping every spelling as an alias.
