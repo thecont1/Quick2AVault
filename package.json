@@ -17,7 +17,9 @@
     "test": "tsx main/services/converter.smoke.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
     "@firecrawl/anydoc": "0.1.6",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@radix-ui/colors": "^3.0.0",
     "@tanstack/react-query": "^5.87.4",
     "@tanstack/react-router": "^1.131.36",
