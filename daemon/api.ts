@@ -500,6 +500,91 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
       }
 
+      // getStatement — work order 04 §A.6. Summary card + per-line drill-down
+      // for a bank_statement/card_statement document: N lines read, M linked
+      // to an existing transaction, K created new, G gaps (no invoice on
+      // file — the whole point of importing statements in the first place).
+      //
+      // Reads straight off statement_lines rather than re-deriving totals
+      // from transactions, so the numbers shown are exactly what the
+      // reconciler decided, not a second, possibly-drifting computation.
+      {
+        const m = /^\/v1\/documents\/([^/]+)\/statement$/.exec(p);
+        if (m && req.method === "GET") {
+          const id = decodeURIComponent(m[1]);
+          const doc = db
+            .prepare("SELECT id, doc_type, original_filename FROM documents WHERE id=?")
+            .get(id) as { id: string; doc_type: string | null; original_filename: string } | undefined;
+          if (!doc) return send(res, 404, { error: "not_found", document_id: id });
+          if (doc.doc_type !== "bank_statement" && doc.doc_type !== "card_statement") {
+            return send(res, 400, {
+              error: "not_a_statement",
+              message: `${doc.original_filename} is a ${doc.doc_type ?? "unclassified document"}, not a statement.`,
+            });
+          }
+
+          const lines = db
+            .prepare(
+              `SELECT sl.*, t.status AS transaction_status, e.display_name AS counterparty_name
+                 FROM statement_lines sl
+                 LEFT JOIN transactions t ON t.id = sl.transaction_id
+                 LEFT JOIN entities e ON e.id = t.counterparty_entity_id
+                WHERE sl.document_id = ?
+                ORDER BY sl.line_no`,
+            )
+            .all(id) as Array<{
+            id: string;
+            line_no: number;
+            occurred_at: string | null;
+            raw_descriptor: string;
+            amount_minor: number;
+            direction: string;
+            balance_after_minor: number | null;
+            currency: string;
+            fx_original_json: string | null;
+            reference_id: string | null;
+            status: string;
+            transaction_id: string | null;
+            transaction_status: string | null;
+            counterparty_name: string | null;
+          }>;
+
+          const summary = {
+            total: lines.length,
+            linked: lines.filter((l) => l.status === "linked").length,
+            created: lines.filter((l) => l.status === "created").length,
+            pending: lines.filter((l) => l.status === "pending").length,
+            // "Gaps" per the work order: lines the reconciler promoted to
+            // their OWN transaction because no invoice was ever on file —
+            // this is the report the whole statement-import feature exists
+            // to produce, not an error state.
+            gaps: lines.filter((l) => l.status === "created" && l.transaction_status === "no_invoice").length,
+          };
+
+          return send(res, 200, {
+            document_id: id,
+            doc_type: doc.doc_type,
+            summary,
+            lines: lines.map((l) => ({
+              id: l.id,
+              line_no: l.line_no,
+              occurred_at: l.occurred_at,
+              raw_descriptor: l.raw_descriptor,
+              amount_minor: l.amount_minor,
+              direction: l.direction,
+              balance_after_minor: l.balance_after_minor,
+              currency: l.currency,
+              fx_original: l.fx_original_json ? JSON.parse(l.fx_original_json) : null,
+              reference_id: l.reference_id,
+              status: l.status,
+              transaction_id: l.transaction_id,
+              transaction_status: l.transaction_status,
+              counterparty_name: l.counterparty_name,
+            })),
+          });
+        }
+      }
+
       // ── reset (Settings > Danger Zone) ───────────────────────────────────
       //
       // Two scopes, because they answer different questions:

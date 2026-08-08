@@ -635,6 +635,122 @@ class ResetResult {
   }
 }
 
+/// One line of a bank/card statement, as staged and reconciled by the daemon
+/// (work order 04 §Track A). `status` mirrors what the reconciler DECIDED,
+/// not a re-derived guess: 'linked' settled an existing transaction,
+/// 'created' promoted a new one (a gap — no invoice was ever on file),
+/// 'pending' is still waiting on the review queue.
+class StatementLine {
+  final String id;
+  final int lineNo;
+  final String? occurredAt;
+  final String rawDescriptor;
+  final int amountMinor;
+  final String direction; // 'out' | 'in'
+  final int? balanceAfterMinor;
+  final String currency;
+  final ({int amountMinor, String currency})? fxOriginal;
+  final String? referenceId;
+  final String status; // 'pending' | 'linked' | 'created' | 'skipped'
+  final String? transactionId;
+  final String? transactionStatus;
+  final String? counterpartyName;
+
+  const StatementLine({
+    required this.id,
+    required this.lineNo,
+    required this.occurredAt,
+    required this.rawDescriptor,
+    required this.amountMinor,
+    required this.direction,
+    required this.balanceAfterMinor,
+    required this.currency,
+    required this.fxOriginal,
+    required this.referenceId,
+    required this.status,
+    required this.transactionId,
+    required this.transactionStatus,
+    required this.counterpartyName,
+  });
+
+  /// True when this line is the "gap" the whole feature exists to surface —
+  /// a genuine card/bank charge with no invoice ever seen for it.
+  bool get isGap => status == 'created' && transactionStatus == 'no_invoice';
+
+  factory StatementLine.fromJson(Map<String, dynamic> j) {
+    final fx = j['fx_original'] as Map<String, dynamic>?;
+    return StatementLine(
+      id: (j['id'] ?? '') as String,
+      lineNo: (j['line_no'] as num?)?.toInt() ?? 0,
+      occurredAt: j['occurred_at'] as String?,
+      rawDescriptor: (j['raw_descriptor'] ?? '') as String,
+      amountMinor: (j['amount_minor'] as num?)?.toInt() ?? 0,
+      direction: (j['direction'] ?? 'out') as String,
+      balanceAfterMinor: (j['balance_after_minor'] as num?)?.toInt(),
+      currency: (j['currency'] ?? 'INR') as String,
+      fxOriginal: fx == null
+          ? null
+          : (amountMinor: (fx['amount_minor'] as num).toInt(), currency: fx['currency'] as String),
+      referenceId: j['reference_id'] as String?,
+      status: (j['status'] ?? 'pending') as String,
+      transactionId: j['transaction_id'] as String?,
+      transactionStatus: j['transaction_status'] as String?,
+      counterpartyName: j['counterparty_name'] as String?,
+    );
+  }
+}
+
+/// The statement import summary card (work order 04 §A.6): N lines read, M
+/// linked to existing transactions, K created new, G gaps — plus every line
+/// for the drill-down list.
+class StatementSummary {
+  final String documentId;
+  final String docType;
+  final int total;
+  final int linked;
+  final int created;
+  final int pending;
+  final int gaps;
+  final List<StatementLine> lines;
+
+  const StatementSummary({
+    required this.documentId,
+    required this.docType,
+    required this.total,
+    required this.linked,
+    required this.created,
+    required this.pending,
+    required this.gaps,
+    required this.lines,
+  });
+
+  factory StatementSummary.fromJson(Map<String, dynamic> j) {
+    final s = (j['summary'] ?? const {}) as Map<String, dynamic>;
+    return StatementSummary(
+      documentId: (j['document_id'] ?? '') as String,
+      docType: (j['doc_type'] ?? '') as String,
+      total: (s['total'] as num?)?.toInt() ?? 0,
+      linked: (s['linked'] as num?)?.toInt() ?? 0,
+      created: (s['created'] as num?)?.toInt() ?? 0,
+      pending: (s['pending'] as num?)?.toInt() ?? 0,
+      gaps: (s['gaps'] as num?)?.toInt() ?? 0,
+      lines: ((j['lines'] as List?) ?? const [])
+          .map((e) => StatementLine.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+/// Raised when /statement is called on a document that is not a statement —
+/// the daemon's 400 not_a_statement, surfaced as a typed exception so the UI
+/// can simply hide the card rather than showing a raw error string.
+class NotAStatement implements Exception {
+  NotAStatement(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
 /// A refusal from the claims resolver — NOT a transport error.
 ///
 /// The daemon returns 409 with a machine-readable code when an edit is
@@ -1334,6 +1450,27 @@ class VaultApi {
       throw Exception('delete person failed: ${res.statusCode} ${res.body}');
     }
     return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Statement import summary + per-line drill-down (work order 04 §A.6).
+  /// Throws [NotAStatement] for any other document type, so callers can
+  /// simply omit the card rather than parse an error string.
+  Future<StatementSummary> statementFor(String documentId) async {
+    final res = await _client.get(
+      Uri.parse('$baseUrl/v1/documents/$documentId/statement'),
+      headers: _headers,
+    );
+    if (res.statusCode == 400) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      throw NotAStatement((j['message'] as String?) ?? 'Not a statement.');
+    }
+    if (res.statusCode == 404) {
+      throw Exception('document not found: $documentId');
+    }
+    if (res.statusCode != 200) {
+      throw Exception('statement fetch failed: ${res.statusCode} ${res.body}');
+    }
+    return StatementSummary.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   /// Push a file into P0 intake. Used by drag-and-drop.

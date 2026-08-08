@@ -19,6 +19,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import 'statement_card.dart';
 import '../theme.dart';
 import 'magnified_document.dart';
 
@@ -449,6 +450,11 @@ class _Detail extends StatelessWidget {
               ],
             ),
           ),
+          if (doc.docType == 'bank_statement' || doc.docType == 'card_statement')
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+              child: StatementCard(api: api, documentId: doc.id),
+            ),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
