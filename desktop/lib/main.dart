@@ -64,6 +64,9 @@ class _VaultHomeState extends State<VaultHome> {
 
   Snapshot _snap = Snapshot.empty;
   TreemapData _treemap = TreemapData.empty;
+  /// Set when the daemon rejects our token. Non-null means the numbers on
+  /// screen are meaningless and must not be presented as the vault's state.
+  String? _authError;
   Periods _periods = Periods.empty;
   /// Defaults to the current month — the period a user checks most often.
   PeriodSelection _period = PeriodSelection.thisMonth;
@@ -115,6 +118,12 @@ class _VaultHomeState extends State<VaultHome> {
     if (const bool.fromEnvironment('Q2AV_START_FULL')) {
       await m.openFullWindow();
     }
+    // Same aid for the POPUP, which is otherwise only reachable by clicking a
+    // tray icon — impossible to drive when the menubar is auto-hidden.
+    //   flutter run --dart-define=Q2AV_START_POPUP=true
+    if (const bool.fromEnvironment('Q2AV_START_POPUP')) {
+      await m.showPopup();
+    }
     // QA: exercise the full -> popup transition that regressed once. Opens the
     // viewer, then returns to the popup exactly as a tray click does, so the
     // round trip can be screenshotted without simulating a status-item click
@@ -148,7 +157,11 @@ class _VaultHomeState extends State<VaultHome> {
           month: _period.month,
           fy: _period.fy,
         ),
-        _api.transactions(),
+        _api.transactions(
+          period: _period.quick,
+          month: _period.month,
+          fy: _period.fy,
+        ),
         _api.periods(),
         // Same period as the snapshot — the treemap must always total to the
         // spending figure shown above it, never to a different window.
@@ -170,8 +183,14 @@ class _VaultHomeState extends State<VaultHome> {
         setState(() {
           _learningOn = l.enabled;
           _reviewCount = l.questions.length;
+          _authError = null;
         });
       }
+    } on VaultAuthException catch (e) {
+      // NEVER fall through to zeros here. Rendering Rs 0 for an auth failure
+      // reads as "your vault is empty" — indistinguishable from real data loss,
+      // and alarming when the ledger is in fact intact. Say what is wrong.
+      if (mounted) setState(() => _authError = e.toString());
     } catch (_) {/* transient; the SSE stream will trigger another */}
   }
 
@@ -281,6 +300,12 @@ class _VaultHomeState extends State<VaultHome> {
           onDrop: _onDrop,
           child: PopupView(
             snapshot: _snap,
+            // Non-null means the daemon rejected our token, so every figure
+            // below is a placeholder rather than a reading of the vault.
+            authError: _authError,
+            // The popup renders the same treemap data as the viewer, as a
+            // compact band. Without this the data was fetched and discarded.
+            treemap: _treemap,
             periods: _periods,
             selection: _period,
             onPeriodChanged: _setPeriod,

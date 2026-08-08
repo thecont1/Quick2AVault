@@ -31,7 +31,11 @@ class TxnCard extends StatelessWidget {
           decoration: BoxDecoration(
             color: VaultColors.panel,
             border: Border.all(
-              color: selected ? VaultColors.transfer : VaultColors.line,
+              // accent, not transfer. This borrowed the transfer hue to mean
+              // "selected", which only looked right while transfer happened to
+              // be the same blue as the investments card. Selection is its own
+              // idea and belongs to the accent token.
+              color: selected ? VaultColors.accent : VaultColors.line,
             ),
           ),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [

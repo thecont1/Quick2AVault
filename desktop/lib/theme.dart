@@ -27,17 +27,22 @@ class VaultColors {
   static const faint = tertiary;
 
   // ── the three money cards ────────────────────────────────────────────────
+  // Spending is BLUE and Investments are peach/brown. This is a deliberate
+  // swap of the original assignment: the "where it went" band breaks SPENDING
+  // down by category and is drawn in the blue treemap ramp, so spending had to
+  // own blue for the chart to read as belonging to the card above it. A legend
+  // in one hue under a total in another is just a puzzle for the reader.
   static const incomeFill = Color(0xFFEAF6EE);
   static const incomeBorder = Color(0xFFCDE9D8);
   static const incomeInk = Color(0xFF16663C);
 
-  static const spendFill = Color(0xFFFDF0E6);
-  static const spendBorder = Color(0xFFF7DCC5);
-  static const spendInk = Color(0xFF9A3412);
+  static const spendFill = Color(0xFFEAF2FD);
+  static const spendBorder = Color(0xFFCFE0F7);
+  static const spendInk = Color(0xFF1B4F86);
 
-  static const investFill = Color(0xFFEAF2FD);
-  static const investBorder = Color(0xFFCFE0F7);
-  static const investInk = Color(0xFF1B4F86);
+  static const investFill = Color(0xFFFDF0E6);
+  static const investBorder = Color(0xFFF7DCC5);
+  static const investInk = Color(0xFF9A3412);
 
   // Accents
   static const accent = Color(0xFF0A84FF); // iOS blue — selected segment
@@ -48,7 +53,12 @@ class VaultColors {
   // Direction language
   static const out = spendInk;
   static const income = incomeInk;
-  static const transfer = investInk;
+  // Transfers get their OWN slate, no longer an alias of investInk. With the
+  // card swap that alias would have painted transfers the same brown as
+  // Investments — two different meanings in one colour. Slate also carries the
+  // right message: a transfer between accounts you own is excluded from every
+  // hero total, so it should not wear the livery of a category that counts.
+  static const transfer = Color(0xFF5B6472);
 
   static Color forDirection(String d) => switch (d) {
         'in' => income,

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../api.dart';
 import '../theme.dart';
 import 'period_bar.dart';
+import 'treemap.dart';
 
 /// The menubar popup: a calm 420x620 panel. Glance-value only — totals, the
 /// last few transactions, and what needs attention. Anything deeper opens the
@@ -23,6 +24,12 @@ class PopupView extends StatelessWidget {
   final VoidCallback onToggleLearning;
   final bool learningOn;
   final int reviewCount;
+  /// Spending by category for the same period as the snapshot. Defaults to
+  /// empty so the band simply does not render before the first load.
+  final TreemapData treemap;
+  /// Non-null when the daemon rejected our token. The totals are then
+  /// placeholders, and showing them as Rs 0 would read as an empty vault.
+  final String? authError;
 
   const PopupView({
     super.key,
@@ -41,6 +48,8 @@ class PopupView extends StatelessWidget {
     required this.onToggleLearning,
     this.learningOn = true,
     this.reviewCount = 0,
+    this.treemap = TreemapData.empty,
+    this.authError,
   });
 
   @override
@@ -85,6 +94,7 @@ class PopupView extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
           child: _TransferNote(snapshot: snapshot),
         ),
+        if (authError != null) _AuthBanner(message: authError!),
         const Divider(height: 1, color: VaultColors.line),
         Expanded(
           child: recent.isEmpty
@@ -92,7 +102,28 @@ class PopupView extends StatelessWidget {
               : ListView(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                   children: [
-                    const _Label('RECENT'),
+                    // Where the money went, above the individual transactions —
+                    // the same data as the viewer's treemap, but a single
+                    // proportional band. A squarified treemap needs area to be
+                    // comparable by eye, and 420px of panel does not have it;
+                    // one stacked bar keeps area == money honest at this size.
+                    if (treemap.nodes.isNotEmpty) ...[
+                      const _Label('WHERE IT WENT'),
+                      const SizedBox(height: 8),
+                      TreemapBand(
+                        nodes: treemap.nodes,
+                        totalMinor: treemap.totalMinor,
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    // Say what this list actually is. "RECENT" alone left the
+                    // rule invisible: it is the newest few transactions IN THE
+                    // SELECTED PERIOD, capped at 4, with the rest in the full
+                    // window. Without the count the list looked arbitrarily
+                    // truncated.
+                    _Label(txns.length > recent.length
+                        ? 'RECENT · ${recent.length} of ${txns.length} this period'
+                        : 'RECENT · ${txns.length} this period'),
                     const SizedBox(height: 8),
                     ...recent.map((t) => _MiniTxn(txn: t)),
                   ],
@@ -474,7 +505,10 @@ class _IconButton extends StatelessWidget {
                       borderRadius: BorderRadius.circular(999),
                     ),
                     alignment: Alignment.center,
-                    child: Text('\$badge',
+                    // '$badge', NOT '\$badge'. The escaped form printed the
+                    // literal text "$badge" in the review indicator instead of
+                    // interpolating the pending-review count.
+                    child: Text('$badge',
                         style: const TextStyle(
                             fontSize: 9,
                             fontWeight: FontWeight.w700,
@@ -484,5 +518,34 @@ class _IconButton extends StatelessWidget {
             ]),
           ),
         ),
+      );
+}
+
+/// Shown instead of letting an auth failure masquerade as an empty vault.
+///
+/// This existed because the app rendered Rs 0 for every total when the daemon
+/// returned 401, which is indistinguishable from real data loss and reads as
+/// "all my data is gone". Zero is a legitimate value; "I could not read your
+/// vault" is not zero.
+class _AuthBanner extends StatelessWidget {
+  final String message;
+  const _AuthBanner({required this.message});
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        color: const Color(0xFFFDF2F2),
+        child: Row(children: [
+          const Icon(Icons.lock_outline, size: 14, color: Color(0xFFB42318)),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Text(
+              'Cannot read the vault — the daemon rejected this app\'s token. '
+              'Your data is intact; the totals below are not real.',
+              style: TextStyle(fontSize: 11.5, color: Color(0xFFB42318), height: 1.35),
+            ),
+          ),
+        ]),
       );
 }

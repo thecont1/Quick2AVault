@@ -364,6 +364,18 @@ class VaultEvent {
   VaultEvent(this.type, this.data) : at = DateTime.now();
 }
 
+/// The daemon rejected our credentials. Distinct from a transient network
+/// failure because the remedy is different: retrying forever will not help,
+/// and rendering zeros would be a lie — an unauthorised client knows nothing
+/// about the vault, which is not the same as a vault containing nothing.
+class VaultAuthException implements Exception {
+  final int statusCode;
+  final String path;
+  const VaultAuthException(this.statusCode, this.path);
+  @override
+  String toString() => 'GET $path -> $statusCode (bad or missing API token)';
+}
+
 class VaultApi {
   final String baseUrl;
   final String token;
@@ -378,6 +390,9 @@ class VaultApi {
     final res = await _client
         .get(Uri.parse('$baseUrl$path'), headers: _headers)
         .timeout(const Duration(seconds: 10));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
     if (res.statusCode != 200) {
       throw Exception('GET $path -> ${res.statusCode}');
     }
@@ -428,10 +443,20 @@ class VaultApi {
     return _get('/v1/treemap$qs', TreemapData.fromJson);
   }
 
-  Future<List<Txn>> transactions() => _get('/v1/transactions', (j) =>
-      ((j['transactions'] ?? const []) as List)
-          .map((e) => Txn.fromJson(e as Map<String, dynamic>))
-          .toList());
+  /// The ledger for a period. Must be given the SAME period as the snapshot —
+  /// a list from a different window than the totals above it is what made the
+  /// period buttons look broken.
+  Future<List<Txn>> transactions({String? period, String? month, String? fy}) {
+    final q = <String, String>{};
+    if (period != null) q['period'] = period;
+    if (month != null) q['month'] = month;
+    if (fy != null) q['fy'] = fy;
+    final qs = q.isEmpty ? '' : '?${Uri(queryParameters: q).query}';
+    return _get('/v1/transactions$qs', (j) =>
+        ((j['transactions'] ?? const []) as List)
+            .map((e) => Txn.fromJson(e as Map<String, dynamic>))
+            .toList());
+  }
 
   Future<EvidenceCard> evidenceCard(String txnId) =>
       _get('/v1/transactions/$txnId/evidence', EvidenceCard.fromJson);

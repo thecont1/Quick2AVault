@@ -133,6 +133,20 @@ double _worstRatio(List<TreemapNode> row, double side, double scale) {
   return math.max(side2 * maxA / sum2, sum2 / (side2 * minA));
 }
 
+/// One hue, tinted by rank: largest darkest. Encodes order, invents nothing.
+/// Shared so the popup band and the full treemap colour a category identically —
+/// the same spend must not change colour when you resize the window.
+Color treemapFill(int rank, int count) {
+  final t = count <= 1 ? 0.0 : rank / (count - 1);
+  return Color.lerp(const Color(0xFF1D4ED8), const Color(0xFFDBEAFE), t)!;
+}
+
+/// Readable ink for a given rank's fill.
+Color treemapInk(int rank, int count) {
+  final t = count <= 1 ? 0.0 : rank / (count - 1);
+  return t < 0.55 ? Colors.white : const Color(0xFF0F2A6B);
+}
+
 class _Tile extends StatelessWidget {
   final TreemapNode node;
   final Rect rect;
@@ -154,12 +168,8 @@ class _Tile extends StatelessWidget {
   Widget build(BuildContext context) {
     // One hue, tint by rank: largest darkest. Encodes order, invents nothing.
     final t = count <= 1 ? 0.0 : rank / (count - 1);
-    final fill = Color.lerp(
-      const Color(0xFF1D4ED8),
-      const Color(0xFFDBEAFE),
-      t,
-    )!;
-    final onFill = t < 0.55 ? Colors.white : const Color(0xFF0F2A6B);
+    final fill = treemapFill(rank, count);
+    final onFill = treemapInk(rank, count);
 
     // Below ~46x30 any label is unreadable; leave the tile bare rather than
     // clipping text into noise. Area still carries the value.
@@ -238,6 +248,151 @@ class _TreemapEmpty extends StatelessWidget {
           'No spending in this period',
           style: TextStyle(color: Color(0xFF8A9099), fontSize: 12.5),
         ),
+      );
+}
+
+/// Compact spending band for the 420px menubar popup.
+///
+/// Same data and the same colours as [Treemap], different geometry. A
+/// squarified treemap only works when tiles are big enough to compare by
+/// eye; in a narrow panel it degenerates into slivers. One stacked bar keeps
+/// the honest property — length is proportional to money — and adds a legend
+/// for the categories that are actually legible.
+class TreemapBand extends StatelessWidget {
+  final List<TreemapNode> nodes;
+  final int totalMinor;
+
+  /// Categories listed in the legend. Beyond this the tail is summarised so
+  /// the popup does not become a scrolling list of 1% slivers.
+  static const int maxLegend = 4;
+
+  const TreemapBand({super.key, required this.nodes, required this.totalMinor});
+
+  @override
+  Widget build(BuildContext context) {
+    if (nodes.isEmpty || totalMinor <= 0) return const SizedBox.shrink();
+
+    final ranked = [...nodes]..sort((a, b) => b.amountMinor.compareTo(a.amountMinor));
+    final legend = ranked.take(maxLegend).toList();
+    final rest = ranked.skip(maxLegend).toList();
+    final restMinor = rest.fold<int>(0, (s, n) => s + n.amountMinor);
+
+    return Semantics(
+      label: 'Spending by category, ${_inr(totalMinor)} total across '
+          '${ranked.length} categories',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // The bar. Every category gets a segment, including the tail — the
+        // legend truncates, the DATA never does.
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: SizedBox(
+            height: 10,
+            child: Row(
+              children: [
+                for (var i = 0; i < ranked.length; i++)
+                  Expanded(
+                    // Integer flex from minor units: rounding to a percentage
+                    // would let the segments fail to fill the bar.
+                    flex: ranked[i].amountMinor,
+                    child: Tooltip(
+                      message: '${ranked[i].label} · ${_inr(ranked[i].amountMinor)} · '
+                          '${(ranked[i].amountMinor / totalMinor * 100).toStringAsFixed(1)}%',
+                      // SizedBox.expand is REQUIRED. Tooltip passes loose
+                      // constraints to its child, and a childless ColoredBox
+                      // sizes to constraints.smallest under those — i.e. zero
+                      // height. The bar rendered completely invisible while a
+                      // width-only test passed, because the widths were right
+                      // and only the height had collapsed.
+                      child: SizedBox.expand(
+                        child: ColoredBox(color: treemapFill(i, ranked.length)),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        for (var i = 0; i < legend.length; i++)
+          _BandRow(
+            swatch: treemapFill(i, ranked.length),
+            label: legend[i].label,
+            amountMinor: legend[i].amountMinor,
+            share: legend[i].amountMinor / totalMinor,
+          ),
+        if (rest.isNotEmpty)
+          _BandRow(
+            swatch: treemapFill(ranked.length - 1, ranked.length),
+            label: '${rest.length} more',
+            amountMinor: restMinor,
+            share: restMinor / totalMinor,
+            muted: true,
+          ),
+      ]),
+    );
+  }
+}
+
+class _BandRow extends StatelessWidget {
+  final Color swatch;
+  final String label;
+  final int amountMinor;
+  final double share;
+  final bool muted;
+
+  const _BandRow({
+    required this.swatch,
+    required this.label,
+    required this.amountMinor,
+    required this.share,
+    this.muted = false,
+  });
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 5),
+        child: Row(children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: swatch, borderRadius: BorderRadius.circular(2)),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                color: muted ? const Color(0xFF8A9099) : const Color(0xFF2B2F36),
+                fontStyle: muted ? FontStyle.italic : FontStyle.normal,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            _inr(amountMinor),
+            style: const TextStyle(
+              fontSize: 12,
+              color: Color(0xFF2B2F36),
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 34,
+            child: Text(
+              '${(share * 100).toStringAsFixed(0)}%',
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                fontSize: 11.5,
+                color: Color(0xFF8A9099),
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+        ]),
       );
 }
 
