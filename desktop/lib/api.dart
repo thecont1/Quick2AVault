@@ -62,6 +62,41 @@ class Periods {
       );
 }
 
+/// A human the vault knows about. `isMember` marks people who share this
+/// vault (self, spouse); everyone else is a counterparty-adjacent person such
+/// as a landlord or tenant.
+class Person {
+  final String id;
+  final String displayName;
+  final String? relationship;
+  final bool isMember;
+  final String status;
+  final int documentCount;
+  final List<String> roles;
+
+  const Person({
+    required this.id,
+    required this.displayName,
+    this.relationship,
+    this.isMember = false,
+    this.status = 'candidate',
+    this.documentCount = 0,
+    this.roles = const [],
+  });
+
+  bool get confirmed => status == 'confirmed';
+
+  factory Person.fromJson(Map<String, dynamic> j) => Person(
+        id: (j['id'] ?? '') as String,
+        displayName: (j['display_name'] ?? '') as String,
+        relationship: j['subtype'] as String?,
+        isMember: (j['is_member'] ?? 0) == 1,
+        status: (j['status'] ?? 'candidate') as String,
+        documentCount: (j['document_count'] ?? 0) as int,
+        roles: ((j['roles'] ?? const []) as List).cast<String>(),
+      );
+}
+
 class Snapshot {
   final int spendingMinor;
   final int incomeMinor;
@@ -321,6 +356,38 @@ class VaultApi {
   Future<List<Map<String, dynamic>>> reviews() => _get('/v1/reviews',
       (j) => ((j['reviews'] ?? const []) as List).cast<Map<String, dynamic>>());
 
+  /// People the vault knows about, with the owner first.
+  Future<({List<Person> people, Person? owner})> people() async {
+    final j = await _get('/v1/people', (x) => x);
+    final list = ((j['people'] ?? const []) as List)
+        .map((e) => Person.fromJson(e as Map<String, dynamic>))
+        .toList();
+    return (
+      people: list,
+      owner: list.where((p) => p.isMember).firstOrNull,
+    );
+  }
+
+  /// Declare a person, or update an existing one.
+  Future<Map<String, dynamic>> savePerson({
+    required String displayName,
+    String? relationship,
+    bool isMember = false,
+    bool isOwner = false,
+  }) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/people'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({
+        'display_name': displayName,
+        if (relationship != null && relationship.isNotEmpty) 'relationship': relationship,
+        'is_member': isMember,
+        'is_owner': isOwner,
+      }),
+    );
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// Setup page: AI provider config, vault paths, active jurisdiction.
   Future<Map<String, dynamic>> settings() =>
       _get('/v1/settings', (j) => j);
@@ -332,6 +399,7 @@ class VaultApi {
     String? aiBaseUrl,
     String? model,
     String? apiKey,
+    String? gmailLocalPart,
   }) async {
     final res = await _client.post(
       Uri.parse('$baseUrl/v1/settings'),
@@ -340,6 +408,8 @@ class VaultApi {
         if (aiBaseUrl != null && aiBaseUrl.isNotEmpty) 'base_url': aiBaseUrl,
         if (model != null && model.isNotEmpty) 'model': model,
         if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
+        if (gmailLocalPart != null && gmailLocalPart.isNotEmpty)
+          'gmail_local_part': gmailLocalPart,
       }),
     );
     return jsonDecode(res.body) as Map<String, dynamic>;

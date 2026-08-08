@@ -24,6 +24,7 @@ import 'widgets/drop_target.dart';
 import 'widgets/popup_view.dart';
 import 'widgets/setup_view.dart';
 import 'widgets/period_bar.dart';
+import 'widgets/people_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -74,6 +75,7 @@ class _VaultHomeState extends State<VaultHome> {
   bool _fullWindow = false;
   /// Setup pane overrides whichever surface is showing.
   bool _setup = false;
+  bool _people = false;
 
   @override
   void initState() {
@@ -178,10 +180,21 @@ class _VaultHomeState extends State<VaultHome> {
 
   @override
   Widget build(BuildContext context) {
+    if (_people) {
+      return Scaffold(
+        backgroundColor: VaultColors.bg,
+        body: PeopleView(api: _api, onClose: () => setState(() => _people = false)),
+      );
+    }
+
     if (_setup) {
       return Scaffold(
         backgroundColor: VaultColors.bg,
-        body: SetupView(api: _api, onClose: () => setState(() => _setup = false)),
+        body: SetupView(
+          api: _api,
+          onClose: () => setState(() => _setup = false),
+          onOpenPeople: () => setState(() { _setup = false; _people = true; }),
+        ),
       );
     }
 

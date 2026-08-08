@@ -11,7 +11,13 @@ import '../theme.dart';
 class SetupView extends StatefulWidget {
   final VaultApi api;
   final VoidCallback onClose;
-  const SetupView({super.key, required this.api, required this.onClose});
+  final VoidCallback onOpenPeople;
+  const SetupView({
+    super.key,
+    required this.api,
+    required this.onClose,
+    required this.onOpenPeople,
+  });
 
   @override
   State<SetupView> createState() => _SetupViewState();
@@ -21,6 +27,7 @@ class _SetupViewState extends State<SetupView> {
   final _baseUrl = TextEditingController();
   final _model = TextEditingController();
   final _apiKey = TextEditingController();
+  final _gmail = TextEditingController();
 
   Map<String, dynamic>? _settings;
   bool _loading = true;
@@ -43,6 +50,8 @@ class _SetupViewState extends State<SetupView> {
         _settings = s;
         _baseUrl.text = (ai['base_url'] ?? '') as String;
         _model.text = (ai['model'] ?? '') as String;
+        final gm = (s['gmail'] ?? const {}) as Map<String, dynamic>;
+        _gmail.text = (gm['local_part'] ?? '') as String;
         _loading = false;
       });
     } catch (e) {
@@ -57,6 +66,7 @@ class _SetupViewState extends State<SetupView> {
         aiBaseUrl: _baseUrl.text.trim(),
         model: _model.text.trim(),
         apiKey: _apiKey.text.trim(),
+        gmailLocalPart: _gmail.text.trim(),
       );
       final restart = r['restart_required'] == true;
       if (!mounted) return;
@@ -78,6 +88,7 @@ class _SetupViewState extends State<SetupView> {
     _baseUrl.dispose();
     _model.dispose();
     _apiKey.dispose();
+    _gmail.dispose();
     super.dispose();
   }
 
@@ -176,6 +187,28 @@ class _SetupViewState extends State<SetupView> {
                     ]),
 
                     const SizedBox(height: 28),
+                    const _SectionTitle('People'),
+                    const _Hint('Who this vault is for. People are detected from your documents.'),
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: _Ghost(label: 'Manage people', onTap: widget.onOpenPeople),
+                    ),
+
+                    const SizedBox(height: 28),
+                    const _SectionTitle('Gmail dropbox'),
+                    const _Hint(
+                      'Forward or receive financial mail at a dedicated Gmail address and the '
+                      'vault reads attachments from it. Read-only: never sends, deletes, '
+                      'labels, or marks anything as read.',
+                    ),
+                    const SizedBox(height: 12),
+                    _GmailField(
+                      controller: _gmail,
+                      settings: (_settings?['gmail'] ?? const {}) as Map<String, dynamic>,
+                    ),
+
+                    const SizedBox(height: 28),
                     const _SectionTitle('Vault'),
                     const _Hint('Documents dropped here are archived, read, and filed by transaction date.'),
                     const SizedBox(height: 12),
@@ -270,6 +303,64 @@ class _Field extends StatelessWidget {
           ),
         ],
       );
+}
+
+/// Gmail dropbox: the user types only the local part; the address is derived,
+/// so a typo can't point the vault at someone else's mailbox domain.
+class _GmailField extends StatelessWidget {
+  final TextEditingController controller;
+  final Map<String, dynamic> settings;
+  const _GmailField({required this.controller, required this.settings});
+
+  @override
+  Widget build(BuildContext context) {
+    final status = (settings['status'] ?? 'not_configured') as String;
+    final (dot, text) = switch (status) {
+      'connected' => (VaultColors.ok, 'Connected'),
+      'not_connected' => (VaultColors.warn, 'Address saved — not yet authorised'),
+      _ => (VaultColors.faint, 'Not configured'),
+    };
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        Expanded(
+          child: TextField(
+            controller: controller,
+            style: const TextStyle(
+                fontSize: 12.5, color: VaultColors.primary, fontFamily: VaultType.mono),
+            decoration: InputDecoration(
+              hintText: 'your-vault-address',
+              hintStyle: const TextStyle(
+                  fontSize: 12, color: VaultColors.faint, fontFamily: VaultType.mono),
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 11),
+              filled: true,
+              fillColor: VaultColors.controlSubtle,
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(VaultRadius.control),
+                borderSide: const BorderSide(color: VaultColors.line),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(VaultRadius.control),
+                borderSide: BorderSide(color: VaultColors.accent.withValues(alpha: 0.7)),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        const Text('@gmail.com',
+            style: TextStyle(
+                fontSize: 12.5, color: VaultColors.tertiary, fontFamily: VaultType.mono)),
+      ]),
+      const SizedBox(height: 9),
+      Row(children: [
+        Container(width: 6, height: 6,
+            decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
+        const SizedBox(width: 8),
+        Text(text, style: TextStyle(fontSize: 11.5, color: dot)),
+      ]),
+    ]);
+  }
 }
 
 class _StatusRow extends StatelessWidget {
