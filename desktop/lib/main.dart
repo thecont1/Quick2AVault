@@ -24,6 +24,7 @@ import 'widgets/drop_target.dart';
 import 'widgets/popup_view.dart';
 import 'widgets/setup_view.dart';
 import 'widgets/period_bar.dart';
+import 'widgets/treemap.dart';
 import 'widgets/people_view.dart';
 
 Future<void> main() async {
@@ -62,6 +63,7 @@ class _VaultHomeState extends State<VaultHome> {
   MenubarController? _menubar;
 
   Snapshot _snap = Snapshot.empty;
+  TreemapData _treemap = TreemapData.empty;
   Periods _periods = Periods.empty;
   /// Defaults to the current month — the period a user checks most often.
   PeriodSelection _period = PeriodSelection.thisMonth;
@@ -148,12 +150,20 @@ class _VaultHomeState extends State<VaultHome> {
         ),
         _api.transactions(),
         _api.periods(),
+        // Same period as the snapshot — the treemap must always total to the
+        // spending figure shown above it, never to a different window.
+        _api.treemap(
+          period: _period.quick,
+          month: _period.month,
+          fy: _period.fy,
+        ),
       ]);
       if (!mounted) return;
       setState(() {
         _snap = results[0] as Snapshot;
         _txns = results[1] as List<Txn>;
         _periods = results[2] as Periods;
+        _treemap = results[3] as TreemapData;
       });
       final l = await _api.learning();
       if (mounted) {
@@ -313,6 +323,31 @@ class _VaultHomeState extends State<VaultHome> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             HeroRow(snapshot: _snap, txns: _txns),
+                            const SizedBox(height: 22),
+                            // Where the money went. Sits directly under the
+                            // hero row because it decomposes the Spending
+                            // figure shown there — same period, same total.
+                            _SectionLabel('Where it went'),
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              height: 260,
+                              child: Treemap(
+                                nodes: _treemap.nodes,
+                                totalMinor: _treemap.totalMinor,
+                              ),
+                            ),
+                            if (_treemap.rawBuckets > _treemap.nodes.length)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(
+                                  '${_treemap.rawBuckets} raw categories folded into '
+                                  '${_treemap.nodes.length}',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF8A9099),
+                                  ),
+                                ),
+                              ),
                             const SizedBox(height: 22),
                             _SectionLabel('Transactions'),
                             const SizedBox(height: 10),

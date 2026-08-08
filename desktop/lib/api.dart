@@ -11,6 +11,71 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+/// One tile of the spending treemap: a category, its total, and the raw
+/// impact_buckets that were folded into it (kept so the fold is auditable
+/// in a tooltip rather than being an invisible transformation).
+class TreemapSource {
+  final String bucket;
+  final int amountMinor;
+  final int transactions;
+  const TreemapSource({
+    required this.bucket,
+    required this.amountMinor,
+    required this.transactions,
+  });
+  factory TreemapSource.fromJson(Map<String, dynamic> j) => TreemapSource(
+        bucket: (j['bucket'] ?? '') as String,
+        amountMinor: (j['amount_minor'] ?? 0) as int,
+        transactions: (j['transactions'] ?? 0) as int,
+      );
+}
+
+class TreemapNode {
+  final String id;
+  final String label;
+  final int amountMinor;
+  final int transactions;
+  final bool known;
+  final List<TreemapSource> sources;
+  const TreemapNode({
+    required this.id,
+    required this.label,
+    required this.amountMinor,
+    required this.transactions,
+    required this.known,
+    this.sources = const [],
+  });
+  factory TreemapNode.fromJson(Map<String, dynamic> j) => TreemapNode(
+        id: (j['id'] ?? '') as String,
+        label: (j['label'] ?? '') as String,
+        amountMinor: (j['amount_minor'] ?? 0) as int,
+        transactions: (j['transactions'] ?? 0) as int,
+        known: j['known'] == true,
+        sources: ((j['sources'] ?? const []) as List)
+            .map((e) => TreemapSource.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class TreemapData {
+  final List<TreemapNode> nodes;
+  final int totalMinor;
+  final int rawBuckets;
+  const TreemapData({
+    required this.nodes,
+    required this.totalMinor,
+    required this.rawBuckets,
+  });
+  static const empty = TreemapData(nodes: [], totalMinor: 0, rawBuckets: 0);
+  factory TreemapData.fromJson(Map<String, dynamic> j) => TreemapData(
+        nodes: ((j['nodes'] ?? const []) as List)
+            .map((e) => TreemapNode.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        totalMinor: (j['total_minor'] ?? 0) as int,
+        rawBuckets: (j['raw_buckets'] ?? 0) as int,
+      );
+}
+
 /// The period a snapshot covers, as resolved by the daemon.
 class Period {
   final String key;
@@ -347,6 +412,21 @@ class VaultApi {
 
   /// Which periods this vault actually has data for.
   Future<Periods> periods() => _get('/v1/periods', Periods.fromJson);
+
+  /// Spending by category for the same period the snapshot covers. The daemon
+  /// folds raw impact_buckets onto the user's taxonomy, so the treemap total
+  /// always equals the snapshot's spending figure.
+  Future<TreemapData> treemap({String? period, String? month, String? fy}) {
+    final q = <String, String>{
+      if (period case final p?) 'period': p,
+      if (month case final m?) 'month': m,
+      if (fy case final f?) 'fy': f,
+    };
+    final qs = q.isEmpty
+        ? ''
+        : '?${q.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&')}';
+    return _get('/v1/treemap$qs', TreemapData.fromJson);
+  }
 
   Future<List<Txn>> transactions() => _get('/v1/transactions', (j) =>
       ((j['transactions'] ?? const []) as List)
