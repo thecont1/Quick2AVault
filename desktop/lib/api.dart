@@ -1,0 +1,312 @@
+/// Core API client — the Flutter app is a CLIENT of the daemon, exactly like
+/// the web UI and the MCP server. It owns no database and no business logic.
+///
+/// This is the whole point of the daemon architecture (plan §1): the UI is
+/// replaceable, and swapping React for Flutter changes nothing below this file.
+library;
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:http/http.dart' as http;
+
+class Snapshot {
+  final int spendingMinor;
+  final int incomeMinor;
+  final int transfersMinor;
+  final int documents;
+  final int transactions;
+  final int entities;
+  final int evidenceLinks;
+
+  const Snapshot({
+    required this.spendingMinor,
+    required this.incomeMinor,
+    required this.transfersMinor,
+    required this.documents,
+    required this.transactions,
+    required this.entities,
+    required this.evidenceLinks,
+  });
+
+  static const empty = Snapshot(
+    spendingMinor: 0, incomeMinor: 0, transfersMinor: 0,
+    documents: 0, transactions: 0, entities: 0, evidenceLinks: 0,
+  );
+
+  factory Snapshot.fromJson(Map<String, dynamic> j) {
+    final c = (j['counts'] ?? const {}) as Map<String, dynamic>;
+    return Snapshot(
+      spendingMinor: (j['spending_minor'] ?? 0) as int,
+      incomeMinor: (j['income_minor'] ?? 0) as int,
+      transfersMinor: (j['transfers_minor'] ?? 0) as int,
+      documents: (c['documents'] ?? 0) as int,
+      transactions: (c['transactions'] ?? 0) as int,
+      entities: (c['entities'] ?? 0) as int,
+      evidenceLinks: (c['evidence_links'] ?? 0) as int,
+    );
+  }
+
+  /// What a document-counting tool would have reported: every document's
+  /// amount added up, including the ones that describe the same rupee.
+  int naiveMinor(List<Txn> txns) =>
+      txns.fold(0, (a, t) => a + t.amountMinor * (t.evidence.isEmpty ? 1 : t.evidence.length));
+}
+
+class Leg {
+  final String leg;
+  final int amountMinor;
+  final String account;
+  const Leg({required this.leg, required this.amountMinor, required this.account});
+  factory Leg.fromJson(Map<String, dynamic> j) => Leg(
+        leg: (j['leg'] ?? '') as String,
+        amountMinor: (j['amount_minor'] ?? 0) as int,
+        account: (j['account'] ?? '') as String,
+      );
+  bool get isDebit => leg == 'debit';
+}
+
+class Evidence {
+  final String id;
+  final String filename;
+  final String role;
+  final double? matchScore;
+  final String linkedBy;
+  final Map<String, dynamic>? extraction;
+
+  const Evidence({
+    required this.id,
+    required this.filename,
+    required this.role,
+    this.matchScore,
+    this.linkedBy = 'ai',
+    this.extraction,
+  });
+
+  factory Evidence.fromJson(Map<String, dynamic> j) => Evidence(
+        id: (j['id'] ?? '') as String,
+        filename: (j['original_filename'] ?? '') as String,
+        role: (j['evidence_role'] ?? '') as String,
+        matchScore: (j['match_score'] as num?)?.toDouble(),
+        linkedBy: (j['linked_by'] ?? 'ai') as String,
+        extraction: j['extraction'] as Map<String, dynamic>?,
+      );
+
+  Map<String, String> get refs {
+    final r = extraction?['reference_ids'];
+    if (r is! Map) return const {};
+    return r.map((k, v) => MapEntry(k.toString(), v.toString()));
+  }
+}
+
+class Txn {
+  final String id;
+  final String direction;
+  final int amountMinor;
+  final String occurredAt;
+  final String fyKey;
+  final String? counterparty;
+  final String? rail;
+  final String status;
+  final List<Leg> legs;
+  final List<Evidence> evidence;
+
+  const Txn({
+    required this.id,
+    required this.direction,
+    required this.amountMinor,
+    required this.occurredAt,
+    required this.fyKey,
+    this.counterparty,
+    this.rail,
+    this.status = 'evidenced',
+    this.legs = const [],
+    this.evidence = const [],
+  });
+
+  factory Txn.fromJson(Map<String, dynamic> j) => Txn(
+        id: (j['id'] ?? '') as String,
+        direction: (j['direction'] ?? 'out') as String,
+        amountMinor: (j['amount_minor'] ?? 0) as int,
+        occurredAt: (j['occurred_at'] ?? '') as String,
+        fyKey: (j['fy_key'] ?? '') as String,
+        counterparty: j['counterparty_name'] as String?,
+        rail: j['payment_rail'] as String?,
+        status: (j['status'] ?? 'evidenced') as String,
+        legs: ((j['legs'] ?? const []) as List)
+            .map((e) => Leg.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        evidence: ((j['evidence'] ?? const []) as List)
+            .map((e) => Evidence.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+
+  bool get isTransfer => direction == 'transfer';
+  bool get multiEvidence => evidence.length > 1;
+}
+
+class EvidenceCard {
+  final Txn transaction;
+  final List<Leg> legs;
+  final List<Evidence> evidence;
+  final List<Map<String, dynamic>> provenance;
+  final String summary;
+
+  const EvidenceCard({
+    required this.transaction,
+    required this.legs,
+    required this.evidence,
+    required this.provenance,
+    required this.summary,
+  });
+
+  factory EvidenceCard.fromJson(Map<String, dynamic> j) => EvidenceCard(
+        transaction: Txn.fromJson(j['transaction'] as Map<String, dynamic>),
+        legs: ((j['legs'] ?? const []) as List)
+            .map((e) => Leg.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        evidence: ((j['evidence'] ?? const []) as List)
+            .map((e) => Evidence.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        provenance: ((j['provenance'] ?? const []) as List)
+            .cast<Map<String, dynamic>>(),
+        summary: (j['summary'] ?? '') as String,
+      );
+
+  /// Reference IDs appearing on MORE THAN ONE document — the join keys that
+  /// collapsed several documents into one transaction. Highlighting these is
+  /// the single most persuasive thing the UI does.
+  Set<String> get sharedRefValues {
+    final counts = <String, int>{};
+    for (final e in evidence) {
+      for (final v in e.refs.values.toSet()) {
+        counts[v] = (counts[v] ?? 0) + 1;
+      }
+    }
+    return counts.entries.where((e) => e.value > 1).map((e) => e.key).toSet();
+  }
+}
+
+class VaultEvent {
+  final String type;
+  final Map<String, dynamic> data;
+  final DateTime at;
+  VaultEvent(this.type, this.data) : at = DateTime.now();
+}
+
+class VaultApi {
+  final String baseUrl;
+  final String token;
+  final http.Client _client;
+
+  VaultApi({required this.baseUrl, required this.token, http.Client? client})
+      : _client = client ?? http.Client();
+
+  Map<String, String> get _headers => {'authorization': 'Bearer $token'};
+
+  Future<T> _get<T>(String path, T Function(Map<String, dynamic>) parse) async {
+    final res = await _client
+        .get(Uri.parse('$baseUrl$path'), headers: _headers)
+        .timeout(const Duration(seconds: 10));
+    if (res.statusCode != 200) {
+      throw Exception('GET $path -> ${res.statusCode}');
+    }
+    return parse(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  Future<bool> health() async {
+    try {
+      final res = await _client
+          .get(Uri.parse('$baseUrl/v1/health'))
+          .timeout(const Duration(seconds: 3));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Snapshot> snapshot() => _get('/v1/snapshot', Snapshot.fromJson);
+
+  Future<List<Txn>> transactions() => _get('/v1/transactions', (j) =>
+      ((j['transactions'] ?? const []) as List)
+          .map((e) => Txn.fromJson(e as Map<String, dynamic>))
+          .toList());
+
+  Future<EvidenceCard> evidenceCard(String txnId) =>
+      _get('/v1/transactions/$txnId/evidence', EvidenceCard.fromJson);
+
+  Future<List<Map<String, dynamic>>> intakeFeed() => _get('/v1/intake-feed',
+      (j) => ((j['events'] ?? const []) as List).cast<Map<String, dynamic>>());
+
+  Future<List<Map<String, dynamic>>> entities() => _get('/v1/entities',
+      (j) => ((j['entities'] ?? const []) as List).cast<Map<String, dynamic>>());
+
+  Future<List<Map<String, dynamic>>> reviews() => _get('/v1/reviews',
+      (j) => ((j['reviews'] ?? const []) as List).cast<Map<String, dynamic>>());
+
+  /// Push a file into P0 intake. Used by drag-and-drop.
+  Future<Map<String, dynamic>> ingest(String path) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/intake'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({'path': path, 'source': 'desktop'}),
+    );
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Server-Sent Events stream. Dart's HttpClient handles this cleanly without
+  /// a dependency: we read the response body as a line stream and parse the
+  /// `event:` / `data:` pairs ourselves.
+  Stream<VaultEvent> events() async* {
+    final client = HttpClient();
+    try {
+      final req = await client.getUrl(Uri.parse('$baseUrl/v1/events?token=$token'));
+      req.headers.set('accept', 'text/event-stream');
+      final res = await req.close();
+
+      String? type;
+      await for (final line
+          in res.transform(utf8.decoder).transform(const LineSplitter())) {
+        if (line.startsWith('event:')) {
+          type = line.substring(6).trim();
+        } else if (line.startsWith('data:')) {
+          final raw = line.substring(5).trim();
+          if (type != null && raw.isNotEmpty) {
+            try {
+              yield VaultEvent(type, jsonDecode(raw) as Map<String, dynamic>);
+            } catch (_) {/* keepalive or malformed frame */}
+          }
+        } else if (line.isEmpty) {
+          type = null;
+        }
+      }
+    } finally {
+      client.close(force: true);
+    }
+  }
+}
+
+/// ₹1,23,456.78 — Indian lakh/crore grouping, not thousands.
+/// A naive NumberFormat gives ₹123,456.78, which is wrong for the jurisdiction.
+String rupees(int minor) {
+  final neg = minor < 0;
+  final s = (minor.abs() ~/ 100).toString();
+  final paise = (minor.abs() % 100).toString().padLeft(2, '0');
+
+  String grouped;
+  if (s.length <= 3) {
+    grouped = s;
+  } else {
+    final last3 = s.substring(s.length - 3);
+    var rest = s.substring(0, s.length - 3);
+    final parts = <String>[];
+    while (rest.length > 2) {
+      parts.insert(0, rest.substring(rest.length - 2));
+      rest = rest.substring(0, rest.length - 2);
+    }
+    if (rest.isNotEmpty) parts.insert(0, rest);
+    grouped = '${parts.join(',')},$last3';
+  }
+  return '${neg ? '-' : ''}₹$grouped.$paise';
+}

@@ -16,3 +16,9 @@ Thumbs.db
 
 # Glaze agent temporary files
 tmp/*
+
+# Flutter desktop client
+desktop/build/
+desktop/.dart_tool/
+desktop/macos/Pods/
+desktop/macos/Flutter/ephemeral/
