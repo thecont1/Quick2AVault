@@ -218,15 +218,22 @@ export function writeClaim(
   const now = ports.clock.isoNow();
   const status: ClaimStatus = input.status ?? (source === "user" ? "confirmed" : "proposed");
 
-  // Supersede everything this claim outranks, so the losing rows stop
-  // competing in winningClaim rather than lingering as live opinion.
+  // Supersede everything this claim outranks OR ties with, so the losing rows
+  // stop competing in winningClaim rather than lingering as live opinion.
+  //
+  // The tie case matters: correcting the same field twice must retire the
+  // first correction. Without `<=` the table accumulates several live
+  // 'confirmed' user claims for one field, and the winner is then decided by
+  // recency alone — which happens to be right today, and silently stops being
+  // right the moment ordering or confidence changes. This runs BEFORE the
+  // INSERT, so the incoming row is never caught by it.
   const sup = db
     .prepare(
       `UPDATE field_claims SET status='superseded'
         WHERE subject_type=? AND subject_id=? AND field=?
           AND status NOT IN ('rejected','superseded')
           AND source IN (${Object.entries(AUTHORITY)
-            .filter(([, rank]) => rank < (AUTHORITY[source] ?? 0))
+            .filter(([, rank]) => rank <= (AUTHORITY[source] ?? 0))
             .map(([s]) => `'${s}'`)
             .join(",") || "''"})`,
     )
@@ -392,18 +399,30 @@ export function resolveTransaction(
     amount = amountClaim.value;
     reasons.amount_minor = "user claim on the transaction";
   } else {
-    const ordered = [...settlement, ...invoices];
-    // Within a role class, a user-corrected document outranks an AI reading.
-    const byAuthority = ordered
-      .map((p) => ({ p, v: documentValue(db, p.row.document_id, "amount_minor", p.x) }))
+    // ROLE CLASS is the primary key, authority only the tiebreak WITHIN a
+    // class. Sorting by authority across both classes would let a
+    // user-corrected invoice outrank the bank's own settlement record — which
+    // inverts the rule this whole branch exists to enforce. Correcting an
+    // invoice states what the vendor asked for; it cannot restate what the
+    // bank moved.
+    const ranked = [
+      ...settlement.map((p) => ({ p, roleRank: 1 })),
+      ...invoices.map((p) => ({ p, roleRank: 0 })),
+    ]
+      .map((r) => ({ ...r, v: documentValue(db, r.p.row.document_id, "amount_minor", r.p.x) }))
       .filter((r) => r.v?.value != null)
-      .sort((a, b) => (AUTHORITY[b.v!.source] ?? 0) - (AUTHORITY[a.v!.source] ?? 0));
-    const winner = byAuthority[0];
+      .sort(
+        (a, b) =>
+          b.roleRank - a.roleRank ||
+          (AUTHORITY[b.v!.source] ?? 0) - (AUTHORITY[a.v!.source] ?? 0),
+      );
+
+    const winner = ranked[0];
     if (winner) {
       amount = winner.v!.value;
       const role = winner.p.row.evidence_role;
-      reasons.amount_minor = `${SETTLEMENT_ROLES.has(role) ? "settlement" : "invoice"} document (${role}), ${winner.v!.source} value`;
-      for (const other of byAuthority.slice(1)) {
+      reasons.amount_minor = `${winner.roleRank === 1 ? "settlement" : "invoice"} document (${role}), ${winner.v!.source} value`;
+      for (const other of ranked.slice(1)) {
         if (other.v!.value !== amount) {
           mismatches.push({
             field: "amount_minor",

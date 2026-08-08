@@ -164,6 +164,87 @@ export function applyRule(
 }
 
 /**
+ * A vendor correction is evidence for a rule (work order 03 §P2).
+ *
+ * When the user fixes "SHANTARAM MAHESH" to "Petasight Inc." on an invoice,
+ * the interesting fact is not that one document was wrong — it is that the
+ * DESCRIPTOR maps to that entity, and will keep arriving. This proposes the
+ * descriptor→entity rule so the same correction stops recurring.
+ *
+ * PROPOSES, never auto-applies. The rule lands inactive with source='user'
+ * and must be confirmed before it can rewrite anything: a rule derived from a
+ * single document is a hypothesis, and silently applying it to every future
+ * document that shares a descriptor is how one typo becomes a hundred.
+ *
+ * Returns null when there is nothing worth learning (no descriptor to key on,
+ * no such entity, or the rule already exists) rather than inventing a rule
+ * from a value the vault cannot resolve.
+ */
+export function proposeDescriptorRule(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+  correctedName: string,
+): { rule_id: number; match_key: string; value: string; active: boolean } | null {
+  const name = correctedName.trim();
+  if (!name) return null;
+
+  // The descriptor is what the MODEL read — the raw string that was wrong.
+  // Keying the rule on the corrected name would be circular: it would only
+  // fire on documents that are already right.
+  const doc = db.prepare("SELECT extraction_json, original_filename FROM documents WHERE id=?").get(documentId) as
+    | { extraction_json: string | null; original_filename: string }
+    | undefined;
+  if (!doc?.extraction_json) return null;
+
+  let descriptor: string | null = null;
+  try {
+    const x = JSON.parse(doc.extraction_json) as {
+      counterparty_descriptor?: string | null;
+      parties?: Array<{ role?: string; kind?: string; name?: string }>;
+    };
+    const party = (x.parties ?? []).find((pp) => pp.role === "counterparty" && pp.kind === "organisation");
+    descriptor = x.counterparty_descriptor ?? party?.name ?? null;
+  } catch {
+    return null;
+  }
+
+  const key = normaliseDescriptor(descriptor ?? "");
+  if (!key) return null;
+
+  // Don't learn a rule that maps a descriptor to itself.
+  if (key === normaliseDescriptor(name)) return null;
+
+  const entity = db
+    .prepare("SELECT id FROM entities WHERE kind='organisation' AND lower(display_name)=lower(?)")
+    .get(name) as { id: string } | undefined;
+  if (!entity) return null;
+
+  const existing = db
+    .prepare(
+      `SELECT id, active FROM learned_rules
+        WHERE kind='descriptor_to_entity' AND match_key=? AND COALESCE(match_kind,'')='organisation'`,
+    )
+    .get(key) as { id: number; active: number } | undefined;
+  if (existing) return null;
+
+  const info = db
+    .prepare(
+      `INSERT INTO learned_rules (kind, match_key, match_kind, value, source, confidence, active, created_at)
+       VALUES ('descriptor_to_entity', ?, 'organisation', ?, 'user', 0.8, 0, ?)`,
+    )
+    .run(key, entity.id, ports.clock.isoNow());
+
+  ports.logger.info("rule proposed from correction", {
+    document_id: documentId,
+    descriptor: key,
+    entity: name,
+  });
+
+  return { rule_id: Number(info.lastInsertRowid), match_key: key, value: entity.id, active: false };
+}
+
+/**
  * Near-duplicate entities WITHIN one kind.
  *
  * OCR truncates merchant names differently per document — one real vault

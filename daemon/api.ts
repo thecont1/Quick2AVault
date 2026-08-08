@@ -18,12 +18,27 @@ import { buildTreemap } from "./categories/spend-categories.js";
 import { deriveGmailAddress } from "./gmail/gmail-model.js";
 import { pageCapability, renderPage } from "./rasterise.js";
 import type { GmailOAuth } from "./gmail/oauth.js";
+import { SCHEMA_VERSION } from "./schema.js";
+import type { ClaimSubject } from "./schema.js";
+import {
+  allowedFields,
+  audit,
+  claimsFor,
+  ClaimRefused,
+  propagateFromDocument,
+  resolveTransaction,
+  winningClaim,
+  writeClaim,
+  type ResolvedTransaction,
+} from "./claims.js";
+import { rebuildSearchIndex, searchDocuments } from "./search.js";
 import {
   isLearningEnabled,
   questionBudget,
   answer as answerQuestion,
   dismiss as dismissQuestion,
   findNearDuplicates,
+  proposeDescriptorRule,
 } from "./learning.js";
 
 export interface ApiOptions {
@@ -177,7 +192,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, {
           status: "ok",
           version: opts.version,
-          schema_version: 2,
+          schema_version: SCHEMA_VERSION,
           uptime_s: Math.round((Date.now() - startedAt) / 1000),
           db: ports.paths.dbPath(),
           documents: (db.prepare("SELECT COUNT(*) n FROM documents").get() as { n: number }).n,
@@ -252,6 +267,219 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           at: now,
         });
         return send(res, 200, { linked: true, transaction_id: b.transaction_id, document_id: b.document_id });
+      }
+
+      // ── claims: the inline-editing surface (work order 03 §P2) ───────────
+      //
+      // Editing writes a CLAIM, never a direct column update. The stored value
+      // on transactions is derived; the claim is the statement of fact, and
+      // keeping the two separate is what lets a correction survive
+      // re-extraction and outrank the model without a special case.
+      //
+      //   PATCH /v1/documents/:id/claims     what the paper says
+      //   PATCH /v1/transactions/:id/claims  what the ledger holds
+      //   GET   /v1/documents/:id/claims     provenance per field
+      //   GET   /v1/transactions/:id/claims
+      {
+        const m = /^\/v1\/(documents|transactions|entities)\/([^/]+)\/claims$/.exec(p);
+        if (m) {
+          const subject = (m[1] === "documents"
+            ? "document"
+            : m[1] === "transactions"
+              ? "transaction"
+              : "entity") as ClaimSubject;
+          const subjectId = decodeURIComponent(m[2]);
+
+          const table = subject === "document" ? "documents" : subject === "transaction" ? "transactions" : "entities";
+          const exists = db.prepare(`SELECT 1 FROM ${table} WHERE id=?`).get(subjectId);
+          if (!exists) return send(res, 404, { error: "not_found", subject, subject_id: subjectId });
+
+          if (req.method === "GET") {
+            const claims = claimsFor(db, subject, subjectId);
+            return send(res, 200, {
+              subject_type: subject,
+              subject_id: subjectId,
+              editable_fields: [...allowedFields(subject)],
+              claims: Object.fromEntries(
+                Object.entries(claims).map(([field, c]) => [
+                  field,
+                  {
+                    value: c.value,
+                    source: c.source,
+                    status: c.status,
+                    confidence: c.confidence,
+                    at: c.created_at,
+                  },
+                ]),
+              ),
+            });
+          }
+
+          if (req.method === "PATCH") {
+            const b = (await readJson(req)) as Record<string, unknown>;
+            const field = typeof b.field === "string" ? b.field : "";
+            if (!field) return send(res, 400, { error: "field required" });
+            if (!("value" in b)) return send(res, 400, { error: "value required (may be null to clear)" });
+
+            // Values are stored as TEXT. A number arriving as JSON is
+            // stringified here rather than at every read site, so the column
+            // holds one representation instead of two.
+            const value = b.value === null || b.value === undefined ? null : String(b.value);
+            const before = winningClaim(db, subject, subjectId, field);
+
+            let written: ReturnType<typeof writeClaim>;
+            try {
+              written = writeClaim(db, ports, {
+                subject,
+                subjectId,
+                field,
+                value,
+                source: "user",
+              });
+            } catch (err) {
+              if (err instanceof ClaimRefused) {
+                return send(res, 409, { error: err.code, message: err.message, ...err.detail });
+              }
+              throw err;
+            }
+
+            audit(db, ports, {
+              subject,
+              subjectId,
+              field,
+              action: "edit",
+              oldValue: before?.value ?? null,
+              newValue: value,
+              source: "user",
+            });
+
+            // Propagate. A document edit re-resolves every transaction the
+            // document backs; a transaction edit re-resolves itself. An orphan
+            // document resolves nothing, and that is a success, not an error —
+            // the claim is stored and applies when the document is linked.
+            let affected: ResolvedTransaction[] = [];
+            if (subject === "document") {
+              affected = propagateFromDocument(db, ports, subjectId, [field]);
+            } else if (subject === "transaction") {
+              const r = resolveTransaction(db, ports, subjectId);
+              if (r) affected = [r];
+              ports.bus.publish({
+                type: "TransactionReResolved",
+                transaction_ids: [subjectId],
+                document_id: null,
+                fields: [field],
+                at: ports.clock.isoNow(),
+              });
+            }
+
+            // Feed the learning engine: a corrected vendor is evidence for a
+            // descriptor→entity rule, which is how the same mistake stops
+            // recurring instead of being fixed one document at a time.
+            const candidate =
+              subject === "document" && (field === "vendor" || field === "counterparty") && value
+                ? proposeDescriptorRule(db, ports, subjectId, value)
+                : null;
+
+            return send(res, 200, {
+              claim_id: written.claim_id,
+              subject_type: subject,
+              subject_id: subjectId,
+              field,
+              value,
+              previous: written.previous,
+              superseded: written.superseded,
+              affected_transactions: affected.map((a) => ({
+                transaction_id: a.transaction_id,
+                changed: a.changed,
+                reasons: a.reasons,
+                mismatches: a.mismatches,
+              })),
+              rule_candidate: candidate,
+            });
+          }
+
+          return send(res, 405, { error: "method_not_allowed", allow: "GET, PATCH" });
+        }
+      }
+
+      // ── audit trail ──────────────────────────────────────────────────────
+      // Every edit is appended, never updated. This is the answer to "why does
+      // it say that" when the claim itself has since been superseded.
+      if (p === "/v1/audit" && req.method === "GET") {
+        const subjectId = url.searchParams.get("subject_id");
+        const subjectType = url.searchParams.get("subject_type");
+        const limit = Math.min(Number(url.searchParams.get("limit") ?? 100) || 100, 500);
+
+        const where: string[] = [];
+        const args: string[] = [];
+        if (subjectId) {
+          where.push("subject_id=?");
+          args.push(subjectId);
+        }
+        if (subjectType) {
+          where.push("subject_type=?");
+          args.push(subjectType);
+        }
+        const rows = db
+          .prepare(
+            `SELECT id, subject_type, subject_id, field, action, old_value, new_value, source, at
+               FROM review_audit
+              ${where.length ? "WHERE " + where.join(" AND ") : ""}
+              ORDER BY id DESC LIMIT ?`,
+          )
+          .all(...args, limit);
+        return send(res, 200, { audit: rows });
+      }
+
+      // ── lexical search (work order 03 §P1) ───────────────────────────────
+      if (p === "/v1/search" && req.method === "GET") {
+        const q = (url.searchParams.get("q") ?? "").trim();
+        if (!q) return send(res, 400, { error: "q required" });
+        const limit = Math.min(Number(url.searchParams.get("limit") ?? 25) || 25, 100);
+        const mode = url.searchParams.get("mode") ?? "lexical";
+        if (mode !== "lexical") {
+          // Semantic search is P4. Saying so beats silently returning lexical
+          // results a caller believes are semantic.
+          return send(res, 501, { error: "not_implemented", mode, available: ["lexical"] });
+        }
+        const hits = searchDocuments(db, q, limit);
+        return send(res, 200, { query: q, mode, count: hits.length, results: hits });
+      }
+
+      if (p === "/v1/search/rebuild" && req.method === "POST") {
+        const result = await rebuildSearchIndex(db, ports);
+        return send(res, 200, result);
+      }
+
+      // getTransaction — a single transaction with its resolved counterparty
+      // and evidence. The list endpoint is period-scoped by design, so a
+      // client holding a transaction id (from search, or from an event) had no
+      // way to read just that row.
+      {
+        const m = /^\/v1\/transactions\/([^/]+)$/.exec(p);
+        if (m && req.method === "GET") {
+          const id = decodeURIComponent(m[1]);
+          const txn = db
+            .prepare(
+              `SELECT t.*, e.display_name AS counterparty_name
+                 FROM transactions t
+                 LEFT JOIN entities e ON e.id = t.counterparty_entity_id
+                WHERE t.id = ?`,
+            )
+            .get(id);
+          if (!txn) return send(res, 404, { error: "not_found", transaction_id: id });
+          const evidence = db
+            .prepare(
+              `SELECT td.document_id, td.evidence_role, td.match_score, td.linked_by, td.linked_at,
+                      d.original_filename, d.doc_type
+                 FROM transaction_documents td
+                 JOIN documents d ON d.id = td.document_id
+                WHERE td.transaction_id = ?
+                ORDER BY td.linked_at`,
+            )
+            .all(id);
+          return send(res, 200, { transaction: txn, evidence });
+        }
       }
 
       if (p === "/v1/unlink" && req.method === "POST") {
