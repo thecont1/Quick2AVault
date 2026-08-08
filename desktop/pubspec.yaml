@@ -42,6 +42,10 @@ dependencies:
   desktop_drop: ^0.7.1
   tray_manager: ^0.5.3
   window_manager: ^0.5.2
+  # Declared explicitly rather than relied on transitively via window_manager:
+  # _displayRects() imports it directly to validate a remembered window
+  # position against the currently-attached displays.
+  screen_retriever: ^0.2.0
 
 dev_dependencies:
   flutter_test:
