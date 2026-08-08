@@ -38,8 +38,52 @@ export const nullAiProvider: AiProvider = {
   },
 };
 
+/**
+ * A provider whose configuration can change while the daemon runs.
+ *
+ * The AI provider used to be built once at startup, so pasting a key into
+ * Settings saved it to the database and then did nothing until the daemon was
+ * restarted — the worst kind of failure, because the UI said "saved" and the
+ * behaviour never changed. This wrapper holds a swappable inner provider so
+ * `reconfigure()` takes effect on the very next job.
+ *
+ * `available` and `model` are getters, not captured values: callers that hold
+ * a reference (the job worker, the settings endpoint) see the current state
+ * rather than a snapshot from boot.
+ */
+export interface MutableAiProvider extends AiProvider {
+  /** Rebuild the inner provider. Returns whether AI is available afterwards. */
+  reconfigure(cfg: AiConfig): boolean;
+}
+
+export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiProvider {
+  let inner = createAnthropicProvider(cfg, logger);
+  return {
+    get available() {
+      return inner.available;
+    },
+    get model() {
+      return inner.model;
+    },
+    extract(markdown, filename) {
+      return inner.extract(markdown, filename);
+    },
+    reconfigure(next: AiConfig) {
+      inner = createAnthropicProvider(next, logger);
+      logger.info("ai provider reconfigured", {
+        available: inner.available,
+        model: inner.model,
+      });
+      return inner.available;
+    },
+  };
+}
+
 export function createAnthropicProvider(cfg: AiConfig, logger: Logger): AiProvider {
-  const apiKey = cfg.apiKey ?? process.env.ANTHROPIC_API_KEY ?? "";
+  // An explicitly empty string means "cleared", and must NOT fall through to
+  // the environment variable — otherwise clearing the key in Settings would
+  // silently re-enable a key from the shell the daemon happened to inherit.
+  const apiKey = (cfg.apiKey !== undefined ? cfg.apiKey : process.env.ANTHROPIC_API_KEY) ?? "";
   if (!apiKey) {
     logger.warn("no AI key configured — P2 analysis will be skipped");
     return nullAiProvider;

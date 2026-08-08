@@ -582,6 +582,59 @@ class PageInfo {
       );
 }
 
+/// Raised when a rename would collide with an existing person. That is a
+/// merge decision, not a rename, so the UI must ask rather than guess.
+class PersonConflict implements Exception {
+  PersonConflict(this.message, {this.existingId});
+  final String message;
+  final String? existingId;
+  @override
+  String toString() => message;
+}
+
+/// Raised when deleting a person who is still named on documents. Deleting
+/// anyway would detach evidence from the ledger, so it requires force.
+class PersonInUse implements Exception {
+  PersonInUse(this.message, {required this.documents});
+  final String message;
+  final int documents;
+  @override
+  String toString() => message;
+}
+
+/// What a vault reset destroyed. `note` carries the daemon's reminder that
+/// documents on disk were left alone.
+class ResetResult {
+  ResetResult({
+    required this.scope,
+    required this.documents,
+    required this.transactions,
+    required this.entities,
+    required this.learnedRules,
+    required this.note,
+  });
+
+  final String scope;
+  final int documents;
+  final int transactions;
+  final int entities;
+  final int learnedRules;
+  final String note;
+
+  factory ResetResult.fromJson(Map<String, dynamic> j) {
+    final c = (j['cleared'] as Map<String, dynamic>?) ?? const {};
+    int n(String k) => (c[k] as num?)?.toInt() ?? 0;
+    return ResetResult(
+      scope: (j['scope'] as String?) ?? 'ledger',
+      documents: n('documents'),
+      transactions: n('transactions'),
+      entities: n('entities'),
+      learnedRules: n('learned_rules'),
+      note: (j['note'] as String?) ?? '',
+    );
+  }
+}
+
 /// A refusal from the claims resolver — NOT a transport error.
 ///
 /// The daemon returns 409 with a machine-readable code when an edit is
@@ -1113,28 +1166,41 @@ class VaultApi {
   Future<Map<String, dynamic>> settings() =>
       _get('/v1/settings', (j) => j);
 
-  /// Persist AI provider settings. The daemon reloads them on restart.
   /// NOTE: the parameter is `aiBaseUrl`, not `baseUrl` — the latter would
   /// shadow the client's own field and build a nonsense URL.
+  ///
+  /// Save settings. Applies immediately — the daemon reconfigures its AI
+  /// provider in place, so a saved key works on the next job without a restart.
+  ///
+  /// Pass an empty string to CLEAR a field. This used to drop empty values
+  /// (`isNotEmpty`), which meant a key could be set but never removed — the
+  /// same bug existed on the daemon side.
   Future<Map<String, dynamic>> saveSettings({
     String? aiBaseUrl,
     String? model,
     String? apiKey,
+    String? jurisdiction,
     String? gmailLocalPart,
   }) async {
     final res = await _client.post(
       Uri.parse('$baseUrl/v1/settings'),
       headers: {..._headers, 'content-type': 'application/json'},
       body: jsonEncode({
-        if (aiBaseUrl != null && aiBaseUrl.isNotEmpty) 'base_url': aiBaseUrl,
-        if (model != null && model.isNotEmpty) 'model': model,
-        if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
-        if (gmailLocalPart != null && gmailLocalPart.isNotEmpty)
-          'gmail_local_part': gmailLocalPart,
+        if (aiBaseUrl != null) 'base_url': aiBaseUrl,
+        if (model != null) 'model': model,
+        if (apiKey != null) 'api_key': apiKey,
+        if (jurisdiction != null) 'jurisdiction': jurisdiction,
+        if (gmailLocalPart != null) 'gmail_local_part': gmailLocalPart,
       }),
     );
+    if (res.statusCode != 200) {
+      throw Exception('save settings failed: ${res.statusCode} ${res.body}');
+    }
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
+
+  /// Clear the stored API key.
+  Future<Map<String, dynamic>> clearApiKey() => saveSettings(apiKey: '');
 
   /// ── search + claims (work order 03 §P1/§P2) ───────────────────────────────
 
@@ -1198,6 +1264,77 @@ class VaultApi {
             .map((e) => AuditEntry.fromJson(e as Map<String, dynamic>))
             .toList(),
       );
+
+  /// ── settings, reset, people editing ───────────────────────────────────────
+
+  /// Wipe the vault. [scope] is 'ledger' (documents/transactions/learnings,
+  /// keeps credentials) or 'factory' (also clears the API key and Gmail auth).
+  ///
+  /// Neither scope deletes the user's documents from disk.
+  Future<ResetResult> resetVault({required String scope}) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/reset'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({'scope': scope, 'confirm': 'RESET'}),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('reset failed: ${res.statusCode} ${res.body}');
+    }
+    return ResetResult.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  /// Edit one person. Any omitted field is left unchanged.
+  ///
+  /// Throws [PersonConflict] when the new name already belongs to somebody
+  /// else — that is a merge, not a rename, and the caller must decide.
+  Future<Map<String, dynamic>> editPerson(
+    String id, {
+    String? displayName,
+    String? relationship,
+    bool? isOwner,
+  }) async {
+    final body = <String, dynamic>{};
+    if (displayName != null) body['display_name'] = displayName;
+    if (relationship != null) body['relationship'] = relationship;
+    if (isOwner != null) body['is_owner'] = isOwner;
+
+    final res = await _client.patch(
+      Uri.parse('$baseUrl/v1/people/$id'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode(body),
+    );
+    if (res.statusCode == 409) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      throw PersonConflict(
+        (j['message'] as String?) ?? 'That name is already taken.',
+        existingId: j['existing_id'] as String?,
+      );
+    }
+    if (res.statusCode != 200) {
+      throw Exception('edit person failed: ${res.statusCode} ${res.body}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Delete a person. Without [force] the daemon refuses while documents still
+  /// name them, rather than silently orphaning evidence.
+  Future<Map<String, dynamic>> deletePerson(String id, {bool force = false}) async {
+    final res = await _client.delete(
+      Uri.parse('$baseUrl/v1/people/$id${force ? '?force=1' : ''}'),
+      headers: _headers,
+    );
+    if (res.statusCode == 409) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      throw PersonInUse(
+        (j['message'] as String?) ?? 'That person is named on documents.',
+        documents: (j['documents'] as num?)?.toInt() ?? 0,
+      );
+    }
+    if (res.statusCode != 200) {
+      throw Exception('delete person failed: ${res.statusCode} ${res.body}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
 
   /// Push a file into P0 intake. Used by drag-and-drop.
   Future<Map<String, dynamic>> ingest(String path) async {

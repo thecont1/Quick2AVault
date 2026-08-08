@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import 'danger_zone.dart';
 import '../theme.dart';
 
 /// Setup — AI provider, vault location, jurisdiction.
@@ -62,24 +63,65 @@ class _SetupViewState extends State<SetupView> {
   Future<void> _save() async {
     setState(() { _saving = true; _message = null; });
     try {
+      final typedKey = _apiKey.text.trim();
       final r = await widget.api.saveSettings(
         aiBaseUrl: _baseUrl.text.trim(),
         model: _model.text.trim(),
-        apiKey: _apiKey.text.trim(),
+        // An empty box means "leave the stored key alone", NOT "clear it".
+        // Passing "" here would wipe the key on every unrelated save, because
+        // the field is deliberately blanked after each successful save.
+        // Clearing is an explicit action — see _clearKey.
+        apiKey: typedKey.isEmpty ? null : typedKey,
         gmailLocalPart: _gmail.text.trim(),
       );
-      final restart = r['restart_required'] == true;
       if (!mounted) return;
+      final available = r['ai_available'] == true;
       setState(() {
         _saving = false;
         _apiKey.clear();
-        _message = restart
-            ? 'Saved. Restart the daemon for the new provider to take effect.'
+        // The daemon reconfigures its provider in place, so a saved key is
+        // live immediately — no restart message any more.
+        _message = typedKey.isNotEmpty
+            ? (available ? 'Saved. AI is active.' : 'Saved, but the key was not accepted.')
             : 'Saved.';
       });
       _load();
     } catch (e) {
       if (mounted) setState(() { _saving = false; _message = 'Save failed: $e'; });
+    }
+  }
+
+  /// Remove the stored key. Explicit, confirmed, and separate from Save so it
+  /// cannot happen by accident.
+  Future<void> _clearKey() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear the API key?'),
+        content: const Text(
+          'Document analysis stops until a new key is set. Nothing already '
+          'extracted is lost.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Clear key'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+
+    setState(() { _saving = true; _message = null; });
+    try {
+      await widget.api.clearApiKey();
+      if (!mounted) return;
+      setState(() { _saving = false; _apiKey.clear(); _message = 'API key cleared.'; });
+      _load();
+    } catch (e) {
+      if (mounted) setState(() { _saving = false; _message = 'Clear failed: $e'; });
     }
   }
 
@@ -176,6 +218,17 @@ class _SetupViewState extends State<SetupView> {
                         onTap: _saving ? null : _save,
                       ),
                       const SizedBox(width: 12),
+                      // Only offer to clear when there is something stored;
+                      // an always-visible clear button on an empty field is
+                      // just noise.
+                      if (ai['api_key_set'] == true &&
+                          ai['api_key_source'] == 'settings') ...[
+                        _Ghost(
+                          label: 'Clear key',
+                          onTap: _saving ? null : _clearKey,
+                        ),
+                        const SizedBox(width: 12),
+                      ],
                       if (_message != null)
                         Expanded(
                           child: Text(_message!,
@@ -232,6 +285,10 @@ class _SetupViewState extends State<SetupView> {
                     _ReadOnly(label: 'Financial year', value: (juris['fy_label'] ?? '') as String),
                     _ReadOnly(label: 'Currency', value: '${juris['currency'] ?? ''} · ${juris['grouping'] ?? ''}'),
                     _ReadOnly(label: 'Date format', value: (juris['date_format'] ?? '') as String),
+
+                    // Destructive actions live at the BOTTOM, past everything
+                    // routine, so they are never the first thing a hand lands on.
+                    DangerZone(api: widget.api, onReset: _load),
                   ],
                 ),
         ),

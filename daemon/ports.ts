@@ -69,7 +69,9 @@ export type DomainEvent =
       at: string;
     }
   | { type: "JobStateChanged"; job_id: number; phase: string; state: string; at: string }
-  | { type: "BatchFinished"; processed: number; at: string };
+  | { type: "BatchFinished"; processed: number; at: string }
+  /** Vault wiped from Settings. Clients should drop cached state and refetch. */
+  | { type: "VaultReset"; scope: "ledger" | "factory"; at: string };
 
 export interface EventBus {
   publish(e: DomainEvent): void;

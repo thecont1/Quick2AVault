@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import 'person_editor.dart';
 import '../theme.dart';
 
 /// People — who this vault is for.
@@ -79,6 +80,24 @@ class _PeopleViewState extends State<PeopleView> {
     await _load();
   }
 
+  /// Open the editor. Renaming, re-relating and deleting all live there —
+  /// savePerson() upserts by NAME so it can create but never rename.
+  Future<void> _editPerson(Person p) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => PersonEditor(
+        api: widget.api,
+        person: {
+          'id': p.id,
+          'display_name': p.displayName,
+          'subtype': p.relationship,
+          'is_member': p.isMember ? 1 : 0,
+        },
+        onChanged: _load,
+      ),
+    );
+  }
+
   Future<void> _toggleMember(Person p) async {
     await widget.api.savePerson(
       displayName: p.displayName,
@@ -152,6 +171,7 @@ class _PeopleViewState extends State<PeopleView> {
                             person: p,
                             onMakeOwner: () => _makeOwner(p),
                             onToggleMember: () => _toggleMember(p),
+                            onEdit: () => _editPerson(p),
                           )),
 
                     const SizedBox(height: 16),
@@ -198,11 +218,13 @@ class _PersonRow extends StatelessWidget {
   final Person person;
   final VoidCallback onMakeOwner;
   final VoidCallback onToggleMember;
+  final VoidCallback? onEdit;
 
   const _PersonRow({
     required this.person,
     required this.onMakeOwner,
     required this.onToggleMember,
+    this.onEdit,
   });
 
   @override
@@ -293,6 +315,10 @@ class _PersonRow extends StatelessWidget {
         ),
         if (!person.isMember)
           _Ghost(label: 'Make owner', onTap: onMakeOwner, small: true),
+        if (onEdit != null) ...[
+          const SizedBox(width: 6),
+          _Ghost(label: 'Edit', onTap: onEdit!, small: true),
+        ],
       ]),
     );
   }

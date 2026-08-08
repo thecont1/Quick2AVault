@@ -18,7 +18,8 @@ import { buildTreemap } from "./categories/spend-categories.js";
 import { deriveGmailAddress } from "./gmail/gmail-model.js";
 import { pageCapability, renderPage } from "./rasterise.js";
 import type { GmailOAuth } from "./gmail/oauth.js";
-import { SCHEMA_VERSION } from "./schema.js";
+import type { MutableAiProvider } from "./ai-provider.js";
+import { SCHEMA_VERSION, normaliseName } from "./schema.js";
 import type { ClaimSubject } from "./schema.js";
 import {
   allowedFields,
@@ -46,8 +47,12 @@ export interface ApiOptions {
   host?: string;
   token: string;
   version: string;
-  /** Surfaced read-only on the Setup page so the user can see what's active. */
-  ai?: { available: boolean; model: string };
+  /**
+   * Surfaced on the Setup page, and reconfigured in place when the user saves
+   * or clears an API key — the provider is mutable so a Settings change takes
+   * effect on the next job instead of requiring a daemon restart.
+   */
+  ai?: MutableAiProvider;
   dropDir?: string;
   /**
    * Vault root. Used to confine document file reads: /v1/documents/<id>/file
@@ -64,7 +69,20 @@ export interface ApiOptions {
 
 export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   const startedAt = Date.now();
-  const ai = opts.ai ?? { available: false, model: "(none)" };
+  // Fall back to an inert provider when none was supplied (tests, headless
+  // use). reconfigure() is a no-op there rather than undefined, so the
+  // settings route does not need to branch on whether AI exists.
+  const ai: MutableAiProvider =
+    opts.ai ?? {
+      available: false,
+      model: "(none)",
+      async extract() {
+        return null;
+      },
+      reconfigure() {
+        return false;
+      },
+    };
   const dropDir = opts.dropDir ?? "";
   const gmail = opts.gmail;
 
@@ -482,6 +500,108 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
       }
 
+      // ── reset (Settings > Danger Zone) ───────────────────────────────────
+      //
+      // Two scopes, because they answer different questions:
+      //
+      //   ledger   "the readings are wrong, read my documents again"
+      //            Wipes documents, transactions, entities, claims, learned
+      //            rules, audit and the search index. KEEPS settings, the API
+      //            key and Gmail auth, so you don't re-paste credentials.
+      //
+      //   factory  "forget everything, I'm starting over"
+      //            Also wipes app_settings (API key, jurisdiction, Gmail
+      //            local part) and stored OAuth tokens.
+      //
+      // NEITHER touches files in the vault directory. The originals are the
+      // user's own documents, not ours to delete — a reset re-reads them, it
+      // does not destroy them. That asymmetry is deliberate and is why this is
+      // recoverable: drop the documents back in and the ledger rebuilds.
+      if (p === "/v1/reset" && req.method === "POST") {
+        const b = await readJson(req);
+        const scope = b.scope === "factory" ? "factory" : "ledger";
+        // Require the caller to spell out the destructive intent, so a stray
+        // POST (a retried request, a curl typo) cannot wipe the vault.
+        if (b.confirm !== "RESET") {
+          return send(res, 400, {
+            error: "confirmation_required",
+            message: 'Send {"confirm":"RESET"} to proceed.',
+          });
+        }
+
+        const n = (t: string): number => {
+          try {
+            return (db.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n;
+          } catch {
+            return 0; // table absent in this schema version
+          }
+        };
+        const before = {
+          documents: n("documents"),
+          transactions: n("transactions"),
+          entities: n("entities"),
+          learned_rules: n("learned_rules"),
+        };
+
+        // Order matters: children before parents, so foreign keys never block
+        // a delete midway and leave the vault half-erased.
+        const ledgerTables = [
+          "evidence_links",
+          "field_claims",
+          "review_audit",
+          "training_reviews",
+          "learned_rules",
+          "transactions",
+          "documents_fts",
+          "documents",
+          "entities",
+          "jobs",
+        ];
+        const tx = db.prepare("BEGIN");
+        try {
+          tx.run();
+          for (const t of ledgerTables) {
+            try {
+              db.prepare(`DELETE FROM ${t}`).run();
+            } catch {
+              // A table that does not exist in this schema version is not an
+              // error: the reset should still clear everything else.
+            }
+          }
+          if (scope === "factory") {
+            db.prepare("DELETE FROM app_settings").run();
+          }
+          db.prepare("COMMIT").run();
+        } catch (e) {
+          db.prepare("ROLLBACK").run();
+          throw e;
+        }
+
+        if (scope === "factory") {
+          // Drop OAuth tokens too, otherwise "factory" would leave the vault
+          // still connected to a Gmail account.
+          try {
+            await gmail?.oauth.disconnect();
+          } catch {
+            /* token store may be empty or unavailable; not fatal */
+          }
+          ai.reconfigure({ apiKey: "", baseUrl: undefined, model: undefined });
+        }
+
+        db.prepare("VACUUM").run();
+        ports.logger.warn("vault reset", { scope, before });
+        ports.bus.publish({ type: "VaultReset", scope, at: ports.clock.isoNow() });
+
+        return send(res, 200, {
+          scope,
+          cleared: before,
+          ai_available: ai.available,
+          note:
+            "Documents on disk were not touched. Drop them into the watched " +
+            "folder to rebuild the ledger.",
+        });
+      }
+
       if (p === "/v1/unlink" && req.method === "POST") {
         const b = await readJson(req);
         if (!b.transaction_id || !b.document_id) {
@@ -618,7 +738,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       if (p === "/v1/settings" && req.method === "POST") {
         const b = await readJson(req);
         const set = db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)");
+        const del = db.prepare("DELETE FROM app_settings WHERE key = ?");
         const saved: string[] = [];
+        const cleared: string[] = [];
         for (const [field, key] of [
           ["base_url", "ai.base_url"],
           ["model", "ai.model"],
@@ -627,16 +749,48 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           ["gmail_local_part", "gmail.local_part"],
         ] as const) {
           const v = b[field];
-          if (typeof v === "string" && v.length > 0) {
+          if (typeof v !== "string") continue;
+          // An empty string is an explicit CLEAR, not a no-op. Previously
+          // `v.length > 0` silently skipped it, so a key could be set but
+          // never removed from the UI.
+          if (v.length === 0) {
+            del.run(key);
+            cleared.push(field);
+          } else {
             set.run(key, v);
             saved.push(field);
           }
         }
-        ports.logger.info("settings updated", { fields: saved });
+
+        // Apply immediately rather than telling the user to restart. Re-read
+        // from the database so the provider reflects committed state, not the
+        // request body (which may have set only some of the three fields).
+        const now = Object.fromEntries(
+          (db.prepare("SELECT key, value FROM app_settings").all() as {
+            key: string;
+            value: string;
+          }[]).map((r) => [r.key, r.value]),
+        );
+        const aiTouched = [...saved, ...cleared].some((f) =>
+          ["api_key", "base_url", "model"].includes(f),
+        );
+        if (aiTouched) {
+          ai.reconfigure({
+            // "" (cleared) must stay "" so it does not fall back to the env var.
+            apiKey: now["ai.api_key"] ?? process.env.ANTHROPIC_API_KEY,
+            baseUrl: now["ai.base_url"] || process.env.Q2AV_AI_BASE_URL,
+            model: now["ai.model"] || process.env.Q2AV_MODEL,
+          });
+        }
+
+        ports.logger.info("settings updated", { fields: saved, cleared });
         return send(res, 200, {
           saved,
-          // Provider is constructed at startup; a restart picks up new values.
-          restart_required: saved.some((f) => f !== "model"),
+          cleared,
+          ai_available: ai.available,
+          active_model: ai.model,
+          // Kept for older clients; nothing about AI needs a restart now.
+          restart_required: false,
         });
       }
 
@@ -697,6 +851,119 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           db.prepare("UPDATE entities SET is_member=1, status='confirmed' WHERE id=?").run(id);
         }
         return send(res, 200, { id, display_name: name, declared: !existing });
+      }
+
+      // Edit one person: rename, change relationship, set/clear owner.
+      //
+      // POST /v1/people upserts by NAME, so it cannot rename anybody — asking
+      // it to would just create a second person. Editing needs the id.
+      if (p.startsWith("/v1/people/") && req.method === "PATCH") {
+        const id = decodeURIComponent(p.slice("/v1/people/".length));
+        const row = db
+          .prepare("SELECT id, display_name FROM entities WHERE id=? AND kind='person'")
+          .get(id) as { id: string; display_name: string } | undefined;
+        if (!row) return send(res, 404, { error: "no such person" });
+
+        const b = await readJson(req);
+        const changed: string[] = [];
+
+        if (typeof b.display_name === "string") {
+          const name = b.display_name.trim();
+          if (!name) return send(res, 400, { error: "display_name cannot be empty" });
+          // Renaming onto an existing person is a merge, not a rename. Refuse
+          // rather than creating two people with the same name.
+          const clash = db
+            .prepare(
+              "SELECT id FROM entities WHERE kind='person' AND lower(display_name)=lower(?) AND id<>?",
+            )
+            .get(name, id) as { id: string } | undefined;
+          if (clash) {
+            return send(res, 409, {
+              error: "name_taken",
+              message: `"${name}" already exists. Use /v1/people/merge to combine them.`,
+              existing_id: clash.id,
+            });
+          }
+          if (name !== row.display_name) {
+            db.prepare("UPDATE entities SET display_name=? WHERE id=?").run(name, id);
+            // Keep the old spelling as an alias so past documents still match.
+            // kind and normalised are NOT NULL and carry a unique index on
+            // (kind, normalised) — the same shape ledger.ts writes.
+            db.prepare(
+              "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, source, created_at) VALUES (?,?,?,?,?,?)",
+            ).run(
+              id,
+              "person",
+              row.display_name,
+              normaliseName(row.display_name),
+              "user",
+              ports.clock.isoNow(),
+            );
+            changed.push("display_name");
+          }
+        }
+
+        if (typeof b.relationship === "string") {
+          db.prepare("UPDATE entities SET subtype=? WHERE id=?").run(
+            b.relationship.trim() || null,
+            id,
+          );
+          changed.push("relationship");
+        }
+
+        if (typeof b.is_owner === "boolean") {
+          if (b.is_owner) {
+            db.prepare("UPDATE entities SET is_member=0 WHERE kind='person' AND id<>?").run(id);
+            db.prepare("UPDATE entities SET is_member=1, status='confirmed' WHERE id=?").run(id);
+          } else {
+            db.prepare("UPDATE entities SET is_member=0 WHERE id=?").run(id);
+          }
+          changed.push("is_owner");
+        }
+
+        const after = db.prepare("SELECT * FROM entities WHERE id=?").get(id);
+        ports.logger.info("person edited", { id, changed });
+        return send(res, 200, { person: after, changed });
+      }
+
+      // Delete a person. Refuses while documents still reference them, because
+      // a silent cascade would quietly detach evidence from the ledger.
+      if (p.startsWith("/v1/people/") && req.method === "DELETE") {
+        const id = decodeURIComponent(p.slice("/v1/people/".length));
+        const row = db
+          .prepare("SELECT id, display_name FROM entities WHERE id=? AND kind='person'")
+          .get(id) as { id: string; display_name: string } | undefined;
+        if (!row) return send(res, 404, { error: "no such person" });
+
+        let refs = 0;
+        try {
+          refs = (
+            db
+              .prepare("SELECT COUNT(*) n FROM document_parties WHERE entity_id=?")
+              .get(id) as { n: number }
+          ).n;
+        } catch {
+          /* table optional */
+        }
+        const force = new URL(req.url ?? "", "http://x").searchParams.get("force") === "1";
+        if (refs > 0 && !force) {
+          return send(res, 409, {
+            error: "person_in_use",
+            message: `${row.display_name} is named on ${refs} document(s). Re-run with ?force=1 to unlink and delete.`,
+            documents: refs,
+          });
+        }
+        if (refs > 0) {
+          db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
+        }
+        try {
+          db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
+        } catch {
+          /* optional */
+        }
+        db.prepare("DELETE FROM entities WHERE id=?").run(id);
+        ports.logger.warn("person deleted", { id, name: row.display_name, unlinked: refs });
+        return send(res, 200, { deleted: id, unlinked_documents: refs });
       }
 
       // Merge two people into one, keeping every spelling as an alias.

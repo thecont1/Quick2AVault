@@ -19,7 +19,7 @@ import { createApi } from "./api.js";
 import { GmailOAuth } from "./gmail/oauth.js";
 import { createTokenStore } from "./gmail/token-store.js";
 import { syncGmail } from "./gmail/sync.js";
-import { createAnthropicProvider } from "./ai-provider.js";
+import { createMutableProvider } from "./ai-provider.js";
 
 const VERSION = "2.0.0-daemon";
 
@@ -115,7 +115,10 @@ async function main() {
       .map((r) => [r.key, r.value]),
   );
 
-  const ai = createAnthropicProvider(
+  // Mutable so Settings changes apply immediately. See createMutableProvider:
+  // this used to be a fixed provider, and saving a key did nothing until the
+  // daemon was restarted.
+  const ai = createMutableProvider(
     {
       apiKey: stored["ai.api_key"] || process.env.ANTHROPIC_API_KEY,
       baseUrl: stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL,
@@ -155,7 +158,9 @@ async function main() {
     port: PORT,
     token: TOKEN,
     version: VERSION,
-    ai: { available: ai.available, model: ai.model },
+    // Pass the provider ITSELF, not a snapshot: the settings route calls
+    // ai.reconfigure() so a key saved in the UI applies without a restart.
+    ai,
     dropDir,
     // The RESOLVED vault root, not the raw env var — Q2AV_VAULT may be unset,
     // in which case ports.paths applies the default location. Passing the env
