@@ -1,58 +1,37 @@
 {
-  "id": "v18ju915",
   "name": "quick2avault",
-  "version": "1.1.1",
+  "version": "2.0.0",
   "productName": "Quick2AVault",
-  "description": "Who’s the boss of your cash? You are!",
-  "iconDescription": "A macOS desktop utility that helps users archive and organize personal financial documents (bank statements, tax forms, receipts) by automatically storing them in organized folders and converting them to searchable markdown. The app runs as a small, always-visible floating orb widget that accepts drag-and-drop files, processes them silently in the background, and maintains a local database of all ingested documents. Think of a safe deposit box, a filing cabinet, a vault door, or a protective circular shield. Aesthetic: minimal, unobtrusive, quiet utility.",
+  "description": "Local-first financial document vault: a daemon that reads your documents, and a Flutter desktop client that lets you correct it.",
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node glaze.ts build",
-    "dev": "node glaze.ts dev",
-    "dev:renderer": "node glaze.ts dev:renderer",
-    "lint": "node glaze.ts lint",
-    "type-check": "node glaze.ts type-check",
-    "format": "node glaze.ts format",
-    "test": "tsx main/services/converter.smoke.ts"
+    "daemon": "tsx daemon/main.ts",
+    "daemon:dev": "tsx watch daemon/main.ts",
+    "migrate:glaze": "tsx daemon/migrate-glaze.ts",
+    "test": "for f in daemon/*.smoke.ts; do echo \"── $f\"; tsx \"$f\" || exit 1; done",
+    "lint": "eslint daemon --ext .ts",
+    "type-check": "tsc --noEmit -p daemon/tsconfig.json",
+    "format": "oxfmt daemon",
+    "app": "cd desktop && flutter run -d macos",
+    "app:build": "cd desktop && flutter build macos --release",
+    "app:test": "cd desktop && flutter test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
     "@firecrawl/anydoc": "0.1.6",
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "@radix-ui/colors": "^3.0.0",
-    "@tanstack/react-query": "^5.87.4",
-    "@tanstack/react-router": "^1.131.36",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "cmdk": "^1.1.1",
-    "lucide-react": "^0.542.0",
-    "radix-ui": "^1.4.3",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "recharts": "^2.15.4",
-    "tailwind-merge": "^3.3.1"
+    "@modelcontextprotocol/sdk": "^1.30.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
-    "@rolldown/plugin-babel": "^0.2.1",
-    "@tailwindcss/vite": "^4.2.2",
     "@types/node": "^24.3.1",
-    "@types/react": "^19.1.12",
-    "@types/react-dom": "^19.1.9",
     "@typescript-eslint/eslint-plugin": "^8.18.0",
     "@typescript-eslint/parser": "^8.18.0",
-    "@vitejs/plugin-react": "^6.0.1",
-    "babel-plugin-react-compiler": "^1.0.0",
-    "esbuild": "^0.28.1",
     "eslint": "^9.39.2",
     "eslint-plugin-import": "^2.31.0",
-    "globals": "^17.3.0",
     "oxfmt": "^0.26.0",
-    "tailwindcss": "^4.2.2",
     "tsx": "^4.20.5",
-    "typescript": "^5.5.3",
-    "vite": "^8.0.2"
+    "typescript": "^5.5.3"
   },
   "engines": {
     "node": ">=24"
@@ -60,28 +39,5 @@
   "overrides": {
     "brace-expansion": "^5.0.8"
   },
-  "packageManager": "npm@11.11.0+sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
-  "appConfig": {
-    "macOS": {
-      "activationPolicy": "accessory"
-    }
-  },
-  "glaze": {
-    "capabilities": {
-      "ai": {
-        "grades": [
-          "fast"
-        ],
-        "purpose": "Converts your dropped financial documents into clean Markdown, summarizes them by person, and extracts invoice amounts and dates to convert foreign-currency totals to rupees.",
-        "mode": "optional"
-      }
-    },
-    "sdkVersion": "0.13.0.0",
-    "createdAt": "2026-07-26T13:23:35.192Z",
-    "lastMigration": "ai-tsconfig-paths",
-    "host": {
-      "minVersion": "0.13.0.0"
-    },
-    "updatedAt": 1785438175059
-  }
+  "packageManager": "npm@11.11.0+sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw=="
 }

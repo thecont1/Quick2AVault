@@ -43,3 +43,11 @@ Duplicates/
 # Google OAuth client credentials — never commit
 gmail-oauth.json
 client_secret*.json
+
+# Retired Glaze app — archived 2026-08-09 to
+# ProtonDrive/ARCHIVE/glaze-quick2avault-2026-08-09
+main/
+renderer/
+glaze.ts
+glaze.config.ts
+*-window.html
