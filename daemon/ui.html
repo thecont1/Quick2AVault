@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quick2AVault</title>
+<style>
+  /* Tufte-ish: maximise data-ink, no chartjunk, no gradients, no shadows. */
+  :root {
+    --bg:#0e1013; --panel:#15181d; --line:#242930;
+    --ink:#e6e9ee; --dim:#8b95a3; --faint:#5b6672;
+    --out:#ff6b5e; --in:#3ddc84; --xfer:#7aa2f7; --ok:#3ddc84; --warn:#f0b429;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
+       padding:28px 32px 60px;max-width:1180px;margin:0 auto}
+
+  header{display:flex;align-items:baseline;justify-content:space-between;
+         border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:26px}
+  h1{font-size:16px;font-weight:600;letter-spacing:-.2px}
+  h1 span{color:var(--faint);font-weight:400}
+  .conn{font:11px var(--mono);color:var(--faint);display:flex;align-items:center;gap:7px}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
+  .dot.live{background:var(--ok)}
+  .dot.dead{background:var(--out)}
+
+  /* ── hero ─────────────────────────────────────────────────────── */
+  .heroes{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
+          background:var(--line);border:1px solid var(--line);margin-bottom:8px}
+  .hero{background:var(--panel);padding:18px 20px}
+  .hero .k{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim)}
+  .hero .v{font:600 30px/1.15 var(--mono);letter-spacing:-1px;margin-top:9px;
+           font-variant-numeric:tabular-nums}
+  .hero .n{font-size:11.5px;color:var(--faint);margin-top:6px}
+  .hero.x .v{color:var(--xfer)}
+
+  .callout{border:1px solid var(--line);border-left:2px solid var(--ok);
+           background:var(--panel);padding:11px 16px;margin-bottom:26px;
+           font-size:13px;color:var(--dim)}
+  .callout b{color:var(--ink);font-weight:600}
+  .callout .strike{color:var(--faint);text-decoration:line-through}
+
+  /* ── layout ───────────────────────────────────────────────────── */
+  .cols{display:grid;grid-template-columns:1fr 380px;gap:26px;align-items:start}
+  h2{font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);
+     margin-bottom:11px;font-weight:600}
+
+  /* ── transactions ─────────────────────────────────────────────── */
+  .txn{border:1px solid var(--line);background:var(--panel);padding:14px 16px;
+       margin-bottom:9px;cursor:pointer}
+  .txn:hover{border-color:#37404b}
+  .txn.sel{border-color:var(--xfer)}
+  .txn .r1{display:flex;align-items:baseline;gap:11px}
+  .tag{font:600 9.5px var(--mono);letter-spacing:.7px;padding:2px 6px;border:1px solid}
+  .tag.out{color:var(--out);border-color:#4a2622}
+  .tag.in{color:var(--in);border-color:#1d4030}
+  .tag.transfer{color:var(--xfer);border-color:#25344f}
+  .amt{font:600 19px var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+  .cp{color:var(--dim);font-size:13px;margin-left:auto;text-align:right}
+  .meta{font:11px var(--mono);color:var(--faint);margin-top:7px}
+  .legs{margin-top:10px;padding-top:9px;border-top:1px solid var(--line)}
+  .leg{display:flex;gap:9px;font:11.5px var(--mono);color:var(--dim);padding:1.5px 0}
+  .leg .d{color:var(--out)} .leg .c{color:var(--in)}
+  .leg .a{color:var(--faint)}
+  .ev{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--faint);
+      margin-top:5px}
+  .ev .role{font:10px var(--mono);color:var(--dim);border:1px solid var(--line);padding:1px 5px}
+  .badge2{display:inline-block;font:600 10px var(--mono);color:var(--ok);
+          border:1px solid #1d4030;padding:1.5px 6px;margin-left:8px}
+
+  /* ── feed ─────────────────────────────────────────────────────── */
+  .feed{border:1px solid var(--line);background:var(--panel);max-height:520px;
+        overflow-y:auto;font:11.5px var(--mono)}
+  .fe{padding:7px 12px;border-bottom:1px solid var(--line);display:flex;gap:9px;
+      align-items:baseline;animation:slide .25s ease}
+  @keyframes slide{from{opacity:0;transform:translateY(-4px)}to{opacity:1}}
+  .fe:last-child{border-bottom:0}
+  .fe .t{color:var(--faint);font-size:10px;flex:0 0 52px}
+  .fe .n{flex:1;color:var(--dim);word-break:break-word}
+  .fe.DocumentReceived .n{color:var(--ink)}
+  .fe.MarkdownReady .n,.fe.AnalysisComplete .n{color:var(--dim)}
+  .fe.TransactionRecorded .n{color:var(--in)}
+  .fe.MatchProposed .n{color:var(--ok);font-weight:600}
+  .fe.DocumentDuplicate .n{color:var(--warn)}
+
+  /* ── evidence card ────────────────────────────────────────────── */
+  .card{border:1px solid var(--line);background:var(--panel);padding:16px;margin-top:22px}
+  .card h3{font-size:12px;margin-bottom:12px;font-weight:600}
+  .card .sum{border-top:1px solid var(--line);margin-top:12px;padding-top:11px;
+             font-size:12.5px;color:var(--ok)}
+  .doc{border:1px solid var(--line);padding:9px 11px;margin-bottom:7px}
+  .doc .fn{font-size:12px}
+  .doc .rf{font:10.5px var(--mono);color:var(--faint);margin-top:5px;word-break:break-all}
+  .doc .rf em{color:var(--ok);font-style:normal}
+  .empty{color:var(--faint);font-size:12.5px;padding:16px 0}
+  .prov{font:10.5px var(--mono);color:var(--faint);margin-top:10px;
+        padding-top:9px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Quick2AVault <span>— every rupee a transaction, every transaction evidenced</span></h1>
+  <div class="conn"><span class="dot" id="dot"></span><span id="conn">connecting</span></div>
+</header>
+
+<div class="heroes">
+  <div class="hero"><div class="k">Spending</div><div class="v" id="spend">—</div>
+    <div class="n" id="spendN">this financial year</div></div>
+  <div class="hero x"><div class="k">Transfers</div><div class="v" id="xfer">—</div>
+    <div class="n">between your own accounts — not spending</div></div>
+  <div class="hero"><div class="k">Ledger</div><div class="v" id="counts">—</div>
+    <div class="n" id="countsN">documents → transactions</div></div>
+</div>
+
+<div class="callout" id="callout">waiting for the vault…</div>
+
+<div class="cols">
+  <div>
+    <h2>Transactions</h2>
+    <div id="txns"><div class="empty">No transactions yet. Drop a document into the watched folder.</div></div>
+    <div id="card"></div>
+  </div>
+  <div>
+    <h2>Live intake</h2>
+    <div class="feed" id="feed"><div class="fe"><span class="t">—</span><span class="n">waiting for events…</span></div></div>
+  </div>
+</div>
+
+<script>
+const TOKEN = "%%TOKEN%%";
+const H = { Authorization: "Bearer " + TOKEN };
+const api = (p) => fetch(p, { headers: H }).then((r) => r.json());
+
+const money = (m) => m === null || m === undefined ? "—"
+  : "₹" + (m / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+const clock = () => new Date().toTimeString().slice(0, 8);
+
+let selected = null;
+
+async function refresh() {
+  const [s, t] = await Promise.all([api("/v1/snapshot"), api("/v1/transactions")]);
+
+  document.getElementById("spend").textContent = money(s.spending_minor);
+  document.getElementById("xfer").textContent = money(s.transfers_minor);
+  document.getElementById("counts").textContent = s.counts.documents + " → " + s.counts.transactions;
+  document.getElementById("countsN").textContent =
+    s.counts.documents + " documents, " + s.counts.transactions + " transactions, "
+    + s.counts.evidence_links + " evidence links";
+
+  // The headline: what a document-counting tool would have reported.
+  const naive = t.transactions.reduce((a, x) => a + x.amount_minor * (x.evidence?.length || 1), 0);
+  const co = document.getElementById("callout");
+  if (s.counts.documents > s.counts.transactions) {
+    co.innerHTML = "<b>" + s.counts.documents + " documents describe "
+      + s.counts.transactions + " transactions.</b> Counting documents would report "
+      + "<span class='strike'>" + money(naive) + "</span> — this vault reports <b>"
+      + money(s.spending_minor) + "</b>, because linked evidence is counted once "
+      + "and wallet loads are transfers, not spending.";
+  } else {
+    co.textContent = "Drop a second document describing the same payment to see the double-count get killed.";
+  }
+
+  const box = document.getElementById("txns");
+  if (!t.transactions.length) {
+    box.innerHTML = "<div class='empty'>No transactions yet. Drop a document into the watched folder.</div>";
+    return;
+  }
+  box.innerHTML = t.transactions.map((x) => {
+    const legs = (x.legs || []).map((l) =>
+      "<div class='leg'><span class='" + (l.leg === "debit" ? "d" : "c") + "'>"
+      + l.leg.padEnd(6) + "</span><span>" + money(l.amount_minor) + "</span>"
+      + "<span class='a'>" + l.account + "</span></div>").join("");
+    const ev = (x.evidence || []).map((e) =>
+      "<div class='ev'><span class='role'>" + e.evidence_role + "</span>"
+      + "<span>" + e.original_filename + "</span></div>").join("");
+    const multi = (x.evidence || []).length > 1
+      ? "<span class='badge2'>" + x.evidence.length + " DOCS · ONE RUPEE</span>" : "";
+    return "<div class='txn" + (selected === x.id ? " sel" : "") + "' data-id='" + x.id + "'>"
+      + "<div class='r1'><span class='tag " + x.direction + "'>" + x.direction.toUpperCase() + "</span>"
+      + "<span class='amt'>" + money(x.amount_minor) + "</span>" + multi
+      + "<span class='cp'>" + (x.counterparty_name || "no counterparty — own accounts") + "</span></div>"
+      + "<div class='meta'>" + x.occurred_at + " · " + x.fy_key + " · rail=" + (x.payment_rail || "?")
+      + " · " + x.status + "</div>"
+      + "<div class='legs'>" + legs + ev + "</div></div>";
+  }).join("");
+
+  box.querySelectorAll(".txn").forEach((el) =>
+    el.onclick = () => showCard(el.dataset.id));
+}
+
+async function showCard(id) {
+  selected = id;
+  const c = await api("/v1/transactions/" + id + "/evidence");
+  const t = c.transaction;
+  const docs = c.evidence.map((e) => {
+    const refs = e.extraction && e.extraction.reference_ids || {};
+    const shared = Object.entries(refs).map(([k, v]) =>
+      // Highlight the key that appears on more than one document — that's the
+      // join that collapsed them into one transaction.
+      c.evidence.filter((o) => o.extraction && o.extraction.reference_ids
+        && Object.values(o.extraction.reference_ids).includes(v)).length > 1
+        ? "<em>" + k + "=" + v + "</em>" : k + "=" + v).join("  ");
+    return "<div class='doc'><div class='fn'>" + e.original_filename + "</div>"
+      + "<div class='rf'>" + e.evidence_role + " · linked by " + e.linked_by
+      + (e.match_score ? " at " + Number(e.match_score).toFixed(2) : "")
+      + (shared ? "<br>" + shared : "") + "</div></div>";
+  }).join("");
+  const prov = (c.provenance || []).map((p) =>
+    p.field + "=" + p.value + " [" + p.source + "]").join("   ");
+  document.getElementById("card").innerHTML =
+    "<div class='card'><h3>Evidence · " + money(t.amount_minor) + " · "
+    + (t.counterparty_name || "transfer") + "</h3>" + docs
+    + (prov ? "<div class='prov'>" + prov + "</div>" : "")
+    + "<div class='sum'>" + c.summary + "</div></div>";
+  refresh();
+}
+
+// ── live event stream ────────────────────────────────────────────
+const DESC = {
+  DocumentReceived:   (e) => "received  " + e.filename,
+  DocumentDuplicate:  (e) => "duplicate  " + e.filename + "  (same bytes — ignored)",
+  MarkdownReady:      (e) => "converted  " + e.chars + " chars",
+  AnalysisComplete:   (e) => "analysed  " + e.document_id.slice(0, 12),
+  TransactionRecorded:(e) => "transaction  " + money(e.amount_minor) + "  " + e.direction,
+  MatchProposed:      (e) => "MATCHED  score " + Number(e.score).toFixed(2) + "  → one rupee",
+  JobStateChanged:    (e) => e.phase + "  " + e.state,
+};
+function push(type, data) {
+  const f = document.getElementById("feed");
+  if (f.dataset.virgin !== "1") { f.innerHTML = ""; f.dataset.virgin = "1"; }
+  const d = document.createElement("div");
+  d.className = "fe " + type;
+  const say = DESC[type] ? DESC[type](data) : type;
+  d.innerHTML = "<span class='t'>" + clock() + "</span><span class='n'>" + say + "</span>";
+  f.prepend(d);
+  while (f.children.length > 80) f.lastChild.remove();
+}
+
+function connect() {
+  // EventSource can't set headers, so the token rides as a query param on
+  // localhost. The daemon accepts either.
+  const es = new EventSource("/v1/events?token=" + encodeURIComponent(TOKEN));
+  const dot = document.getElementById("dot"), lbl = document.getElementById("conn");
+  es.onopen = () => { dot.className = "dot live"; lbl.textContent = "live"; };
+  es.onerror = () => { dot.className = "dot dead"; lbl.textContent = "reconnecting"; };
+  for (const type of Object.keys(DESC).concat("Ready")) {
+    es.addEventListener(type, (m) => {
+      let d = {}; try { d = JSON.parse(m.data); } catch {}
+      if (type !== "Ready") push(type, d);
+      if (["TransactionRecorded", "MatchProposed", "AnalysisComplete", "DocumentReceived"].includes(type)) {
+        clearTimeout(window.__rt);
+        window.__rt = setTimeout(refresh, 220);   // debounce bursts
+      }
+    });
+  }
+}
+
+refresh();
+connect();
+setInterval(refresh, 8000);
+</script>
+</body>
+</html>

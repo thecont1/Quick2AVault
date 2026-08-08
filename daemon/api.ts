@@ -6,6 +6,8 @@
  * probe can distinguish "daemon down" from "daemon up but token wrong".
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import * as fsp from "node:fs/promises";
+import * as path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
@@ -27,9 +29,13 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
     res.end(b);
   };
 
-  const authed = (req: IncomingMessage) => {
+  const authed = (req: IncomingMessage, url?: URL) => {
     const h = req.headers.authorization ?? "";
-    return h.startsWith("Bearer ") && h.slice(7) === opts.token;
+    if (h.startsWith("Bearer ") && h.slice(7) === opts.token) return true;
+    // EventSource cannot set headers, so the SSE stream also accepts the token
+    // as a query parameter. Localhost-only daemon; the token never leaves the
+    // machine, and this is the standard workaround for browser SSE clients.
+    return !!url && url.searchParams.get("token") === opts.token;
   };
 
   const server = createServer(async (req, res) => {
@@ -37,6 +43,24 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
     const p = url.pathname;
 
     try {
+      // ── the demo UI (unauthenticated shell; it fetches with the token) ───
+      if (p === "/" || p === "/index.html") {
+        const file = path.join(import.meta.dirname ?? __dirname, "ui.html");
+        let html: string;
+        try {
+          html = await fsp.readFile(file, "utf-8");
+        } catch {
+          return send(res, 404, { error: "ui.html not found", expected: file });
+        }
+        // Inject the live token so the page can call the API without a login.
+        html = html.replace("%%TOKEN%%", opts.token);
+        res.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        });
+        return res.end(html);
+      }
+
       // ── unauthenticated: health ──────────────────────────────────────────
       if (p === "/v1/health") {
         const jobs = db.prepare("SELECT state, COUNT(*) n FROM jobs GROUP BY state").all() as {
@@ -56,7 +80,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       }
 
       // ── everything below requires the bearer token ───────────────────────
-      if (!authed(req)) return send(res, 401, { error: "unauthorized" });
+      if (!authed(req, url)) return send(res, 401, { error: "unauthorized" });
 
       // ── SSE event stream ─────────────────────────────────────────────────
       if (p === "/v1/events") {
