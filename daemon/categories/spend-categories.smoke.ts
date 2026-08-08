@@ -130,5 +130,22 @@ check("no bucket is claimed by two categories", () => {
   }
 });
 
-console.log(`\n${pass} passed, ${fail} failed`);
+check("a NULL/empty bucket becomes Uncategorised, never dropped", () => {
+  // The SQL used `impact_bucket NOT IN (...)`, and NULL NOT IN (...) is NULL,
+  // so WHERE rejected the row: uncategorised spending vanished from the
+  // treemap while the hero total still counted it. The query now COALESCEs,
+  // which means buildTreemap really does receive blank rows and must fold them.
+  const nodes = buildTreemap([
+    { impact_bucket: "eating_out", amount_minor: 10_000, transactions: 1 },
+    { impact_bucket: "", amount_minor: 25_000, transactions: 2 },
+    { impact_bucket: null, amount_minor: 5_000, transactions: 1 },
+  ]);
+  const total = nodes.reduce((s, n) => s + n.amount_minor, 0);
+  eq(total, 40_000, "uncategorised money went missing:");
+  const uncat = nodes.find((n) => /uncategor|none/i.test(n.label));
+  if (!uncat) throw new Error(`no Uncategorised node: ${nodes.map((n) => n.label).join(", ")}`);
+  eq(uncat.amount_minor, 30_000, "both blank rows must fold into one tile:");
+});
+
+console.log(`\n  ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
