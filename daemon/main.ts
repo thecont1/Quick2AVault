@@ -157,6 +157,10 @@ async function main() {
     version: VERSION,
     ai: { available: ai.available, model: ai.model },
     dropDir,
+    // The RESOLVED vault root, not the raw env var — Q2AV_VAULT may be unset,
+    // in which case ports.paths applies the default location. Passing the env
+    // var directly would leave the file route confining reads to "undefined".
+    vaultDir: ports.paths.vaultRoot(),
     gmail,
     // Browser dev UI is opt-in: it hands API access to any local process that
     // can read the page.

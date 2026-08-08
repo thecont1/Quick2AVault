@@ -33,6 +33,13 @@ export interface ApiOptions {
   /** Surfaced read-only on the Setup page so the user can see what's active. */
   ai?: { available: boolean; model: string };
   dropDir?: string;
+  /**
+   * Vault root. Used to confine document file reads: /v1/documents/<id>/file
+   * serves bytes off disk, and raw_path must be proven to resolve inside this
+   * directory first. Without it that route would be an arbitrary-file-read
+   * primitive for anyone who can write a documents row.
+   */
+  vaultDir: string;
   /** Serve the browser dev UI at `/`. Off unless Q2AV_DEV_UI=1. */
   devUi?: boolean;
   /** Gmail dropbox, present only when Google OAuth credentials are set. */
@@ -763,7 +770,6 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               )
               .all(Number(url.searchParams.get("limit") ?? 100)),
           });
-
         case "/v1/transactions": {
           // RECENT must obey the period selector. Without this the list showed
           // the newest 100 transactions from ALL time regardless of the chosen
@@ -935,6 +941,109 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
 
         default: {
+          // getDocumentFile — /v1/documents/<id>/file
+          //
+          // Serves the original bytes so a client can render a preview (and a
+          // magnifier) without shelling out to Preview.app or Acrobat. The
+          // Flutter Review tab needs this; there was previously no way to get
+          // at a document's content over the API at all.
+          const fileMatch = p.match(/^\/v1\/documents\/([^/]+)\/file$/);
+          if (fileMatch) {
+            const doc = db
+              .prepare("SELECT id, original_filename, ext, raw_path, byte_size FROM documents WHERE id = ?")
+              .get(fileMatch[1]) as Record<string, unknown> | undefined;
+            if (!doc) {
+              return send(res, 404, { error: "document_not_found", document_id: fileMatch[1] });
+            }
+
+            const raw = String(doc.raw_path ?? "");
+            // Confine reads to the vault even though raw_path comes from our
+            // own DB. A poisoned extraction, a restored backup from another
+            // machine, or a hand-edited row must not turn this route into an
+            // arbitrary-file-read primitive. resolve() collapses any '..'
+            // before the prefix test, so traversal cannot slip through.
+            const resolved = path.resolve(raw);
+            const vaultRoot = path.resolve(opts.vaultDir);
+            if (!resolved.startsWith(vaultRoot + path.sep)) {
+              return send(res, 403, {
+                error: "outside_vault",
+                hint: "the document's raw_path does not resolve inside the vault",
+              });
+            }
+
+            let bytes: Buffer;
+            try {
+              bytes = await fsp.readFile(resolved);
+            } catch {
+              // The row exists but the file is gone — a real state worth
+              // distinguishing from "no such document", because the fix is
+              // different (re-ingest vs. wrong id).
+              return send(res, 410, {
+                error: "file_missing",
+                document_id: doc.id,
+                expected_at: resolved,
+              });
+            }
+
+            const ext = String(doc.ext ?? "").toLowerCase().replace(/^\./, "");
+            const types: Record<string, string> = {
+              pdf: "application/pdf",
+              png: "image/png",
+              jpg: "image/jpeg",
+              jpeg: "image/jpeg",
+              gif: "image/gif",
+              webp: "image/webp",
+              heic: "image/heic",
+              txt: "text/plain; charset=utf-8",
+            };
+            res.writeHead(200, {
+              "content-type": types[ext] ?? "application/octet-stream",
+              "content-length": String(bytes.byteLength),
+              // Never render an untrusted document inline as HTML.
+              "x-content-type-options": "nosniff",
+              "content-security-policy": "default-src 'none'",
+              "cache-control": "private, max-age=60",
+            });
+            return res.end(bytes);
+          }
+
+          // getDocumentMarkdown — /v1/documents/<id>/markdown
+          //
+          // The extracted text, for the Document/Markdown toggle. Cheaper than
+          // the original bytes and the only view that works for formats with no
+          // usable image rendering.
+          const mdMatch = p.match(/^\/v1\/documents\/([^/]+)\/markdown$/);
+          if (mdMatch) {
+            const doc = db
+              .prepare("SELECT id, markdown_path, markdown_chars FROM documents WHERE id = ?")
+              .get(mdMatch[1]) as Record<string, unknown> | undefined;
+            if (!doc) {
+              return send(res, 404, { error: "document_not_found", document_id: mdMatch[1] });
+            }
+            const mdPath = String(doc.markdown_path ?? "");
+            if (!mdPath) {
+              return send(res, 409, {
+                error: "not_converted",
+                hint: "conversion has not run for this document yet",
+              });
+            }
+            const resolved = path.resolve(mdPath);
+            const vaultRoot = path.resolve(opts.vaultDir);
+            if (!resolved.startsWith(vaultRoot + path.sep)) {
+              return send(res, 403, { error: "outside_vault" });
+            }
+            try {
+              const text = await fsp.readFile(resolved, "utf-8");
+              return send(res, 200, {
+                document_id: doc.id,
+                markdown: text,
+                chars: text.length,
+              });
+            } catch {
+              return send(res, 410, { error: "file_missing", expected_at: resolved });
+            }
+          }
+
           // getEvidenceCard — /v1/transactions/<id>/evidence
           const m = p.match(/^\/v1\/transactions\/([^/]+)\/evidence$/);
           if (m) {
