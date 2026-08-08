@@ -29,6 +29,7 @@ import 'widgets/vault_tabs.dart';
 import 'widgets/ledger_tab.dart';
 import 'widgets/treemap.dart';
 import 'widgets/people_view.dart';
+import 'widgets/review_browser.dart';
 import 'widgets/review_view.dart';
 
 Future<void> main() async {
@@ -82,6 +83,11 @@ class _VaultHomeState extends State<VaultHome> {
   bool _daemonUp = false;
   /// Popup (menubar panel) vs the full resizable window.
   bool _fullWindow = false;
+
+  /// Which Review surface is showing: false = document browser (default),
+  /// true = the Learning-Mode question queue. Reset on tab change, so returning
+  /// to Review always lands on the browser.
+  bool _reviewQueue = false;
   /// Which surface the full window is showing.
   ///
   /// Replaces three mutually-exclusive booleans (_setup / _review / _people).
@@ -320,9 +326,20 @@ class _VaultHomeState extends State<VaultHome> {
           if (e.type != 'Ready') _feed.insert(0, e);
           if (_feed.length > 60) _feed.removeLast();
         });
+        // Verified against the daemon's actual emissions (probe: drop a
+        // fixture, read the SSE stream). The daemon emits nine types; these
+        // are the ones that change what the ledger shows.
+        //
+        // 'BatchFinished' is easy to forget and matters most: a bulk Gmail
+        // sync ends with it, and the per-document events during a large import
+        // can be coalesced, so without it the totals sit stale after an import.
+        //
+        // Deliberately NOT here: 'JobStateChanged' (fires ~6x per document —
+        // pure churn) and 'MarkdownReady' (conversion finished, but no ledger
+        // figure has changed yet; 'AnalysisComplete' follows and covers it).
         const refreshOn = {
           'TransactionRecorded', 'MatchProposed', 'AnalysisComplete',
-          'DocumentReceived', 'DocumentDuplicate',
+          'DocumentReceived', 'DocumentDuplicate', 'BatchFinished',
         };
         // 'Ready' is the daemon's hello — it arrives on every (re)connect.
         // Refreshing on it is how the app recovers after the daemon restarts:
@@ -437,7 +454,13 @@ class _VaultHomeState extends State<VaultHome> {
             _TitleBar(connected: _connected, daemonUp: _daemonUp),
             VaultTabBar(
               current: _tab,
-              onChanged: (t) => setState(() => _tab = t),
+              onChanged: (t) => setState(() {
+                _tab = t;
+                // Leaving Review discards the queue sub-view, so coming back
+                // always lands on the document browser rather than resuming a
+                // question list the user had already navigated away from.
+                if (t != VaultTab.review) _reviewQueue = false;
+              }),
               reviewCount: _reviewCount,
               // Charts is declared but unbuilt. Shown disabled rather than
               // hidden: a greyed tab is an honest promise about what is coming,
@@ -478,16 +501,26 @@ class _VaultHomeState extends State<VaultHome> {
               FeedRail(events: _feed, connected: _connected),
             ],
           ),
-        VaultTab.review => ReviewView(
-            api: _api,
-            // No close button in tab mode — the tab bar is the way out. Passing
-            // null keeps ReviewView usable standalone (tests) without it
-            // rendering a dead affordance here.
-            onClose: null,
-            // The badge must drop the moment a question is answered, not on the
-            // next poll — otherwise the count lies about work already done.
-            onChanged: _refresh,
-          ),
+        // Review has two surfaces: the document browser (default — inspect what
+        // the vault understood) and the Learning-Mode queue (teach it). The
+        // queue used to BE the Review tab, which meant there was no way to look
+        // at a document at all.
+        VaultTab.review => _reviewQueue
+            ? ReviewView(
+                api: _api,
+                // In tab mode "close" means "back to the browser", not "leave
+                // the tab" — the tab bar handles that.
+                onClose: () => setState(() => _reviewQueue = false),
+                // The badge must drop the moment a question is answered, not on
+                // the next poll — otherwise the count lies about work already
+                // done.
+                onChanged: _refresh,
+              )
+            : ReviewBrowser(
+                api: _api,
+                pendingQuestions: _reviewCount,
+                onOpenQueue: () => setState(() => _reviewQueue = true),
+              ),
         VaultTab.people => PeopleView(api: _api, onClose: null),
         VaultTab.settings => SetupView(
             api: _api,
