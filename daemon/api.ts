@@ -104,16 +104,23 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
     return a.length === b.length && timingSafeEqual(a, b);
   };
 
+  /**
+   * Tokens in URLs end up in access logs, browser history and Referer
+   * headers, so the query-string fallback exists ONLY for the SSE stream,
+   * where EventSource genuinely cannot set an Authorization header. Every
+   * other route — including POST /v1/intake and /v1/settings — is
+   * header-only.
+   */
+  const QUERY_TOKEN_ROUTES = new Set(["/v1/events"]);
+
   const authed = (req: IncomingMessage, url?: URL) => {
     const h = req.headers.authorization ?? "";
     if (h.startsWith("Bearer ")) {
       const given = h.slice(7);
       if (tokenMatches(given) || uiSessionValid(given)) return true;
     }
-    // EventSource cannot set headers, so the SSE stream also accepts the token
-    // as a query parameter. Localhost-only daemon; the token never leaves the
-    // machine, and this is the standard workaround for browser SSE clients.
-    const q = url?.searchParams.get("token");
+    if (!url || !QUERY_TOKEN_ROUTES.has(url.pathname)) return false;
+    const q = url.searchParams.get("token");
     return !!q && (tokenMatches(q) || uiSessionValid(q));
   };
 
@@ -635,7 +642,14 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           const period = resolvePeriod(pack, url.searchParams);
           const clauses = [
             "direction = 'out'",
-            "impact_bucket NOT IN ('transfer','investment')",
+            // COALESCE, not a bare NOT IN. SQL three-valued logic makes
+            // `NULL NOT IN (...)` evaluate to NULL, which WHERE rejects — so
+            // every uncategorised transaction silently vanished from the
+            // treemap while the hero total still counted it. recordTransaction
+            // writes `x.category_hint ?? null`, so a NULL bucket is normal
+            // whenever the model omits a category, and the "Uncategorised"
+            // passthrough in buildTreemap could never have received a row.
+            "COALESCE(impact_bucket,'') NOT IN ('transfer','investment')",
             "status != 'scheduled'",
           ];
           const args: string[] = [];
@@ -664,7 +678,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             period,
             nodes,
             total_minor: total,
-            currency: "INR",
+            // From the active jurisdiction pack, not hardcoded — a vault on a
+            // non-INR pack would otherwise label its total with the wrong
+            // currency while /v1/settings reported the right one.
+            currency: pack.currency.code,
             // Raw bucket count vs node count shows how much folding happened —
             // useful for spotting a taxonomy that has drifted from the data.
             raw_buckets: rows.length,

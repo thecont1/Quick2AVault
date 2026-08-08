@@ -116,4 +116,45 @@ assert.deepEqual(
   ],
 );
 
+// Bucket spelling drift must not drop money out of a pinned category.
+// "Shopping Discretionary" is the same bucket as "shopping_discretionary";
+// before normalisation this rolled up to 0 and vanished silently.
+assert.deepEqual(
+  rollupWatchCategories(
+    [
+      {
+        amountInr: 700,
+        source: "document",
+        spendCategory: null,
+        watchCategory: null,
+        impactBucket: "Shopping Discretionary",
+      },
+      {
+        amountInr: 300,
+        source: "document",
+        spendCategory: null,
+        watchCategory: null,
+        impactBucket: "shopping/discretionary",
+      },
+    ],
+    categories,
+  ),
+  [
+    {
+      id: "groceries",
+      label: "Groceries",
+      totalInr: 0,
+      documentCount: 0,
+      scheduledEntryCount: 0,
+    },
+    {
+      id: "discretionary",
+      label: "Discretionary",
+      totalInr: 1_000,
+      documentCount: 2,
+      scheduledEntryCount: 0,
+    },
+  ],
+);
+
 console.log("watch-category rollup smoke: ok");

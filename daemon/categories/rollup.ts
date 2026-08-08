@@ -32,7 +32,13 @@ export function matchesWatchCategory(
   ]) {
     if (tag && tags.has(tag)) return true;
   }
-  return impact.impactBucket != null && category.impactBuckets.includes(impact.impactBucket);
+  // impactBucket is normalised on BOTH sides, like every other tag. It used to
+  // be the one raw comparison in this function, so "Shopping Discretionary"
+  // failed to match a configured "shopping_discretionary" and dropped silently
+  // out of a pinned category's total. Buckets are free text from the extractor,
+  // so spelling drift is the norm, not the exception.
+  const bucket = normalizeWatchTag(impact.impactBucket);
+  return bucket !== "" && category.impactBuckets.map(normalizeWatchTag).includes(bucket);
 }
 
 export function rollupWatchCategories(
