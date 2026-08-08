@@ -60,7 +60,7 @@ export interface ExtractionResult {
   };
   /** Raw merchant descriptor as printed (e.g. "SWIGGY*BLR 080"). */
   counterparty_descriptor: string | null;
-  /** Account the money moved FROM, as printed (e.g. "HDFC Bank Credit Card ending 1668"). */
+  /** Account the money moved FROM, as printed (e.g. "Example Bank Credit Card ending 4242"). */
   source_of_funds_text: string | null;
   /** For transfers: the account money moved INTO. */
   destination_of_funds_text: string | null;
@@ -163,8 +163,8 @@ Rules that matter more than anything else:
    DIFFERENT ENTITIES. Label each occurrence by what it is in THIS document.
 
    AN "account" MUST BE A REAL, NAMEABLE STORE OF FUNDS YOU OWN — something
-   with an institution and ideally an identifying number, like "HDFC Bank
-   Savings ...1767" or "HDFC Credit Card ending 1668". It is NOT:
+   with an institution and ideally an identifying number, like "Example Bank
+   Savings ...9876" or "Example Bank Credit Card ending 4242". It is NOT:
      - a counterparty's internal ledger ("client ledger balance with X",
        "settlement account with broker Y", "net amount receivable")
      - a payment method or rail ("card/online payment", "pay online link",

@@ -22,3 +22,20 @@ desktop/build/
 desktop/.dart_tool/
 desktop/macos/Pods/
 desktop/macos/Flutter/ephemeral/
+
+# ── Never commit real financial data or secrets ────────────────────────────
+# Vault contents are the user's actual documents and ledger.
+Quick2AVault/
+*.db
+*.db-shm
+*.db-wal
+Drop/
+Raw/
+Markdown/
+Duplicates/
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key

@@ -67,8 +67,8 @@ export function resolveEntity(
   if (kind === "account") {
     const filler = /\b(wallet|account|a\/c|balance|card|savings|current|upi|money)\b/g;
     const core = (s: string) => normaliseName(s).replace(filler, " ").replace(/\s+/g, " ").trim();
-    // Trailing digits identify WHICH account at an institution: "HDFC ...1767"
-    // (savings) and "HDFC ...1668" (credit card) share the stem "hdfc bank"
+    // Trailing digits identify WHICH account at an institution: a savings
+    // account and a credit card at one bank share the same name stem
     // but are different accounts. If both sides carry digits they must agree,
     // or we merge a card into a savings account and legs point at the wrong one.
     const digits = (s: string) => (s.match(/\d{3,}/g) ?? []).join("");
@@ -250,6 +250,43 @@ export function recordTransaction(
       counterpartyId = resolveEntity(db, ports, name, "organisation", {
         subtype: chosen?.subtype ?? "merchant",
         identifiers: chosen?.identifiers,
+      });
+    }
+  }
+
+  // ── people (plan §3.1) ────────────────────────────────────────────────────
+  // The extractor names a person on most documents ("Billed to: …"), and until
+  // now that was discarded — 60 of 69 real documents carried a person the
+  // ledger never recorded. People are WHO a document belongs to, not who was
+  // paid, so they are linked via document_parties rather than as counterparty.
+  //
+  // The first person seen becomes the owner (member=true) — a single-user
+  // vault, per plan §5 "zero setup". Everyone else is a candidate the user can
+  // confirm or merge later.
+  for (const party of x.parties.filter((pp) => pp.kind === "person")) {
+    if (!party.name?.trim()) continue;
+    try {
+      const personId = resolveEntity(db, ports, party.name, "person", {
+        subtype: party.subtype,
+        identifiers: party.identifiers,
+      });
+
+      // Promote the first ever person to member/owner status.
+      const members = db
+        .prepare("SELECT COUNT(*) n FROM entities WHERE kind='person' AND is_member=1")
+        .get() as { n: number };
+      if (members.n === 0 && party.role === "owner") {
+        db.prepare("UPDATE entities SET is_member=1, status='confirmed' WHERE id=?").run(personId);
+        ports.logger.info("vault owner detected", { name: party.name });
+      }
+
+      db.prepare(
+        "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+      ).run(documentId, personId, party.role);
+    } catch (err) {
+      ports.logger.warn("could not record person", {
+        name: party.name,
+        err: (err as Error)?.message,
       });
     }
   }

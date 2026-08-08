@@ -41,11 +41,11 @@ function freshDb(): DatabaseSync {
 
 console.log("\nEntity resolution invariants\n");
 
-check("same name across kinds creates SEPARATE entities (the Swiggy rule)", () => {
+check("same name across kinds creates SEPARATE entities (the same-name-across-kinds rule)", () => {
   const db = freshDb();
-  const merchant = resolveEntity(db, ports, "Swiggy Limited", "organisation");
-  const wallet = resolveEntity(db, ports, "Swiggy Limited", "account");
-  const equity = resolveEntity(db, ports, "Swiggy Limited", "instrument");
+  const merchant = resolveEntity(db, ports, "Demo Merchant Limited", "organisation");
+  const wallet = resolveEntity(db, ports, "Demo Merchant Limited", "account");
+  const equity = resolveEntity(db, ports, "Demo Merchant Limited", "instrument");
   assert.notStrictEqual(merchant, wallet, "merchant and account must differ");
   assert.notStrictEqual(merchant, equity, "merchant and instrument must differ");
   assert.notStrictEqual(wallet, equity, "account and instrument must differ");
@@ -55,57 +55,60 @@ check("same name across kinds creates SEPARATE entities (the Swiggy rule)", () =
 
 check("same name + same kind resolves to ONE entity", () => {
   const db = freshDb();
-  const a = resolveEntity(db, ports, "Swiggy Limited", "organisation");
-  const b = resolveEntity(db, ports, "swiggy limited", "organisation");
-  const c = resolveEntity(db, ports, "Swiggy Ltd.", "organisation");
+  const a = resolveEntity(db, ports, "Demo Merchant Limited", "organisation");
+  const b = resolveEntity(db, ports, "demo merchant limited", "organisation");
+  const c = resolveEntity(db, ports, "Demo Merchant Ltd.", "organisation");
   assert.strictEqual(a, b, "case-insensitive match failed");
   assert.strictEqual(a, c, "suffix-normalised match failed");
 });
 
 check("wallet named inconsistently resolves to ONE account", () => {
   const db = freshDb();
-  const a = resolveEntity(db, ports, "Swiggy Money Wallet (swiggy@axisbank)", "account");
-  const b = resolveEntity(db, ports, "Swiggy Money", "account");
-  const c = resolveEntity(db, ports, "Swiggy Money Wallet", "account");
-  assert.strictEqual(a, b, "'Swiggy Money' should merge into the wallet");
-  assert.strictEqual(a, c, "'Swiggy Money Wallet' should merge into the wallet");
+  const a = resolveEntity(db, ports, "Demo Money Wallet (demo@examplebank)", "account");
+  const b = resolveEntity(db, ports, "Demo Money", "account");
+  const c = resolveEntity(db, ports, "Demo Money Wallet", "account");
+  assert.strictEqual(a, b, "'Demo Money' should merge into the wallet");
+  assert.strictEqual(a, c, "'Demo Money Wallet' should merge into the wallet");
 });
 
 check("savings vs credit card at the SAME bank never merge", () => {
   const db = freshDb();
-  const card = resolveEntity(db, ports, "HDFC Bank Credit Card ending 1668", "account");
-  const savings = resolveEntity(db, ports, "HDFC Bank Savings Account", "account");
+  const card = resolveEntity(db, ports, "Example Bank Credit Card ending 4242", "account");
+  const savings = resolveEntity(db, ports, "Example Bank Savings Account", "account");
   assert.notStrictEqual(card, savings, "credit card merged into savings account");
 });
 
 check("two accounts at one bank with different digits never merge", () => {
   const db = freshDb();
-  const a = resolveEntity(db, ports, "HDFC Bank Account ...1767", "account");
-  const b = resolveEntity(db, ports, "HDFC Bank Account ...1668", "account");
+  const a = resolveEntity(db, ports, "Example Bank Account ...9876", "account");
+  const b = resolveEntity(db, ports, "Example Bank Account ...4242", "account");
   assert.notStrictEqual(a, b, "different account numbers merged");
 });
 
 check("distinct merchants sharing a word never merge", () => {
   const db = freshDb();
-  const a = resolveEntity(db, ports, "Meghana Foods", "organisation");
-  const b = resolveEntity(db, ports, "Rameshwaram Foods", "organisation");
+  const a = resolveEntity(db, ports, "Alpha Foods", "organisation");
+  const b = resolveEntity(db, ports, "Beta Foods", "organisation");
   assert.notStrictEqual(a, b, "containment leaked into organisations");
 });
 
 check("bare 'wallet' does not swallow a named wallet", () => {
   const db = freshDb();
-  const a = resolveEntity(db, ports, "Swiggy Money Wallet", "account");
-  const b = resolveEntity(db, ports, "Paytm Wallet", "account");
+  const a = resolveEntity(db, ports, "Demo Money Wallet", "account");
+  const b = resolveEntity(db, ports, "Other Wallet", "account");
   assert.notStrictEqual(a, b, "unrelated wallets merged");
 });
 
-// ── owned-account plausibility (found by running 69 real documents) ─────────
+// ── owned-account plausibility ─────────────────────────────────────────────
+// NOTE: every string below is SYNTHETIC. Test fixtures must never carry real
+// account numbers, card digits, tax IDs, employer or counterparty names — a
+// public repo is the wrong place to learn that lesson.
 check("real accounts are accepted", () => {
   for (const s of [
-    "HDFC Bank Credit Card ending 1668",
-    "HDFC Bank Savings Account ...1767",
-    "Swiggy Money Wallet (swiggy@axisbank)",
-    "HDFC Bank Account 50100725481665",
+    "Example Bank Credit Card ending 4242",
+    "Example Bank Savings Account ...9876",
+    "Demo Money Wallet (demo@examplebank)",
+    "Example Bank Account 00000000000000",
     "Cash",
   ]) {
     assert.ok(isPlausibleOwnedAccount(s), `should accept: ${s}`);
@@ -113,15 +116,15 @@ check("real accounts are accepted", () => {
 });
 
 check("counterparty ledgers are REJECTED as accounts", () => {
-  // Each of these was invented as an "account" on a real document, which
-  // turned a share sale or salary credit into a bogus transfer.
+  // These SHAPES (not the real names) were invented as "accounts" on real
+  // documents, turning a share sale or salary credit into a bogus transfer.
   for (const s of [
-    "Client ledger balance with Paytm Money Limited",
-    "Client ledger/settlement account with Paytm Money Limited",
-    "Client trading/ledger account with Paytm Money Limited",
-    "Paytm Money Limited (broker) - net amount payable by client",
-    "Employer (UNext) payroll",
-    "Sale proceeds of equity shares (Global Health Limited)",
+    "Client ledger balance with Example Broker Limited",
+    "Client ledger/settlement account with Example Broker Limited",
+    "Client trading/ledger account with Example Broker Limited",
+    "Example Broker Limited (broker) - net amount payable by client",
+    "Employer (Example Corp) payroll",
+    "Sale proceeds of equity shares (Example Holdings Limited)",
     "Sale proceeds from equity trades net of purchases, brokerage, taxes and levies",
     "Card/online payment (pay online link)",
     "Third party online payment",

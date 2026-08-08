@@ -8,6 +8,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
+import { randomBytes } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
@@ -263,6 +264,18 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             drop: dropDir,
             db: ports.paths.dbPath(),
           },
+          gmail: {
+            local_part: kv["gmail.local_part"] ?? "",
+            address: kv["gmail.local_part"] ? `${kv["gmail.local_part"]}@gmail.com` : "",
+            connected: kv["gmail.connected"] === "true",
+            // The OAuth flow itself is not yet ported into the daemon; the
+            // address is stored so setup is complete and connect is one step.
+            status: kv["gmail.local_part"]
+              ? (kv["gmail.connected"] === "true" ? "connected" : "not_connected")
+              : "not_configured",
+            scopes: ["gmail.readonly"],
+            note: "Read-only. Never sends, deletes, labels, or marks as read.",
+          },
           jurisdiction: {
             id: pack.id,
             name: pack.name,
@@ -288,6 +301,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           ["model", "ai.model"],
           ["api_key", "ai.api_key"],
           ["jurisdiction", "jurisdiction.id"],
+          ["gmail_local_part", "gmail.local_part"],
         ] as const) {
           const v = b[field];
           if (typeof v === "string" && v.length > 0) {
@@ -301,6 +315,65 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           // Provider is constructed at startup; a restart picks up new values.
           restart_required: saved.some((f) => f !== "model"),
         });
+      }
+
+      // ── people ───────────────────────────────────────────────────────────
+      // Who this vault is for. The first person the extractor names as "owner"
+      // is auto-promoted to member; everyone else stays a candidate until the
+      // user says otherwise (plan §5: zero setup, confirm on novelty).
+      if (p === "/v1/people" && req.method === "GET") {
+        const people = db
+          .prepare(
+            `SELECT e.id, e.display_name, e.subtype, e.is_member, e.status, e.confidence,
+                    (SELECT COUNT(*) FROM document_parties dp WHERE dp.entity_id = e.id) AS document_count
+             FROM entities e WHERE e.kind='person'
+             ORDER BY e.is_member DESC, document_count DESC, e.display_name`,
+          )
+          .all() as Record<string, unknown>[];
+        for (const person of people) {
+          person.roles = db
+            .prepare(
+              "SELECT DISTINCT role FROM document_parties WHERE entity_id=? ORDER BY role",
+            )
+            .all(person.id as string)
+            .map((r) => (r as { role: string }).role);
+        }
+        return send(res, 200, {
+          people,
+          owner: people.find((x) => x.is_member === 1) ?? null,
+        });
+      }
+
+      // Declare a person, or update one. Used by the People dialog.
+      if (p === "/v1/people" && req.method === "POST") {
+        const b = await readJson(req);
+        const name = String(b.display_name ?? "").trim();
+        if (!name) return send(res, 400, { error: "display_name required" });
+
+        const now = ports.clock.isoNow();
+        const existing = db
+          .prepare("SELECT id FROM entities WHERE kind='person' AND lower(display_name)=lower(?)")
+          .get(name) as { id: string } | undefined;
+
+        let id = existing?.id;
+        if (!id) {
+          id = `ent_${randomBytes(8).toString("hex")}`;
+          db.prepare(
+            `INSERT INTO entities (id, kind, subtype, display_name, confidence, status, is_member, created_at)
+             VALUES (?, 'person', ?, ?, 1.0, 'confirmed', ?, ?)`,
+          ).run(id, b.relationship ?? null, name, b.is_member ? 1 : 0, now);
+        } else {
+          db.prepare(
+            "UPDATE entities SET subtype=COALESCE(?,subtype), is_member=?, status='confirmed' WHERE id=?",
+          ).run(b.relationship ?? null, b.is_member ? 1 : 0, id);
+        }
+
+        // Exactly one owner: promoting a person demotes the previous one.
+        if (b.is_owner) {
+          db.prepare("UPDATE entities SET is_member=0 WHERE kind='person' AND id<>?").run(id);
+          db.prepare("UPDATE entities SET is_member=1, status='confirmed' WHERE id=?").run(id);
+        }
+        return send(res, 200, { id, display_name: name, declared: !existing });
       }
 
       // ── queries ──────────────────────────────────────────────────────────

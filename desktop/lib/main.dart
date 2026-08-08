@@ -75,8 +75,11 @@ class _VaultHomeState extends State<VaultHome> {
   void initState() {
     super.initState();
     // Wired via --dart-define so the same binary points at any daemon.
+    // NOTE: no default token. A build without --dart-define=Q2AV_TOKEN gets an
+    // empty string and fails auth loudly, rather than shipping a guessable
+    // shared secret that would let any local process read the ledger.
     const base = String.fromEnvironment('Q2AV_URL', defaultValue: 'http://127.0.0.1:4479');
-    const token = String.fromEnvironment('Q2AV_TOKEN', defaultValue: 'devtoken');
+    const token = String.fromEnvironment('Q2AV_TOKEN');
     _api = VaultApi(baseUrl: base, token: token);
     _initMenubar();
     _boot();

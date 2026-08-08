@@ -78,8 +78,8 @@ check("settlement windows come from the pack", () => {
 check("tax-ID patterns are per-jurisdiction", () => {
   const IN = loadPack("IN");
   const JP = loadPack("JP");
-  assert.ok(new RegExp(IN.tax_ids.GSTIN).test("29AAICS8595R1ZM"), "real GSTIN should match");
-  assert.ok(new RegExp(IN.tax_ids.PAN).test("AABCM4567P"), "real PAN should match");
+  assert.ok(new RegExp(IN.tax_ids.GSTIN).test("29AAAAA0000A1Z5"), "synthetic GSTIN of valid shape should match");
+  assert.ok(new RegExp(IN.tax_ids.PAN).test("AAAAA0000A"), "synthetic PAN of valid shape should match");
   assert.ok(!("GSTIN" in JP.tax_ids), "Japan has no GSTIN");
   assert.ok("CorporateNumber" in JP.tax_ids);
 });
