@@ -167,5 +167,29 @@ check("proposals never cross entity kinds", () => {
   assert.strictEqual(orgs.length, 0, "a merchant was proposed for merging with an account");
 });
 
+// A question comparing a name to itself teaches nothing and burns the budget.
+// The live vault had four of these: `Is "PAYTM MONEY LIMITED" the same as
+// PAYTM MONEY LIMITED?`. The guard lives in pipeline.ts; this asserts the
+// normalisation rule it relies on.
+{
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const tautologies: Array<[string, string]> = [
+    ["PAYTM MONEY LIMITED", "PAYTM MONEY LIMITED"],
+    ["Paytm Money Limited", "PAYTM MONEY LIMITED"],
+    ["PAYTM  MONEY,  LIMITED", "Paytm Money Limited"],
+  ];
+  for (const [a, b] of tautologies) {
+    check(`no question for "${a}" vs "${b}"`, () => norm(a) === norm(b));
+  }
+  const genuine: Array<[string, string]> = [
+    ["SWIGGY*BLR", "Swiggy"],
+    ["UPI/ZOMATO/1234", "Zomato"],
+  ];
+  for (const [a, b] of genuine) {
+    check(`still asks for "${a}" vs "${b}"`, () => norm(a) !== norm(b));
+  }
+}
+
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
+
 process.exit(failed ? 1 : 0);

@@ -765,14 +765,29 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           });
 
         case "/v1/transactions": {
+          // RECENT must obey the period selector. Without this the list showed
+          // the newest 100 transactions from ALL time regardless of the chosen
+          // month or FY, so the totals above it and the list below it were
+          // describing different windows — the period buttons appeared to do
+          // nothing at all.
+          const period = resolvePeriod(pack, url.searchParams);
+          // from/to are NULL for "all time". `BETWEEN date(NULL) AND date(NULL)`
+          // matches nothing, so an unbounded period must be expressed as an
+          // always-true clause rather than passed through as NULL bounds —
+          // otherwise "All time" returns an empty ledger.
+          const bounded = period.from !== null && period.to !== null;
           const rows = db
             .prepare(
               `SELECT t.*, e.display_name AS counterparty_name
                FROM transactions t
                LEFT JOIN entities e ON e.id = t.counterparty_entity_id
+               ${bounded ? "WHERE date(t.occurred_at) BETWEEN date(?) AND date(?)" : ""}
                ORDER BY t.occurred_at DESC LIMIT ?`,
             )
-            .all(Number(url.searchParams.get("limit") ?? 100)) as Record<string, unknown>[];
+            .all(
+              ...(bounded ? [period.from as string, period.to as string] : []),
+              Number(url.searchParams.get("limit") ?? 100),
+            ) as Record<string, unknown>[];
           for (const r of rows) {
             r.legs = db
               .prepare(

@@ -427,7 +427,15 @@ export async function runAnalyseJob(
     // otherwise be a silent guess the user never gets to correct.
     if (rec.created_entities > 0 && x.counterparty_descriptor) {
       const cp = x.parties.find((pp) => pp.role === "counterparty" && pp.kind === "organisation");
-      if (cp) {
+      // Only ask when the raw bank descriptor and the resolved entity name are
+      // ACTUALLY different. They are frequently identical, which produced
+      // questions like `Is "PAYTM MONEY LIMITED" the same as PAYTM MONEY
+      // LIMITED?` — a tautology that burns the curiosity budget, trains the
+      // user to dismiss the review queue, and teaches the ledger nothing.
+      // Compare on the same normalised form used for matching, so casing and
+      // punctuation differences alone do not count as novelty either.
+      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      if (cp && norm(x.counterparty_descriptor) !== norm(cp.name)) {
         ask(db, ports, {
           trigger: "unseen_entity",
           question: `Is "${x.counterparty_descriptor}" the same as ${cp.name}?`,
