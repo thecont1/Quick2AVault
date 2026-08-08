@@ -100,6 +100,13 @@ class _VaultHomeState extends State<VaultHome> {
     );
     await m.init();
     if (mounted) setState(() => _menubar = m);
+    // QA / debugging aid: start straight in the full Document Viewer instead
+    // of the menubar popup, so the window can be driven and screenshotted
+    // without simulating a tray click.
+    //   flutter run --dart-define=Q2AV_START_FULL=true
+    if (const bool.fromEnvironment('Q2AV_START_FULL')) {
+      await m.openFullWindow();
+    }
   }
 
   Future<void> _boot() async {
@@ -184,10 +191,25 @@ class _VaultHomeState extends State<VaultHome> {
   }
 
   Future<void> _select(Txn t) async {
-    setState(() => _selectedId = t.id);
+    // Clicking the open row closes it — with an inline panel the row is now
+    // its own toggle, and there is no other way to dismiss it.
+    if (_selectedId == t.id) {
+      setState(() {
+        _selectedId = null;
+        _card = null;
+      });
+      return;
+    }
+    // Clear the old card FIRST: otherwise the previous transaction's evidence
+    // renders under the newly-clicked row until the fetch returns.
+    setState(() {
+      _selectedId = t.id;
+      _card = null;
+    });
     try {
       final card = await _api.evidenceCard(t.id);
-      if (mounted) setState(() => _card = card);
+      // Guard against a slow response for a row the user has since moved off.
+      if (mounted && _selectedId == t.id) setState(() => _card = card);
     } catch (_) {}
   }
 
@@ -274,18 +296,30 @@ class _VaultHomeState extends State<VaultHome> {
                             if (_txns.isEmpty)
                               const _EmptyState()
                             else
+                              // Evidence opens INLINE, directly beneath the
+                              // transaction it belongs to. Rendering it after
+                              // the whole list forced a scroll to the bottom
+                              // and broke the link between claim and proof.
                               ..._txns.map((t) => Padding(
                                     padding: const EdgeInsets.only(bottom: 10),
-                                    child: TxnCard(
-                                      txn: t,
-                                      selected: _selectedId == t.id,
-                                      onTap: () => _select(t),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        TxnCard(
+                                          txn: t,
+                                          selected: _selectedId == t.id,
+                                          onTap: () => _select(t),
+                                        ),
+                                        if (_selectedId == t.id && _card != null)
+                                          Padding(
+                                            padding: const EdgeInsets.only(
+                                                top: 8, left: 14),
+                                            child: EvidencePanel(card: _card!),
+                                          ),
+                                      ],
                                     ),
                                   )),
-                            if (_card != null) ...[
-                              const SizedBox(height: 18),
-                              EvidencePanel(card: _card!),
-                            ],
                           ],
                         ),
                       ),
