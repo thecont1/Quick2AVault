@@ -8,17 +8,31 @@
 /// wherever money appears.
 library;
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'api.dart';
+import 'menubar.dart';
 import 'theme.dart';
 import 'widgets/hero_row.dart';
 import 'widgets/txn_card.dart';
 import 'widgets/evidence_panel.dart';
 import 'widgets/feed_rail.dart';
 import 'widgets/drop_target.dart';
+import 'widgets/popup_view.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await windowManager.ensureInitialized();
+  await windowManager.waitUntilReadyToShow(
+    const WindowOptions(
+      size: kPopupSize,
+      skipTaskbar: true,
+      titleBarStyle: TitleBarStyle.hidden,
+    ),
+  );
   runApp(const Quick2AVaultApp());
 }
 
@@ -42,6 +56,7 @@ class VaultHome extends StatefulWidget {
 
 class _VaultHomeState extends State<VaultHome> {
   late final VaultApi _api;
+  MenubarController? _menubar;
 
   Snapshot _snap = Snapshot.empty;
   List<Txn> _txns = const [];
@@ -50,6 +65,8 @@ class _VaultHomeState extends State<VaultHome> {
   String? _selectedId;
   bool _connected = false;
   bool _daemonUp = false;
+  /// Popup (menubar panel) vs the full resizable window.
+  bool _fullWindow = false;
 
   @override
   void initState() {
@@ -58,7 +75,17 @@ class _VaultHomeState extends State<VaultHome> {
     const base = String.fromEnvironment('Q2AV_URL', defaultValue: 'http://127.0.0.1:4479');
     const token = String.fromEnvironment('Q2AV_TOKEN', defaultValue: 'devtoken');
     _api = VaultApi(baseUrl: base, token: token);
+    _initMenubar();
     _boot();
+  }
+
+  Future<void> _initMenubar() async {
+    final m = MenubarController(
+      onOpenFull: () => setState(() => _fullWindow = true),
+      onQuit: () => exit(0),
+    );
+    await m.init();
+    if (mounted) setState(() => _menubar = m);
   }
 
   Future<void> _boot() async {
@@ -127,6 +154,25 @@ class _VaultHomeState extends State<VaultHome> {
 
   @override
   Widget build(BuildContext context) {
+    // Menubar panel — the default surface. Compact, glanceable, dismissed on
+    // click-away. The full window is opened deliberately.
+    if (!_fullWindow) {
+      return Scaffold(
+        backgroundColor: Colors.transparent,
+        body: VaultDropTarget(
+          onDrop: _onDrop,
+          child: PopupView(
+            snapshot: _snap,
+            txns: _txns,
+            feed: _feed,
+            connected: _connected && _daemonUp,
+            onOpenFull: () => _menubar?.openFullWindow(),
+            onQuit: () => exit(0),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: VaultColors.bg,
       body: VaultDropTarget(

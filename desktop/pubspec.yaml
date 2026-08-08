@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.6.0
   desktop_drop: ^0.7.1
+  tray_manager: ^0.5.3
+  window_manager: ^0.5.2
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +60,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Menubar status-item icon. macOS treats a *_Template.png as a template
+  # image and inverts it automatically for light/dark menu bars.
+  assets:
+    - assets/tray_icon_Template.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:
