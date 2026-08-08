@@ -208,6 +208,13 @@ function recordIntake(
   ).run(kind, filename, sha256 ?? null, documentId ?? null, source, detail, ports.clock.isoNow());
 }
 
+/**
+ * How many times a job may run before it is parked as `failed`.
+ * Named because the retry threshold was previously an inline `>= 2` compared
+ * against a STALE pre-increment counter, which quietly allowed one extra try.
+ */
+const MAX_JOB_ATTEMPTS = 3;
+
 export function enqueue(db: DatabaseSync, ports: Ports, documentId: string, phase: "convert" | "analyse" | "reconcile") {
   const info = db
     .prepare("INSERT INTO jobs (document_id, phase, state, created_at) VALUES (?,?,'pending',?)")
@@ -484,13 +491,39 @@ export class JobWorker {
     if (this.busy) return;
     this.busy = true;
     try {
-      const job = this.db
-        .prepare("SELECT id, document_id, phase, attempts FROM jobs WHERE state='pending' ORDER BY id LIMIT 1")
-        .get() as { id: number; document_id: string; phase: string; attempts: number } | undefined;
+      // ATOMIC CLAIM. Read-then-write let two daemons claim the same job:
+      // both SELECT the same pending row, both UPDATE it to running, and the
+      // document is analysed twice — two API calls, two transactions, a
+      // double-counted rupee. Double-starts are routine in practice (launch
+      // agent plus a manual run, crash-restart overlap).
+      //
+      // The conditional UPDATE is the guard: `AND state='pending'` means only
+      // one writer can win, and SQLite serialises the writes. The loser sees
+      // changes === 0 and moves on.
+      const now = this.ports.clock.isoNow();
+      let job: { id: number; document_id: string; phase: string; attempts: number } | undefined;
+
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = this.db
+          .prepare("SELECT id, document_id, phase, attempts FROM jobs WHERE state='pending' ORDER BY id LIMIT 1")
+          .get() as { id: number; document_id: string; phase: string; attempts: number } | undefined;
+        if (!candidate) return;
+
+        const claim = this.db
+          .prepare("UPDATE jobs SET state='running', started_at=?, attempts=attempts+1 WHERE id=? AND state='pending'")
+          .run(now, candidate.id);
+        if (Number(claim.changes) === 1) {
+          job = candidate;
+          break;
+        }
+        // Lost the race — another worker took it. Try the next pending job.
+      }
       if (!job) return;
 
-      const now = this.ports.clock.isoNow();
-      this.db.prepare("UPDATE jobs SET state='running', started_at=?, attempts=attempts+1 WHERE id=?").run(now, job.id);
+      // The row was incremented by the claim, so this run is attempt N+1.
+      // Thresholding on the stale pre-increment value gave one extra retry
+      // than MAX_ATTEMPTS specified.
+      const attemptNo = job.attempts + 1;
       this.ports.bus.publish({ type: "JobStateChanged", job_id: job.id, phase: job.phase, state: "running", at: now });
 
       try {
@@ -504,10 +537,13 @@ export class JobWorker {
         this.ports.bus.publish({ type: "JobStateChanged", job_id: job.id, phase: job.phase, state: "done", at: fin });
       } catch (err) {
         const msg = (err as Error)?.message ?? String(err);
-        const state = job.attempts >= 2 ? "failed" : "pending";
-        this.db.prepare("UPDATE jobs SET state=?, last_error=?, finished_at=? WHERE id=?")
-          .run(state, msg, this.ports.clock.isoNow(), job.id);
-        this.ports.logger.error("job failed", { job: job.id, phase: job.phase, attempts: job.attempts, err: msg });
+        const state = attemptNo >= MAX_JOB_ATTEMPTS ? "failed" : "pending";
+        // Clear started_at when going back in the queue, so a requeued job
+        // does not look like it has been running since its first attempt.
+        this.db
+          .prepare("UPDATE jobs SET state=?, last_error=?, finished_at=?, started_at=CASE WHEN ?='pending' THEN NULL ELSE started_at END WHERE id=?")
+          .run(state, msg, this.ports.clock.isoNow(), state, job.id);
+        this.ports.logger.error("job failed", { job: job.id, phase: job.phase, attempts: attemptNo, max: MAX_JOB_ATTEMPTS, err: msg });
       }
     } finally {
       this.busy = false;
