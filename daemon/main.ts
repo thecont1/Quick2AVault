@@ -70,7 +70,9 @@ async function main() {
     if (isIgnorable(f)) continue;
     const full = path.join(dropDir, f);
     if (fs.statSync(full).isFile()) {
-      await ingestFile(db, ports, full, { source: "folder" });
+      // consumeSource: files in Drop are the app's own inbox — once safely
+      // archived they are removed, so Drop never accumulates.
+      await ingestFile(db, ports, full, { source: "folder", consumeSource: true });
     }
   }
 
@@ -86,7 +88,7 @@ async function main() {
         pending.delete(full);
         try {
           if (!fs.existsSync(full) || !fs.statSync(full).isFile()) return;
-          await ingestFile(db, ports, full, { source: "folder" });
+          await ingestFile(db, ports, full, { source: "folder", consumeSource: true });
         } catch (err) {
           ports.logger.error("watch intake failed", { full, err: (err as Error)?.message });
         }

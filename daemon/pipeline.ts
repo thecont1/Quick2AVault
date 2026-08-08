@@ -18,21 +18,75 @@ export interface IntakeResult {
   document_id?: string;
   sha256?: string;
   existing_document_id?: string;
+  archived_to?: string;
   error?: string;
+}
+
+export interface IngestOptions {
+  source?: string;
+  externalId?: string;
+  /**
+   * Remove the source file once a VERIFIED copy exists in the vault.
+   *
+   * Only ever true for files that arrived in the watched Drop folder. A file
+   * pushed through POST /v1/intake lives somewhere the user owns (Downloads,
+   * Desktop, another app's folder) and must never be deleted.
+   */
+  consumeSource?: boolean;
 }
 
 const newId = (prefix: string) => `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
 const dateKey = (d: Date) => d.toISOString().slice(0, 10);
 
+/** Strip characters that break Finder or shell round-trips, keep it readable. */
+function safeName(name: string): string {
+  return name.replace(/[/\\:\x00-\x1f]/g, "-").replace(/^\.+/, "").trim() || "document";
+}
+
 /**
- * P0 — synchronous intake. Hash, dedupe, store raw, record, emit, enqueue P1.
+ * A free path in `dir` for `filename`, appending " (2)", " (3)" on collision.
+ * Two different invoices can legitimately share a name ("invoice.pdf"), and
+ * silently overwriting one would destroy a user's document.
+ */
+async function uniquePath(dir: string, filename: string): Promise<string> {
+  const base = safeName(filename);
+  const ext = path.extname(base);
+  const stem = base.slice(0, base.length - ext.length);
+  let candidate = path.join(dir, base);
+  for (let n = 2; ; n++) {
+    try {
+      await fs.access(candidate);
+      candidate = path.join(dir, `${stem} (${n})${ext}`);
+    } catch {
+      return candidate;
+    }
+  }
+}
+
+/** Move a file, falling back to copy+unlink across filesystems (EXDEV). */
+async function moveFile(src: string, dest: string): Promise<void> {
+  try {
+    await fs.rename(src, dest);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "EXDEV") throw err;
+    await fs.copyFile(src, dest);
+    await fs.unlink(src);
+  }
+}
+
+/**
+ * P0 — synchronous intake. Hash, dedupe, ARCHIVE, record, emit, enqueue P1.
  * Target <100ms. Never does AI work. Raw is write-only after this point.
+ *
+ * Archiving is half the product: the vault ORGANISES documents, it does not
+ * just read them. Originals land in Raw/<date>/ under their own filenames, and
+ * the Drop folder is emptied so it stays an inbox rather than a junk drawer.
  */
 export async function ingestFile(
   db: DatabaseSync,
   ports: Ports,
   filePath: string,
-  opts: { source?: string; externalId?: string } = {},
+  opts: IngestOptions = {},
 ): Promise<IntakeResult> {
   const source = opts.source ?? "folder";
   const filename = path.basename(filePath);
@@ -66,14 +120,37 @@ export async function ingestFile(
         existing_document_id: existing.id,
         at: now,
       });
-      return { status: "duplicate", sha256, existing_document_id: existing.id };
+      // A duplicate still gets out of the inbox, but is NEVER deleted — it is
+      // set aside so the user can confirm the vault already has it.
+      let archivedTo: string | undefined;
+      if (opts.consumeSource) {
+        const dupDir = path.join(ports.paths.vaultRoot(), "Duplicates");
+        await fs.mkdir(dupDir, { recursive: true });
+        const dest = await uniquePath(dupDir, filename);
+        await moveFile(filePath, dest);
+        archivedTo = dest;
+        ports.logger.info("duplicate set aside", { filename, dest });
+      }
+      return { status: "duplicate", sha256, existing_document_id: existing.id, archived_to: archivedTo };
     }
 
     const ext = path.extname(filename).toLowerCase();
     const id = newId("doc");
     const rawDir = ports.paths.rawDir(dateKey(ports.clock.now()));
-    const rawPath = path.join(rawDir, `${id}${ext}`);
+
+    // Keep the ORIGINAL filename. Raw/ is meant to be browsable in Finder;
+    // "doc_9f2f5429.pdf" tells a human nothing, "Proton Mail invoice
+    // 21145650.pdf" tells them everything.
+    const rawPath = await uniquePath(rawDir, filename);
     await fs.writeFile(rawPath, buf);
+
+    // Verify the copy before touching the source. A truncated write followed
+    // by an unlink would destroy the user's only copy of a document.
+    const written = await fs.readFile(rawPath);
+    const writtenHash = crypto.createHash("sha256").update(written).digest("hex");
+    if (writtenHash !== sha256) {
+      throw new Error(`archive verification failed for ${filename} (hash mismatch)`);
+    }
 
     db.prepare(
       `INSERT INTO documents (id, sha256, original_filename, ext, byte_size, raw_path, source, received_at)
@@ -85,15 +162,31 @@ export async function ingestFile(
         .run(source, opts.externalId, id, now);
     }
 
+    // Only now, with a verified copy in the vault, is it safe to empty the
+    // inbox. Files pushed via the API are left where they are.
+    if (opts.consumeSource) {
+      try {
+        await fs.unlink(filePath);
+        ports.logger.info("filed", { filename, into: rawPath });
+      } catch (err) {
+        ports.logger.warn("archived but could not clear source", {
+          filename,
+          err: (err as Error)?.message,
+        });
+      }
+    }
+
     recordIntake(db, ports, "added", filename, sha256, id, source, null);
     ports.bus.publish({ type: "DocumentReceived", document_id: id, filename, sha256, at: now });
     enqueue(db, ports, id, "convert");
 
-    return { status: "added", document_id: id, sha256 };
+    return { status: "added", document_id: id, sha256, archived_to: rawPath };
   } catch (err) {
     const msg = (err as Error)?.message ?? String(err);
     ports.logger.error("P0 intake failed", { filename, err: msg });
     recordIntake(db, ports, "failed", filename, undefined, undefined, source, msg);
+    // A failed file stays in Drop on purpose: it is visible, retryable on the
+    // next scan, and never silently swallowed.
     return { status: "failed", error: msg };
   }
 }
@@ -132,8 +225,10 @@ export function enqueue(db: DatabaseSync, ports: Ports, documentId: string, phas
  * AI never rewrites this text; it is the audit trail for every later claim.
  */
 export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: number, documentId: string): Promise<void> {
-  const doc = db.prepare("SELECT id, raw_path, ext FROM documents WHERE id=?").get(documentId) as
-    | { id: string; raw_path: string; ext: string }
+  const doc = db
+    .prepare("SELECT id, raw_path, ext, original_filename FROM documents WHERE id=?")
+    .get(documentId) as
+    | { id: string; raw_path: string; ext: string; original_filename: string }
     | undefined;
   if (!doc) throw new Error(`document ${documentId} not found`);
 
@@ -141,7 +236,9 @@ export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: numbe
   if (md === null) throw new Error(`conversion returned null for ${doc.ext}`);
 
   const mdDir = ports.paths.markdownDir(dateKey(ports.clock.now()));
-  const mdPath = path.join(mdDir, `${documentId}.md`);
+  // Mirror the original filename so Markdown/ is browsable alongside Raw/.
+  const stem = path.basename(doc.original_filename, path.extname(doc.original_filename));
+  const mdPath = await uniquePath(mdDir, `${stem}.md`);
   await fs.writeFile(mdPath, md, "utf-8");
 
   const now = ports.clock.isoNow();

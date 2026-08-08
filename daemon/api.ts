@@ -113,6 +113,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const result = await ingestFile(db, ports, filePath, {
           source: body.source ?? "api",
           externalId: body.external_id,
+          // Deliberately NOT consuming: a file pushed through the API lives in
+          // the caller's own space (Downloads, another app's folder). The vault
+          // copies it; it never deletes someone else's file.
         });
         return send(res, result.status === "failed" ? 500 : 200, result);
       }
