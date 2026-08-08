@@ -27,6 +27,43 @@ import { ingestFile } from "../pipeline.js";
 
 const PROVIDER = "gmail";
 
+/**
+ * Reduce an attacker-supplied filename to a safe basename.
+ *
+ * Attachment filenames come from email headers, so they are hostile input.
+ * `path.join(tmp, "../../../../tmp/pwned.pdf")` resolves OUTSIDE tmp and the
+ * daemon would happily write there — verified: it lands on /tmp/pwned.pdf.
+ * The extension allowlist in gmail-model does not help, because a traversal
+ * payload can end in .pdf.
+ */
+function safeBasename(name: string, fallback: string): string {
+  // basename() strips POSIX separators; the explicit replace also removes
+  // Windows separators and any residual traversal dots that survive it.
+  const base = path
+    .basename(name ?? "")
+    .replace(/[/\\]/g, "_")
+    .replace(/^\.+/, "")
+    .trim();
+  return base.length > 0 ? base.slice(0, 120) : fallback;
+}
+
+/**
+ * Final gate before any write: the resolved path must sit inside `dir`.
+ * Belt and braces — sanitisation should make this unreachable, but a write
+ * outside the temp directory is severe enough to check rather than assume.
+ */
+function assertInside(dir: string, file: string): string {
+  const root = path.resolve(dir);
+  const resolved = path.resolve(file);
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+    throw new Error(`refusing to write outside the sync temp dir: ${resolved}`);
+  }
+  return resolved;
+}
+
+/** Exposed for the smoke test; not part of the module's public surface. */
+export const __testing = { safeBasename, assertInside };
+
 /** Gmail REST transport bound to a live access token. */
 function createTransport(oauth: GmailOAuth): GmailTransport {
   return {
@@ -136,7 +173,9 @@ export async function syncGmail(
         for (const att of artifacts.attachments) {
           try {
             const bytes = await fetchAttachment(oauth, message.id, att.attachmentId);
-            const file = path.join(tmp, att.filename || `${att.attachmentId}.bin`);
+            // Filename is attacker-controlled: basename it, then verify.
+            const safe = safeBasename(att.filename, `${att.attachmentId}.bin`);
+            const file = assertInside(tmp, path.join(tmp, safe));
             await fs.writeFile(file, bytes);
             const result = await ingestFile(db, ports, file, {
               source: PROVIDER,
@@ -159,7 +198,12 @@ export async function syncGmail(
         // A body-only mail can still be evidence — a card alert with no
         // attachment is exactly the second half of the double-count demo.
         if (artifacts.attachments.length === 0 && artifacts.bodyEvent?.content) {
-          const file = path.join(tmp, artifacts.bodyEvent.filename || `${message.id}.txt`);
+          // Derived from the mail Subject via safeStem, so far less exposed
+          // than an attachment name — but it is still remote-derived, and one
+          // sanitiser applied everywhere beats reasoning about which inputs
+          // happen to be safe today.
+          const safe = safeBasename(artifacts.bodyEvent.filename, `${message.id}.txt`);
+          const file = assertInside(tmp, path.join(tmp, safe));
           await fs.writeFile(file, artifacts.bodyEvent.content, "utf-8");
           const result = await ingestFile(db, ports, file, {
             source: PROVIDER,
