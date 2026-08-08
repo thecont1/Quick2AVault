@@ -372,8 +372,20 @@ export function recordTransaction(
       .prepare("INSERT INTO transaction_legs (transaction_id, account_entity_id, leg, amount_minor) VALUES (?,?,?,?)")
       .run(id, accountId, leg, x.amount_minor!);
 
-  if (sourceAccountId) addLeg(sourceAccountId, "debit");
-  if (isTransfer && destAccountId) addLeg(destAccountId, "credit");
+  // Leg type follows DIRECTION. Previously every transaction debited the
+  // source account, so a ₹1,68,641 salary landing in your bank was recorded
+  // as money LEAVING it — the ledger disagreed with itself, and any balance
+  // derived from legs drifted by twice the value of every inbound payment.
+  //
+  //   in       -> the account I own is CREDITED (money arrived)
+  //   out      -> the account I own is DEBITED  (money left)
+  //   transfer -> debit source, credit destination (both mine)
+  if (isTransfer) {
+    if (sourceAccountId) addLeg(sourceAccountId, "debit");
+    if (destAccountId) addLeg(destAccountId, "credit");
+  } else if (sourceAccountId) {
+    addLeg(sourceAccountId, direction === "in" ? "credit" : "debit");
+  }
 
   // ── holdings (portfolio line items) ───────────────────────────────────────
   // A contract note's net amount says what left the bank; only these rows say
