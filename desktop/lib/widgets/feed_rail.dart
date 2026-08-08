@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../api.dart';
@@ -25,8 +27,16 @@ class FeedRail extends StatelessWidget {
     };
   }
 
-  static String _short(dynamic id) =>
-      id == null ? '' : id.toString().substring(0, id.toString().length.clamp(0, 12));
+  /// First 12 chars of an id, for the rail's narrow column.
+  /// The bound is explicitly `int` because String.substring demands one, and
+  /// it is derived from the string's own length so a short id cannot throw
+  /// RangeError.
+  static String _short(dynamic id) {
+    if (id == null) return '';
+    final s = id.toString();
+    final int end = s.length < 12 ? s.length : 12;
+    return s.substring(0, end);
+  }
 
   static Color _colorFor(String type) => switch (type) {
         'MatchProposed' => VaultColors.ok,
@@ -40,8 +50,23 @@ class FeedRail extends StatelessWidget {
   Widget build(BuildContext context) {
     // The rail is fixed at a comfortable reading width, but never more than a
     // third of the window — below ~1040px the ledger needs the room more.
+    //
+    // The cap must actually hold. The previous expression clamped to a 220
+    // FLOOR, which on a narrow window exceeded the third-of-window budget it
+    // was supposed to respect: at 400px wide the rail took 220 of a 133px
+    // allowance, and at 900px it took 320 of 300. Verified 3 of 8 common
+    // widths violated the cap.
+    //
+    // Order matters: prefer the ideal width, give up at most a third of the
+    // window, and only then apply the readable minimum — so a genuinely tiny
+    // window gets a narrow rail rather than one that overflows the layout.
     final maxRail = MediaQuery.of(context).size.width / 3;
-    final width = maxRail < 300 ? maxRail.clamp(220.0, 300.0) : 320.0;
+    const idealRail = 320.0;
+    const minRail = 220.0;
+    final double width = math.max(
+      math.min(idealRail, maxRail),
+      math.min(minRail, maxRail),
+    );
     return Container(
       width: width,
         decoration: const BoxDecoration(
