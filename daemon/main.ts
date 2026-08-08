@@ -18,6 +18,22 @@ import { createAnthropicProvider } from "./ai-provider.js";
 
 const VERSION = "2.0.0-daemon";
 
+/**
+ * Files a real user's Drop folder accumulates that are not documents.
+ * Finder writes .DS_Store the moment the folder is opened, and browsers/
+ * AirDrop leave partial files mid-transfer — ingesting either produces junk
+ * documents and, worse, a partial PDF that fails conversion.
+ */
+const IGNORED_NAMES = new Set([".DS_Store", "Icon\r", ".localized", "desktop.ini"]);
+const IGNORED_EXT = /\.(download|crdownload|part|partial|tmp|sb-[a-z0-9]+)$/i;
+
+function isIgnorable(filename: string): boolean {
+  if (filename.startsWith(".")) return true;
+  if (IGNORED_NAMES.has(filename)) return true;
+  if (IGNORED_EXT.test(filename)) return true;
+  return false;
+}
+
 const PORT = Number(process.env.Q2AV_PORT ?? 4477);
 const VAULT = process.env.Q2AV_VAULT ?? undefined;
 const DROP = process.env.Q2AV_DROP ?? undefined;
@@ -51,8 +67,9 @@ async function main() {
 
   // Scan-on-launch covers files that arrived while the daemon was down.
   for (const f of fs.readdirSync(dropDir)) {
+    if (isIgnorable(f)) continue;
     const full = path.join(dropDir, f);
-    if (fs.statSync(full).isFile() && !f.startsWith(".")) {
+    if (fs.statSync(full).isFile()) {
       await ingestFile(db, ports, full, { source: "folder" });
     }
   }
@@ -60,7 +77,7 @@ async function main() {
   // Debounced watcher: editors and copies fire multiple events per file.
   const pending = new Map<string, NodeJS.Timeout>();
   fs.watch(dropDir, (_event, filename) => {
-    if (!filename || filename.startsWith(".")) return;
+    if (!filename || isIgnorable(filename)) return;
     const full = path.join(dropDir, filename);
     clearTimeout(pending.get(full));
     pending.set(
