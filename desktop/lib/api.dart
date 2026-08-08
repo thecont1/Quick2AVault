@@ -11,6 +11,57 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+/// The period a snapshot covers, as resolved by the daemon.
+class Period {
+  final String key;
+  final String label;
+  final String? from;
+  final String? to;
+  const Period({required this.key, required this.label, this.from, this.to});
+
+  factory Period.fromJson(Map<String, dynamic>? j) => Period(
+        key: (j?['key'] ?? 'all') as String,
+        label: (j?['label'] ?? '') as String,
+        from: j?['from'] as String?,
+        to: j?['to'] as String?,
+      );
+}
+
+/// What the period selector should offer — months and financial years are
+/// derived from the data, so an empty month is never shown.
+class Periods {
+  final String currentFy;
+  final String currentMonth;
+  final List<({String key, String label})> quick;
+  final List<String> months;
+  final List<String> financialYears;
+
+  const Periods({
+    required this.currentFy,
+    required this.currentMonth,
+    required this.quick,
+    required this.months,
+    required this.financialYears,
+  });
+
+  static const empty = Periods(
+    currentFy: '', currentMonth: '', quick: [], months: [], financialYears: [],
+  );
+
+  factory Periods.fromJson(Map<String, dynamic> j) => Periods(
+        currentFy: (j['current_fy'] ?? '') as String,
+        currentMonth: (j['current_month'] ?? '') as String,
+        quick: ((j['quick'] ?? const []) as List)
+            .map((e) => (
+                  key: (e['key'] ?? '') as String,
+                  label: (e['label'] ?? '') as String,
+                ))
+            .toList(),
+        months: ((j['months'] ?? const []) as List).cast<String>(),
+        financialYears: ((j['financial_years'] ?? const []) as List).cast<String>(),
+      );
+}
+
 class Snapshot {
   final int spendingMinor;
   final int incomeMinor;
@@ -21,6 +72,7 @@ class Snapshot {
   final int transactions;
   final int entities;
   final int evidenceLinks;
+  final Period period;
 
   const Snapshot({
     required this.spendingMinor,
@@ -32,6 +84,7 @@ class Snapshot {
     required this.transactions,
     required this.entities,
     required this.evidenceLinks,
+    this.period = const Period(key: 'all', label: ''),
   });
 
   static const empty = Snapshot(
@@ -51,6 +104,7 @@ class Snapshot {
       transactions: (c['transactions'] ?? 0) as int,
       entities: (c['entities'] ?? 0) as int,
       evidenceLinks: (c['evidence_links'] ?? 0) as int,
+      period: Period.fromJson(j['period'] as Map<String, dynamic>?),
     );
   }
 
@@ -232,7 +286,23 @@ class VaultApi {
     }
   }
 
-  Future<Snapshot> snapshot() => _get('/v1/snapshot', Snapshot.fromJson);
+  /// Totals for a period. `period` is a quick key (this_month, last_month,
+  /// this_fy, last_fy, all) or null for the default (this financial year).
+  /// `month` (YYYY-MM) and `fy` select an explicit one.
+  Future<Snapshot> snapshot({String? period, String? month, String? fy}) {
+    final q = <String, String>{
+      if (period case final p?) 'period': p,
+      if (month case final m?) 'month': m,
+      if (fy case final f?) 'fy': f,
+    };
+    final qs = q.isEmpty
+        ? ''
+        : '?${q.entries.map((e) => '${e.key}=${Uri.encodeComponent(e.value)}').join('&')}';
+    return _get('/v1/snapshot$qs', Snapshot.fromJson);
+  }
+
+  /// Which periods this vault actually has data for.
+  Future<Periods> periods() => _get('/v1/periods', Periods.fromJson);
 
   Future<List<Txn>> transactions() => _get('/v1/transactions', (j) =>
       ((j['transactions'] ?? const []) as List)

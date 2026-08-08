@@ -23,6 +23,7 @@ import 'widgets/feed_rail.dart';
 import 'widgets/drop_target.dart';
 import 'widgets/popup_view.dart';
 import 'widgets/setup_view.dart';
+import 'widgets/period_bar.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -60,6 +61,9 @@ class _VaultHomeState extends State<VaultHome> {
   MenubarController? _menubar;
 
   Snapshot _snap = Snapshot.empty;
+  Periods _periods = Periods.empty;
+  /// Defaults to the current month — the period a user checks most often.
+  PeriodSelection _period = PeriodSelection.thisMonth;
   List<Txn> _txns = const [];
   final List<VaultEvent> _feed = [];
   EvidenceCard? _card;
@@ -109,13 +113,27 @@ class _VaultHomeState extends State<VaultHome> {
 
   Future<void> _refresh() async {
     try {
-      final results = await Future.wait([_api.snapshot(), _api.transactions()]);
+      final results = await Future.wait([
+        _api.snapshot(
+          period: _period.quick,
+          month: _period.month,
+          fy: _period.fy,
+        ),
+        _api.transactions(),
+        _api.periods(),
+      ]);
       if (!mounted) return;
       setState(() {
         _snap = results[0] as Snapshot;
         _txns = results[1] as List<Txn>;
+        _periods = results[2] as Periods;
       });
     } catch (_) {/* transient; the SSE stream will trigger another */}
+  }
+
+  void _setPeriod(PeriodSelection p) {
+    setState(() => _period = p);
+    _refresh();
   }
 
   void _listen() {
@@ -176,6 +194,9 @@ class _VaultHomeState extends State<VaultHome> {
           onDrop: _onDrop,
           child: PopupView(
             snapshot: _snap,
+            periods: _periods,
+            selection: _period,
+            onPeriodChanged: _setPeriod,
             txns: _txns,
             feed: _feed,
             connected: _connected && _daemonUp,

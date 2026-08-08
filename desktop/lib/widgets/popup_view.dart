@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../theme.dart';
+import 'period_bar.dart';
 
 /// The menubar popup: a calm 420x620 panel. Glance-value only — totals, the
 /// last few transactions, and what needs attention. Anything deeper opens the
 /// full window.
 class PopupView extends StatelessWidget {
   final Snapshot snapshot;
+  final Periods periods;
+  final PeriodSelection selection;
+  final ValueChanged<PeriodSelection> onPeriodChanged;
   final List<Txn> txns;
   final List<VaultEvent> feed;
   final bool connected;
@@ -18,6 +22,9 @@ class PopupView extends StatelessWidget {
   const PopupView({
     super.key,
     required this.snapshot,
+    required this.periods,
+    required this.selection,
+    required this.onPeriodChanged,
     required this.txns,
     required this.feed,
     required this.connected,
@@ -42,7 +49,16 @@ class PopupView extends StatelessWidget {
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         _Header(connected: connected, busy: busy, onQuit: onQuit, onSetup: onSetup),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          padding: const EdgeInsets.fromLTRB(14, 12, 14, 2),
+          child: PeriodBar(
+            periods: periods,
+            selection: selection,
+            label: snapshot.period.label,
+            onChanged: onPeriodChanged,
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
           child: _MoneyTriple(snapshot: snapshot),
         ),
         Padding(
