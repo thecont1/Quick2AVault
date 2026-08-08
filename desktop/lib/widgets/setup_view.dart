@@ -10,12 +10,12 @@ import '../theme.dart';
 /// only a "…abcd" hint so a stored secret can never be read back out.
 class SetupView extends StatefulWidget {
   final VaultApi api;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
   final VoidCallback onOpenPeople;
   const SetupView({
     super.key,
     required this.api,
-    required this.onClose,
+    this.onClose,
     required this.onOpenPeople,
   });
 
@@ -119,7 +119,9 @@ class _SetupViewState extends State<SetupView> {
                 style: TextStyle(
                     fontSize: 15, fontWeight: FontWeight.w600, color: VaultColors.primary)),
             const Spacer(),
-            _Ghost(label: 'Done', onTap: widget.onClose),
+            // Hidden as a tab — the tab bar is the way out.
+            if (widget.onClose != null)
+              _Ghost(label: 'Done', onTap: widget.onClose!),
           ]),
         ),
         Expanded(

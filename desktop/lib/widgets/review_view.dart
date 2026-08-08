@@ -19,14 +19,14 @@ import '../theme.dart';
 ///   * what has already been learned is visible, so the work feels cumulative
 class ReviewView extends StatefulWidget {
   final VaultApi api;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
   /// Called after any answer or dismissal so the caller can refresh its badge.
   final VoidCallback? onChanged;
 
   const ReviewView({
     super.key,
     required this.api,
-    required this.onClose,
+    this.onClose,
     this.onChanged,
   });
 
@@ -188,13 +188,13 @@ class _Header extends StatelessWidget {
   final int answered;
   final int pending;
   final bool enabled;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
 
   const _Header({
     required this.answered,
     required this.pending,
     required this.enabled,
-    required this.onClose,
+    this.onClose,
   });
 
   @override
@@ -227,11 +227,14 @@ class _Header extends StatelessWidget {
             style: const TextStyle(fontSize: 12, color: VaultColors.dim),
           ),
           const SizedBox(width: 12),
-          IconButton(
-            onPressed: onClose,
-            icon: const Icon(Icons.close, size: 18),
-            tooltip: 'Close',
-          ),
+          // Hidden, not disabled: as a tab there is no close action, and a
+          // greyed-out X reads as "broken" rather than "not applicable".
+          if (onClose != null)
+            IconButton(
+              onPressed: onClose,
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: 'Close',
+            ),
         ]),
       );
 }

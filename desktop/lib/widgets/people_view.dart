@@ -14,7 +14,7 @@ import '../theme.dart';
 /// with a merchant, an account or an instrument.
 class PeopleView extends StatefulWidget {
   final VaultApi api;
-  final VoidCallback onClose;
+  final VoidCallback? onClose;
   const PeopleView({super.key, required this.api, required this.onClose});
 
   @override
@@ -119,7 +119,11 @@ class _PeopleViewState extends State<PeopleView> {
                 style: TextStyle(
                     fontSize: 15, fontWeight: FontWeight.w600, color: VaultColors.primary)),
             const Spacer(),
-            _Ghost(label: 'Done', onTap: widget.onClose),
+            // Only render an exit when there is somewhere to exit TO. As a tab
+            // the view has no close action — the tab bar is the way out, and a
+            // dead "Done" button would invite a click that does nothing.
+            if (widget.onClose != null)
+              _Ghost(label: 'Done', onTap: widget.onClose!),
           ]),
         ),
         Expanded(
