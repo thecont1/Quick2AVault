@@ -18,6 +18,11 @@ class PopupView extends StatelessWidget {
   final VoidCallback onOpenFull;
   final VoidCallback onQuit;
   final VoidCallback onSetup;
+  final VoidCallback onReview;
+  final VoidCallback onRefresh;
+  final VoidCallback onToggleLearning;
+  final bool learningOn;
+  final int reviewCount;
 
   const PopupView({
     super.key,
@@ -31,6 +36,11 @@ class PopupView extends StatelessWidget {
     required this.onOpenFull,
     required this.onQuit,
     required this.onSetup,
+    required this.onReview,
+    required this.onRefresh,
+    required this.onToggleLearning,
+    this.learningOn = true,
+    this.reviewCount = 0,
   });
 
   @override
@@ -47,7 +57,17 @@ class PopupView extends StatelessWidget {
         border: Border.all(color: VaultColors.line),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _Header(connected: connected, busy: busy, onQuit: onQuit, onSetup: onSetup),
+        _Header(
+          connected: connected,
+          busy: busy,
+          learningOn: learningOn,
+          reviewCount: reviewCount,
+          onSetup: onSetup,
+          onReview: onReview,
+          onOpenFull: onOpenFull,
+          onRefresh: onRefresh,
+          onToggleLearning: onToggleLearning,
+        ),
         Padding(
           padding: const EdgeInsets.fromLTRB(14, 12, 14, 2),
           child: PeriodBar(
@@ -88,138 +108,164 @@ class PopupView extends StatelessWidget {
 class _Header extends StatelessWidget {
   final bool connected;
   final bool busy;
-  final VoidCallback onQuit;
+  final bool learningOn;
+  final int reviewCount;
   final VoidCallback onSetup;
+  final VoidCallback onReview;
+  final VoidCallback onOpenFull;
+  final VoidCallback onRefresh;
+  final VoidCallback onToggleLearning;
   const _Header({
     required this.connected,
     required this.busy,
-    required this.onQuit,
+    required this.learningOn,
+    required this.reviewCount,
     required this.onSetup,
+    required this.onReview,
+    required this.onOpenFull,
+    required this.onRefresh,
+    required this.onToggleLearning,
   });
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(14, 12, 8, 0),
+        padding: const EdgeInsets.fromLTRB(18, 14, 10, 6),
         child: Row(children: [
-          // The brand mark. Falls back to a tinted ₹ disc if the asset is
-          // missing, so the header never renders as a broken-image box.
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: Image.asset(
-              'assets/logo.png',
-              width: 26,
-              height: 26,
-              filterQuality: FilterQuality.medium,
-              errorBuilder: (_, _, _) => Container(
-                width: 26, height: 26,
-                decoration: BoxDecoration(
-                  color: VaultColors.accent.withValues(alpha: 0.18),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                alignment: Alignment.center,
-                child: const Text('₹',
-                    style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: VaultColors.accent)),
-              ),
-            ),
-          ),
-          const SizedBox(width: 9),
-          const Text('Quick2A Vault',
+          const Text('Your Money',
               style: TextStyle(
-                  fontSize: 13.5, fontWeight: FontWeight.w600, color: VaultColors.primary)),
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.5,
+                  color: VaultColors.primary)),
           const Spacer(),
-          if (busy)
-            const Padding(
-              padding: EdgeInsets.only(right: 8),
-              child: SizedBox(
-                width: 10, height: 10,
-                child: CircularProgressIndicator(
-                    strokeWidth: 1.6, color: VaultColors.accent),
-              ),
-            ),
-          Container(
-            width: 6, height: 6,
-            decoration: BoxDecoration(
-              color: connected ? VaultColors.ok : VaultColors.warn,
-              shape: BoxShape.circle,
-            ),
+          // Review queue, with a count badge when something needs attention.
+          _IconButton(
+            icon: Icons.assignment_outlined,
+            tooltip: 'Review queue',
+            onTap: onReview,
+            badge: reviewCount,
           ),
-          const SizedBox(width: 6),
-          _IconButton(icon: Icons.tune_rounded, tooltip: 'Setup', onTap: onSetup),
-          _IconButton(icon: Icons.close_rounded, tooltip: 'Quit', onTap: onQuit),
+          _IconButton(
+            icon: Icons.description_outlined,
+            tooltip: 'Documents',
+            onTap: onOpenFull,
+          ),
+          // Learning Mode — the graduation cap from the reference, tinted
+          // green while it's on.
+          _IconButton(
+            icon: Icons.school_outlined,
+            tooltip: learningOn ? 'Learning is on' : 'Learning is off',
+            onTap: onToggleLearning,
+            highlighted: learningOn,
+          ),
+          _IconButton(
+            icon: Icons.refresh_rounded,
+            tooltip: connected ? 'Live' : 'Reconnecting',
+            onTap: onRefresh,
+            spinning: busy,
+          ),
+          _IconButton(icon: Icons.settings_outlined, tooltip: 'Setup', onTap: onSetup),
         ]),
       );
 }
 
-/// Income · Expenses · Investments — the three numbers that matter, side by
-/// side. Investments are deliberately NOT folded into Expenses: buying shares
-/// is not consumption, and mixing them makes a portfolio look like spending.
+/// Income · Spending · Investments as stacked tinted cards, matching the
+/// reference design: saturated heading, document count beneath, and a large
+/// right-aligned figure.
 class _MoneyTriple extends StatelessWidget {
   final Snapshot snapshot;
   const _MoneyTriple({required this.snapshot});
 
   @override
-  Widget build(BuildContext context) => Container(
-        decoration: vaultCard(fill: VaultColors.controlSubtle40),
-        child: IntrinsicHeight(
-          child: Row(children: [
-            Expanded(
-              child: _Money(
-                label: 'INCOME',
-                minor: snapshot.incomeMinor,
-                color: VaultColors.income,
-              ),
-            ),
-            const VerticalDivider(width: 1, color: VaultColors.line),
-            Expanded(
-              child: _Money(
-                label: 'EXPENSES',
-                minor: snapshot.spendingMinor,
-                color: VaultColors.out,
-              ),
-            ),
-            const VerticalDivider(width: 1, color: VaultColors.line),
-            Expanded(
-              child: _Money(
-                label: 'INVESTED',
-                minor: snapshot.investmentsMinor,
-                color: VaultColors.transfer,
-              ),
-            ),
-          ]),
+  Widget build(BuildContext context) => Column(children: [
+        _MoneyCard(
+          label: 'Income',
+          minor: snapshot.incomeMinor,
+          fill: VaultColors.incomeFill,
+          border: VaultColors.incomeBorder,
+          ink: VaultColors.incomeInk,
+          documents: snapshot.incomeDocs,
         ),
-      );
+        const SizedBox(height: 9),
+        _MoneyCard(
+          label: 'Spending',
+          minor: snapshot.spendingMinor,
+          fill: VaultColors.spendFill,
+          border: VaultColors.spendBorder,
+          ink: VaultColors.spendInk,
+          documents: snapshot.spendingDocs,
+        ),
+        const SizedBox(height: 9),
+        _MoneyCard(
+          label: 'Investments',
+          minor: snapshot.investmentsMinor,
+          fill: VaultColors.investFill,
+          border: VaultColors.investBorder,
+          ink: VaultColors.investInk,
+          documents: snapshot.investmentDocs,
+        ),
+      ]);
 }
 
-class _Money extends StatelessWidget {
+class _MoneyCard extends StatelessWidget {
   final String label;
   final int minor;
-  final Color color;
-  const _Money({required this.label, required this.minor, required this.color});
+  final Color fill;
+  final Color border;
+  final Color ink;
+  final int documents;
+
+  const _MoneyCard({
+    required this.label,
+    required this.minor,
+    required this.fill,
+    required this.border,
+    required this.ink,
+    required this.documents,
+  });
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(11, 13, 11, 13),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 8.5,
-                  letterSpacing: 0.9,
-                  fontWeight: FontWeight.w700,
-                  color: VaultColors.tertiary)),
-          const SizedBox(height: 7),
-          // Money must never wrap mid-number; scale down instead.
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(rupees(minor),
-                maxLines: 1,
-                softWrap: false,
-                style: moneyStyle.copyWith(fontSize: 16, color: color)),
-          ),
-        ]),
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        decoration: vaultCard(fill: fill, border: border),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // Label column takes only what it needs, so the figure can hold
+            // the right edge of the card rather than floating beside the text.
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w700, color: ink)),
+                const SizedBox(height: 2),
+                Text(
+                  '$documents document${documents == 1 ? '' : 's'} processed',
+                  style: TextStyle(fontSize: 11, color: ink.withValues(alpha: 0.65)),
+                ),
+              ],
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    rupeesWhole(minor),
+                    maxLines: 1,
+                    softWrap: false,
+                    textAlign: TextAlign.right,
+                    style: moneyStyle.copyWith(fontSize: 24, color: ink),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
       );
 }
 
@@ -371,7 +417,17 @@ class _IconButton extends StatelessWidget {
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
-  const _IconButton({required this.icon, required this.tooltip, required this.onTap});
+  final int badge;
+  final bool highlighted;
+  final bool spinning;
+  const _IconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+    this.badge = 0,
+    this.highlighted = false,
+    this.spinning = false,
+  });
 
   @override
   Widget build(BuildContext context) => Tooltip(
@@ -380,10 +436,45 @@ class _IconButton extends StatelessWidget {
           cursor: SystemMouseCursors.click,
           child: GestureDetector(
             onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.all(6),
-              child: Icon(icon, size: 15, color: VaultColors.tertiary),
-            ),
+            child: Stack(clipBehavior: Clip.none, children: [
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                padding: const EdgeInsets.all(7),
+                decoration: highlighted
+                    ? BoxDecoration(
+                        color: VaultColors.learning.withValues(alpha: 0.18),
+                        shape: BoxShape.circle)
+                    : null,
+                child: spinning
+                    ? const SizedBox(
+                        width: 17, height: 17,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 1.8, color: VaultColors.accent))
+                    : Icon(icon,
+                        size: 17,
+                        color: highlighted
+                            ? VaultColors.learning
+                            : VaultColors.secondary),
+              ),
+              if (badge > 0)
+                Positioned(
+                  right: 0, top: -2,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    constraints: const BoxConstraints(minWidth: 15),
+                    decoration: BoxDecoration(
+                      color: VaultColors.primary,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text('\$badge',
+                        style: const TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white)),
+                  ),
+                ),
+            ]),
           ),
         ),
       );

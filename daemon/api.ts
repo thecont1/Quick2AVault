@@ -14,6 +14,13 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Ports } from "./ports.js";
 import { ingestFile } from "./pipeline.js";
 import { listPacks, loadPack, fyKeyFor, fyRange, type JurisdictionPack } from "./jurisdiction.js";
+import {
+  isLearningEnabled,
+  questionBudget,
+  answer as answerQuestion,
+  dismiss as dismissQuestion,
+  findNearDuplicates,
+} from "./learning.js";
 
 export interface ApiOptions {
   port: number;
@@ -374,6 +381,129 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           db.prepare("UPDATE entities SET is_member=1, status='confirmed' WHERE id=?").run(id);
         }
         return send(res, 200, { id, display_name: name, declared: !existing });
+      }
+
+      // Merge two people into one, keeping every spelling as an alias.
+      // The automatic rules catch word-order and identifier matches; this is
+      // for the rest ("M. Shantaram", a maiden name, an initials-only form).
+      if (p === "/v1/people/merge" && req.method === "POST") {
+        const b = await readJson(req);
+        if (!b.from_id || !b.into_id) return send(res, 400, { error: "from_id and into_id required" });
+        if (b.from_id === b.into_id) return send(res, 400, { error: "cannot merge a person into themselves" });
+
+        const from = db.prepare("SELECT id, kind, display_name FROM entities WHERE id=?").get(b.from_id) as
+          | { id: string; kind: string; display_name: string } | undefined;
+        const into = db.prepare("SELECT id, kind, display_name FROM entities WHERE id=?").get(b.into_id) as
+          | { id: string; kind: string; display_name: string } | undefined;
+        if (!from || !into) return send(res, 404, { error: "person not found" });
+        // The anti-pollution invariant holds here too.
+        if (from.kind !== "person" || into.kind !== "person") {
+          return send(res, 409, { error: "both entities must be people" });
+        }
+
+        const now = ports.clock.isoNow();
+        db.exec("BEGIN");
+        try {
+          db.prepare("UPDATE OR IGNORE document_parties SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
+          db.prepare("UPDATE OR IGNORE entity_aliases SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
+          // The absorbed spelling becomes an alias, so the same variant on a
+          // future document resolves without asking again.
+          db.prepare(
+            `INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, source, created_at)
+             VALUES (?, 'person', ?, ?, 'user-merge', ?)`,
+          ).run(into.id, from.display_name, from.display_name.toLowerCase(), now);
+          // Merging into a non-member keeps membership if either side had it.
+          db.prepare(
+            "UPDATE entities SET is_member = MAX(is_member, (SELECT is_member FROM entities WHERE id=?)) WHERE id=?",
+          ).run(from.id, into.id);
+          db.prepare("DELETE FROM entities WHERE id=?").run(from.id);
+          db.exec("COMMIT");
+        } catch (e) {
+          db.exec("ROLLBACK");
+          throw e;
+        }
+        ports.logger.info("people merged", { from: from.display_name, into: into.display_name });
+        return send(res, 200, { merged: true, into: into.display_name });
+      }
+
+      // Every spelling the vault knows for one person.
+      if (p.startsWith("/v1/people/") && p.endsWith("/aliases") && req.method === "GET") {
+        const id = p.split("/")[3];
+        return send(res, 200, {
+          aliases: db
+            .prepare("SELECT alias, source, created_at FROM entity_aliases WHERE entity_id=? ORDER BY id")
+            .all(id),
+        });
+      }
+
+      // ── learning (plan §5) ───────────────────────────────────────────────
+      // Questions the vault wants answered, and the rules those answers made.
+      if (p === "/v1/learning" && req.method === "GET") {
+        const open = db
+          .prepare(
+            `SELECT id, question, trigger, context, options, created_at
+             FROM training_reviews
+             WHERE answered_at IS NULL AND dismissed=0
+             ORDER BY id DESC LIMIT 20`,
+          )
+          .all() as Record<string, unknown>[];
+        for (const q of open) {
+          q.context = q.context ? safeParse(q.context as string) : null;
+          q.options = q.options ? safeParse(q.options as string) : null;
+        }
+        const rules = db
+          .prepare(
+            `SELECT id, kind, match_key, match_kind, value, times_applied, created_at
+             FROM learned_rules WHERE active=1
+             ORDER BY times_applied DESC, id DESC LIMIT 50`,
+          )
+          .all();
+        return send(res, 200, {
+          enabled: isLearningEnabled(db),
+          budget: questionBudget(db),
+          questions: open,
+          rules,
+          answered: (
+            db.prepare("SELECT COUNT(*) n FROM training_reviews WHERE answered_at IS NOT NULL")
+              .get() as { n: number }
+          ).n,
+        });
+      }
+
+      // Answer a question; the answer becomes a rule.
+      if (p === "/v1/learning/answer" && req.method === "POST") {
+        const b = await readJson(req);
+        const id = Number(b.review_id);
+        if (!id) return send(res, 400, { error: "review_id required" });
+        const r = answerQuestion(db, ports, id, String(b.answer ?? ""), b.rule_kind
+          ? {
+              kind: b.rule_kind as never,
+              match_key: String(b.match_key ?? ""),
+              match_kind: b.match_kind as string | undefined,
+              value: String(b.value ?? b.answer ?? ""),
+            }
+          : undefined);
+        return send(res, 200, { answered: true, ...r });
+      }
+
+      if (p === "/v1/learning/dismiss" && req.method === "POST") {
+        const b = await readJson(req);
+        dismissQuestion(db, Number(b.review_id));
+        return send(res, 200, { dismissed: true });
+      }
+
+      // Master switch (plan §5: ON at install, never silently re-enables).
+      if (p === "/v1/learning/toggle" && req.method === "POST") {
+        const b = await readJson(req);
+        db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES('learning.enabled',?)")
+          .run(String(b.enabled) === "false" ? "false" : "true");
+        return send(res, 200, { enabled: String(b.enabled) !== "false" });
+      }
+
+      // Near-duplicate entities within one kind — proposals, never automatic.
+      if (p === "/v1/learning/duplicates") {
+        const kind = url.searchParams.get("kind") ?? "organisation";
+        return send(res, 200, { kind, candidates: findNearDuplicates(db, kind) });
       }
 
       // ── queries ──────────────────────────────────────────────────────────
@@ -759,6 +889,21 @@ export function snapshot(
   const invested = sum("out", true);
   const divested = sum("in", true);
 
+  // Documents backing each bucket — the reference design shows "N documents
+  // processed" under every figure, which is also the honest answer to
+  // "where did this number come from?"
+  const docsFor = (dir: string, invest: boolean) =>
+    (
+      db
+        .prepare(
+          `SELECT COUNT(DISTINCT td.document_id) n
+           FROM transactions t JOIN transaction_documents td ON td.transaction_id = t.id
+           WHERE t.direction=? AND t.status <> 'scheduled'
+             AND ${invest ? INVEST : `NOT ${INVEST}`} ${where.replace(/occurred_at/g, "t.occurred_at")}`,
+        )
+        .get(dir, ...args) as { n: number }
+    ).n;
+
   return {
     period: { key: period.key, label: period.label, from: period.from, to: period.to },
     fy_key: period.key,
@@ -769,6 +914,9 @@ export function snapshot(
     investments_out_minor: invested,
     investments_in_minor: divested,
     investments_net_minor: invested - divested,
+    income_documents: docsFor("in", false),
+    spending_documents: docsFor("out", false),
+    investment_documents: docsFor("out", true),
     currency: "INR",
     counts: {
       documents: countIn("SELECT COUNT(*) n FROM documents"),

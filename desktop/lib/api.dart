@@ -103,6 +103,9 @@ class Snapshot {
   final int transfersMinor;
   final int investmentsMinor;
   final int investmentsInMinor;
+  final int incomeDocs;
+  final int spendingDocs;
+  final int investmentDocs;
   final int documents;
   final int transactions;
   final int entities;
@@ -115,6 +118,9 @@ class Snapshot {
     required this.transfersMinor,
     this.investmentsMinor = 0,
     this.investmentsInMinor = 0,
+    this.incomeDocs = 0,
+    this.spendingDocs = 0,
+    this.investmentDocs = 0,
     required this.documents,
     required this.transactions,
     required this.entities,
@@ -135,6 +141,9 @@ class Snapshot {
       transfersMinor: (j['transfers_minor'] ?? 0) as int,
       investmentsMinor: (j['investments_minor'] ?? 0) as int,
       investmentsInMinor: (j['investments_in_minor'] ?? 0) as int,
+      incomeDocs: (j['income_documents'] ?? 0) as int,
+      spendingDocs: (j['spending_documents'] ?? 0) as int,
+      investmentDocs: (j['investment_documents'] ?? 0) as int,
       documents: (c['documents'] ?? 0) as int,
       transactions: (c['transactions'] ?? 0) as int,
       entities: (c['entities'] ?? 0) as int,
@@ -388,6 +397,24 @@ class VaultApi {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Learning state: open questions and whether the engine is on.
+  Future<({bool enabled, int budget, List<Map<String, dynamic>> questions})> learning() async {
+    final j = await _get('/v1/learning', (x) => x);
+    return (
+      enabled: j['enabled'] == true,
+      budget: (j['budget'] ?? 0) as int,
+      questions: ((j['questions'] ?? const []) as List).cast<Map<String, dynamic>>(),
+    );
+  }
+
+  Future<void> toggleLearning(bool enabled) async {
+    await _client.post(
+      Uri.parse('$baseUrl/v1/learning/toggle'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({'enabled': enabled}),
+    );
+  }
+
   /// Setup page: AI provider config, vault paths, active jurisdiction.
   Future<Map<String, dynamic>> settings() =>
       _get('/v1/settings', (j) => j);
@@ -455,6 +482,14 @@ class VaultApi {
       client.close(force: true);
     }
   }
+}
+
+/// ₹1,23,456 — whole rupees, no paise. The reference design shows figures at
+/// a glance; two decimal places are noise at that size.
+String rupeesWhole(int minor) {
+  final full = rupees(minor);
+  final dot = full.lastIndexOf('.');
+  return dot > 0 ? full.substring(0, dot) : full;
 }
 
 /// ₹1,23,456.78 — Indian lakh/crore grouping, not thousands.

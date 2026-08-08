@@ -12,6 +12,7 @@ import type { AiProvider } from "./ai-provider.js";
 import { EXTRACTION_VERSION } from "./extraction-contract.js";
 import { recordTransaction } from "./ledger.js";
 import { findMatches, linkEvidence, AUTO_LINK, REVIEW_FLOOR } from "./matcher.js";
+import { ask } from "./learning.js";
 
 export interface IntakeResult {
   status: "added" | "duplicate" | "failed";
@@ -413,6 +414,32 @@ export async function runAnalyseJob(
       amount: (rec.amount_minor / 100).toFixed(2),
       new_entities: rec.created_entities,
     });
+
+    // ── curiosity engine (plan §5) ────────────────────────────────────────
+    // Ask ONLY on novelty, and only within budget. Every question here would
+    // otherwise be a silent guess the user never gets to correct.
+    if (rec.created_entities > 0 && x.counterparty_descriptor) {
+      const cp = x.parties.find((pp) => pp.role === "counterparty" && pp.kind === "organisation");
+      if (cp) {
+        ask(db, ports, {
+          trigger: "unseen_entity",
+          question: `Is "${x.counterparty_descriptor}" the same as ${cp.name}?`,
+          context: { document_id: documentId, entity_name: cp.name, descriptor: x.counterparty_descriptor },
+          options: ["Yes, always", "No, keep separate"],
+        });
+      }
+    }
+
+    // A wallet-shaped payment that we did NOT book as a transfer is exactly
+    // the ambiguity §3.1 warns about — worth one question, once.
+    if (!rec.direction.startsWith("transfer") && x.is_wallet_topup) {
+      ask(db, ports, {
+        trigger: "load_vs_spend",
+        question: `Was this ${x.counterparty_descriptor ?? "payment"} a wallet top-up rather than a purchase?`,
+        context: { document_id: documentId, transaction_id: rec.transaction_id },
+        options: ["Top-up (transfer)", "Purchase (spending)"],
+      });
+    }
   }
 }
 

@@ -191,6 +191,43 @@ CREATE TABLE IF NOT EXISTS app_settings (
   key   TEXT PRIMARY KEY,
   value TEXT
 );
+
+-- ── Learning (plan §5) ─────────────────────────────────────────────────────
+-- Rules the user taught the vault by answering a question or correcting a
+-- guess. They are applied BEFORE the AI's own answer (field_claims precedence
+-- is user > rule > ai), so a lesson learned once is never re-asked.
+CREATE TABLE IF NOT EXISTS learned_rules (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind         TEXT NOT NULL,      -- descriptor_to_entity | vendor_to_account
+                                   -- | doctype_to_category | load_vs_spend
+  match_key    TEXT NOT NULL,      -- normalised trigger (e.g. a descriptor)
+  match_kind   TEXT,               -- entity kind the rule resolves within
+  value        TEXT NOT NULL,      -- what to apply
+  source       TEXT NOT NULL DEFAULT 'user',
+  confidence   REAL NOT NULL DEFAULT 1.0,
+  times_applied INTEGER NOT NULL DEFAULT 0,
+  active       INTEGER NOT NULL DEFAULT 1,
+  created_at   TEXT NOT NULL,
+  last_applied_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rules_key ON learned_rules(kind, match_key, COALESCE(match_kind,''));
+
+-- Questions the curiosity engine asked, and what the user said. Ignored
+-- questions back off; answered ones raise the budget slightly.
+CREATE TABLE IF NOT EXISTS training_reviews (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  question    TEXT NOT NULL,
+  context     TEXT,               -- JSON: document_id, entity_id, candidates
+  trigger     TEXT NOT NULL,      -- unseen_entity | load_vs_spend | ...
+  options     TEXT,               -- JSON array of offered answers
+  answer      TEXT,
+  answered_at TEXT,
+  dismissed   INTEGER NOT NULL DEFAULT 0,
+  rule_id     INTEGER REFERENCES learned_rules(id),
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_training_open
+  ON training_reviews(answered_at, dismissed);
 `;
 
 export function openDatabase(dbPath: string): DatabaseSync {

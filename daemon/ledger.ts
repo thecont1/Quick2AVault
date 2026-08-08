@@ -106,6 +106,54 @@ export function resolveEntity(
     }
   }
 
+  // 4. PERSON-ONLY name-order and identifier matching.
+  //    One human is written many ways across documents: "Mahesh Shantaram",
+  //    "SHANTARAM MAHESH" (surname-first, common on Indian statements), and
+  //    an email address on a receipt. Kind-scoped exact matching sees three
+  //    people. Sorting the name tokens makes word ORDER irrelevant, which is
+  //    the single most common real-world variant.
+  //
+  //    Restricted to kind='person': for organisations, token-sorting would
+  //    merge "Alpha Beta Foods" with "Beta Alpha Foods", which may be two
+  //    genuinely different companies.
+  if (kind === "person") {
+    const tokens = (s: string) =>
+      normaliseName(s).split(" ").filter((t) => t.length > 1).sort().join(" ");
+    const myTokens = tokens(name);
+    // An email or phone identifier is decisive on its own.
+    const myIds = Object.values(opts.identifiers ?? {}).map((v) => String(v).toLowerCase());
+
+    if (myTokens.length >= 4 || myIds.length) {
+      for (const e of sameKind) {
+        if (myTokens.length >= 4 && tokens(e.display_name) === myTokens) {
+          db.prepare(
+            "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, source, created_at) VALUES (?,?,?,?,?,?)",
+          ).run(e.id, kind, name, norm, "auto-person-tokens", ports.clock.isoNow());
+          ports.logger.info("person alias merged", { alias: name, into: e.display_name });
+          return e.id;
+        }
+        if (myIds.length) {
+          const row = db
+            .prepare("SELECT identifiers_json FROM entities WHERE id=?")
+            .get(e.id) as { identifiers_json?: string } | undefined;
+          if (row?.identifiers_json) {
+            try {
+              const theirs = Object.values(JSON.parse(row.identifiers_json) as Record<string, string>)
+                .map((v) => String(v).toLowerCase());
+              if (theirs.some((t) => myIds.includes(t))) {
+                db.prepare(
+                  "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, source, created_at) VALUES (?,?,?,?,?,?)",
+                ).run(e.id, kind, name, norm, "auto-person-identifier", ports.clock.isoNow());
+                ports.logger.info("person matched on identifier", { alias: name, into: e.display_name });
+                return e.id;
+              }
+            } catch {/* malformed identifiers, ignore */}
+          }
+        }
+      }
+    }
+  }
+
   // 5. create
   const id = newId("ent");
   db.prepare(

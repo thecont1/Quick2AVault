@@ -76,6 +76,8 @@ class _VaultHomeState extends State<VaultHome> {
   /// Setup pane overrides whichever surface is showing.
   bool _setup = false;
   bool _people = false;
+  bool _learningOn = true;
+  int _reviewCount = 0;
 
   @override
   void initState() {
@@ -130,7 +132,24 @@ class _VaultHomeState extends State<VaultHome> {
         _txns = results[1] as List<Txn>;
         _periods = results[2] as Periods;
       });
+      final l = await _api.learning();
+      if (mounted) {
+        setState(() {
+          _learningOn = l.enabled;
+          _reviewCount = l.questions.length;
+        });
+      }
     } catch (_) {/* transient; the SSE stream will trigger another */}
+  }
+
+  Future<void> _toggleLearning() async {
+    final next = !_learningOn;
+    setState(() => _learningOn = next);
+    try {
+      await _api.toggleLearning(next);
+    } catch (_) {
+      if (mounted) setState(() => _learningOn = !next);
+    }
   }
 
   void _setPeriod(PeriodSelection p) {
@@ -216,6 +235,11 @@ class _VaultHomeState extends State<VaultHome> {
             onOpenFull: () => _menubar?.openFullWindow(),
             onQuit: () => exit(0),
             onSetup: () => setState(() => _setup = true),
+            onReview: () => setState(() => _setup = true),
+            onRefresh: _refresh,
+            onToggleLearning: _toggleLearning,
+            learningOn: _learningOn,
+            reviewCount: _reviewCount,
           ),
         ),
       );
