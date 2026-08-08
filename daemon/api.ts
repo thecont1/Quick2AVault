@@ -8,12 +8,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
 import { ingestFile } from "./pipeline.js";
 import { listPacks, loadPack, fyKeyFor, fyRange, type JurisdictionPack } from "./jurisdiction.js";
+import { buildTreemap } from "./categories/spend-categories.js";
 import { deriveGmailAddress } from "./gmail/gmail-model.js";
 import type { GmailOAuth } from "./gmail/oauth.js";
 import {
@@ -32,6 +33,8 @@ export interface ApiOptions {
   /** Surfaced read-only on the Setup page so the user can see what's active. */
   ai?: { available: boolean; model: string };
   dropDir?: string;
+  /** Serve the browser dev UI at `/`. Off unless Q2AV_DEV_UI=1. */
+  devUi?: boolean;
   /** Gmail dropbox, present only when Google OAuth credentials are set. */
   gmail?: { oauth: GmailOAuth; sync: () => Promise<unknown> };
 }
@@ -63,13 +66,55 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
     res.end(b);
   };
 
+  // ── UI session tokens ──────────────────────────────────────────────────────
+  // The demo UI used to receive `opts.token` inlined into its HTML, from an
+  // UNAUTHENTICATED route. Any local process could `curl 127.0.0.1:<port>/`
+  // and read the bearer token that guards every other endpoint, so the auth
+  // on those endpoints was decorative.
+  //
+  // Instead the page gets a short-lived, single-purpose session token. It
+  // grants the same API access (the UI needs it) but expires, so a leaked
+  // page source stops being useful quickly and never reveals the long-lived
+  // token that the Flutter app and scripts use.
+  const UI_SESSION_TTL_MS = 15 * 60 * 1000;
+  const uiSessions = new Map<string, number>();
+
+  const mintUiSession = (): string => {
+    const now = Date.now();
+    for (const [t, exp] of uiSessions) if (exp <= now) uiSessions.delete(t);
+    const token = randomBytes(32).toString("base64url");
+    uiSessions.set(token, now + UI_SESSION_TTL_MS);
+    return token;
+  };
+
+  const uiSessionValid = (token: string): boolean => {
+    const exp = uiSessions.get(token);
+    if (exp === undefined) return false;
+    if (exp <= Date.now()) {
+      uiSessions.delete(token);
+      return false;
+    }
+    return true;
+  };
+
+  /** Constant-time compare so the token cannot be recovered byte by byte. */
+  const tokenMatches = (given: string): boolean => {
+    const a = Buffer.from(given);
+    const b = Buffer.from(opts.token);
+    return a.length === b.length && timingSafeEqual(a, b);
+  };
+
   const authed = (req: IncomingMessage, url?: URL) => {
     const h = req.headers.authorization ?? "";
-    if (h.startsWith("Bearer ") && h.slice(7) === opts.token) return true;
+    if (h.startsWith("Bearer ")) {
+      const given = h.slice(7);
+      if (tokenMatches(given) || uiSessionValid(given)) return true;
+    }
     // EventSource cannot set headers, so the SSE stream also accepts the token
     // as a query parameter. Localhost-only daemon; the token never leaves the
     // machine, and this is the standard workaround for browser SSE clients.
-    return !!url && url.searchParams.get("token") === opts.token;
+    const q = url?.searchParams.get("token");
+    return !!q && (tokenMatches(q) || uiSessionValid(q));
   };
 
   const server = createServer(async (req, res) => {
@@ -78,8 +123,14 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
     const pack = activePack();
 
     try {
-      // ── the demo UI (unauthenticated shell; it fetches with the token) ───
+      // ── the demo UI ──────────────────────────────────────────────────────
+      // OFF by default. It is a development convenience, not a product
+      // surface — the Flutter app is the real UI — and serving it means
+      // handing a browser API access. Enable with Q2AV_DEV_UI=1.
       if (p === "/" || p === "/index.html") {
+        if (!opts.devUi) {
+          return send(res, 404, { error: "not_found", hint: "set Q2AV_DEV_UI=1 to enable the dev UI" });
+        }
         const file = path.join(import.meta.dirname ?? __dirname, "ui.html");
         let html: string;
         try {
@@ -87,11 +138,17 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         } catch {
           return send(res, 404, { error: "ui.html not found", expected: file });
         }
-        // Inject the live token so the page can call the API without a login.
-        html = html.replace("%%TOKEN%%", opts.token);
+        // A SHORT-LIVED session token, never the long-lived API token. The
+        // page is still readable by any local process, but what it leaks now
+        // expires in 15 minutes and cannot be used to impersonate the app
+        // afterwards.
+        html = html.replace("%%TOKEN%%", mintUiSession());
         res.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
+          // The page holds a credential: keep it out of caches and referrers.
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
         });
         return res.end(html);
       }
@@ -568,6 +625,52 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
       // ── queries ──────────────────────────────────────────────────────────
       switch (p) {
+        case "/v1/treemap": {
+          // Spending by category for the period, folded onto the user's
+          // taxonomy. Transfers and investments are excluded: moving money
+          // between your own accounts is not spending, and buying shares is
+          // not consumption. status='scheduled' is excluded too — recurring
+          // entries are not reconciled against actuals yet, so counting them
+          // would double-count real documents.
+          const period = resolvePeriod(pack, url.searchParams);
+          const clauses = [
+            "direction = 'out'",
+            "impact_bucket NOT IN ('transfer','investment')",
+            "status != 'scheduled'",
+          ];
+          const args: string[] = [];
+          if (period.from && period.to) {
+            clauses.push("occurred_at >= ? AND occurred_at <= ?");
+            args.push(period.from, period.to);
+          }
+          const rows = db
+            .prepare(
+              `SELECT impact_bucket,
+                      SUM(amount_minor) AS amount_minor,
+                      COUNT(*)          AS transactions
+                 FROM transactions
+                WHERE ${clauses.join(" AND ")}
+                GROUP BY impact_bucket`,
+            )
+            .all(...args) as Array<{
+            impact_bucket: string | null;
+            amount_minor: number;
+            transactions: number;
+          }>;
+
+          const nodes = buildTreemap(rows);
+          const total = nodes.reduce((s, n) => s + n.amount_minor, 0);
+          return send(res, 200, {
+            period,
+            nodes,
+            total_minor: total,
+            currency: "INR",
+            // Raw bucket count vs node count shows how much folding happened —
+            // useful for spotting a taxonomy that has drifted from the data.
+            raw_buckets: rows.length,
+          });
+        }
+
         case "/v1/portfolio": {
           // Net position per security, derived from holdings line items —
           // never from the transaction's net rupee figure, which says what

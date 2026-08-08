@@ -158,6 +158,9 @@ async function main() {
     ai: { available: ai.available, model: ai.model },
     dropDir,
     gmail,
+    // Browser dev UI is opt-in: it hands API access to any local process that
+    // can read the page.
+    devUi: process.env.Q2AV_DEV_UI === "1",
   });
   await api.listen();
   ports.logger.info(`Core API listening`, { url: `http://127.0.0.1:${PORT}` });
