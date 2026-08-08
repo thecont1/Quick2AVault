@@ -14,6 +14,7 @@ import { createPorts } from "./adapters.js";
 import { openDatabase } from "./schema.js";
 import { JobWorker, ingestFile } from "./pipeline.js";
 import { createApi } from "./api.js";
+import { createAnthropicProvider } from "./ai-provider.js";
 
 const VERSION = "2.0.0-daemon";
 
@@ -28,7 +29,13 @@ async function main() {
 
   ports.logger.info("Quick2AVault daemon", { version: VERSION, vault: ports.paths.vaultRoot() });
 
-  const worker = new JobWorker(db, ports);
+  const ai = createAnthropicProvider(
+    { apiKey: process.env.ANTHROPIC_API_KEY, baseUrl: process.env.Q2AV_AI_BASE_URL, model: process.env.Q2AV_MODEL },
+    ports.logger,
+  );
+  ports.logger.info("ai provider", { available: ai.available, model: ai.model });
+
+  const worker = new JobWorker(db, ports, ai);
   worker.start();
 
   const api = createApi(db, ports, { port: PORT, token: TOKEN, version: VERSION });

@@ -75,9 +75,10 @@ export function createAnydocConverter(logger: Logger): Converter {
           return e === ".eml" ? emlToMarkdown(raw) : raw.trim();
         }
         if (IMAGE_EXT.has(e)) {
-          // No OCR in this build — image intake still produces a document row
-          // with empty markdown so it appears in the feed and can be reviewed.
-          return "";
+          // macOS Vision OCR: native, no dependency, no network. Receipts and
+          // wallet screenshots are image-only, so without this they enter the
+          // vault as empty documents and can never become transactions.
+          return await ocrImage(filePath, logger);
         }
         const fmt = EXT_TO_FORMAT[e];
         if (!fmt) {
@@ -93,6 +94,41 @@ export function createAnydocConverter(logger: Logger): Converter {
       }
     },
   };
+}
+
+/**
+ * OCR an image via the macOS Vision framework (daemon/ocr.swift).
+ * Native, offline, no npm dependency. Returns "" on any failure so image
+ * intake never wedges the pipeline.
+ *
+ * Note: Vision renders the ₹ glyph unreliably (often "7" or "?"), but the
+ * digits survive, which is what extraction needs.
+ */
+async function ocrImage(filePath: string, logger: Logger): Promise<string> {
+  if (process.platform !== "darwin") {
+    logger.warn("ocr: non-macOS platform, skipping", { filePath });
+    return "";
+  }
+  const script = path.join(import.meta.dirname ?? __dirname, "ocr.swift");
+  if (!fs.existsSync(script)) {
+    logger.warn("ocr: ocr.swift not found", { script });
+    return "";
+  }
+  try {
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const run = promisify(execFile);
+    const { stdout } = await run("swift", [script, filePath], {
+      timeout: 60000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    const text = stdout.trim();
+    logger.info("ocr complete", { filePath: path.basename(filePath), chars: text.length });
+    return text;
+  } catch (err) {
+    logger.error("ocr failed", { filePath, err: (err as Error)?.message });
+    return "";
+  }
 }
 
 /**

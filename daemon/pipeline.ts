@@ -8,6 +8,10 @@ import * as path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
+import type { AiProvider } from "./ai-provider.js";
+import { EXTRACTION_VERSION } from "./extraction-contract.js";
+import { recordTransaction } from "./ledger.js";
+import { findMatches, linkEvidence, AUTO_LINK, REVIEW_FLOOR } from "./matcher.js";
 
 export interface IntakeResult {
   status: "added" | "duplicate" | "failed";
@@ -152,6 +156,106 @@ export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: numbe
 }
 
 /**
+ * P2 — analysis. Claude reads canonical markdown v1 and returns extraction
+ * JSON. Then: match against existing transactions (many documents, one rupee)
+ * or record a new one.
+ *
+ * AI never rewrites the markdown. Its only product is the JSON stored on
+ * documents.extraction_json.
+ */
+export async function runAnalyseJob(
+  db: DatabaseSync,
+  ports: Ports,
+  ai: AiProvider,
+  documentId: string,
+): Promise<void> {
+  const doc = db
+    .prepare("SELECT id, original_filename, markdown_path, markdown_chars FROM documents WHERE id=?")
+    .get(documentId) as
+    | { id: string; original_filename: string; markdown_path: string | null; markdown_chars: number | null }
+    | undefined;
+  if (!doc) throw new Error(`document ${documentId} not found`);
+
+  if (!ai.available) {
+    ports.logger.info("analyse: no AI provider, skipping", { document_id: documentId });
+    return;
+  }
+  if (!doc.markdown_path || !doc.markdown_chars) {
+    ports.logger.warn("analyse: no markdown to analyse", { document_id: documentId });
+    return;
+  }
+
+  const markdown = await fs.readFile(doc.markdown_path, "utf-8");
+  const x = await ai.extract(markdown, doc.original_filename);
+  const now = ports.clock.isoNow();
+
+  if (!x) {
+    // Extraction failure must not corrupt the ledger — the document stays in
+    // the vault, unanalysed, and can be retried or reviewed.
+    db.prepare("UPDATE documents SET analysed_at=? WHERE id=?").run(now, documentId);
+    ports.logger.warn("analyse: extraction returned nothing", { document_id: documentId });
+    return;
+  }
+
+  db.prepare("UPDATE documents SET extraction_json=?, extraction_version=?, doc_type=?, analysed_at=? WHERE id=?")
+    .run(JSON.stringify(x), EXTRACTION_VERSION, x.doc_type, now, documentId);
+
+  ports.bus.publish({
+    type: "AnalysisComplete",
+    document_id: documentId,
+    extraction_version: EXTRACTION_VERSION,
+    at: now,
+  });
+
+  if (x.doc_type === "irrelevant" || x.amount_minor === null) {
+    ports.logger.info("analyse: no money movement", { document_id: documentId, doc_type: x.doc_type });
+    return;
+  }
+
+  // ── the money shot: match before recording ──────────────────────────────
+  const candidates = findMatches(db, x, documentId);
+  const best = candidates[0];
+
+  if (best && best.score >= AUTO_LINK) {
+    linkEvidence(db, ports, best.transaction_id, documentId, x, best.score);
+    ports.logger.info("AUTO-LINKED — two documents, one rupee", {
+      document_id: documentId,
+      transaction_id: best.transaction_id,
+      score: best.score.toFixed(2),
+      reasons: best.reasons.join("; "),
+    });
+    return;
+  }
+
+  if (best && best.score >= REVIEW_FLOOR) {
+    // Ambiguous: record separately but surface the proposal rather than
+    // silently guessing. Under-linking is recoverable; over-linking hides money.
+    ports.bus.publish({
+      type: "MatchProposed",
+      transaction_id: best.transaction_id,
+      document_id: documentId,
+      score: best.score,
+      at: now,
+    });
+    ports.logger.info("match proposed for review", {
+      document_id: documentId,
+      score: best.score.toFixed(2),
+      reasons: best.reasons.join("; "),
+    });
+  }
+
+  const rec = recordTransaction(db, ports, documentId, x);
+  if (rec) {
+    ports.logger.info("transaction recorded", {
+      transaction_id: rec.transaction_id,
+      direction: rec.direction,
+      amount: (rec.amount_minor / 100).toFixed(2),
+      new_entities: rec.created_entities,
+    });
+  }
+}
+
+/**
  * Worker loop over the durable `jobs` table. Crash-safe: a job left in
  * 'running' by a killed process is reclaimed on next launch.
  */
@@ -162,6 +266,7 @@ export class JobWorker {
   constructor(
     private db: DatabaseSync,
     private ports: Ports,
+    private ai: AiProvider,
     private intervalMs = 400,
   ) {}
 
@@ -204,9 +309,7 @@ export class JobWorker {
         if (job.phase === "convert") {
           await runConvertJob(this.db, this.ports, job.id, job.document_id);
         } else if (job.phase === "analyse") {
-          // P2 lands next; without a provider we complete with a note rather
-          // than failing, so the queue keeps draining.
-          this.ports.logger.info("analyse: no AI provider configured, skipping", { document_id: job.document_id });
+          await runAnalyseJob(this.db, this.ports, this.ai, job.document_id);
         }
         const fin = this.ports.clock.isoNow();
         this.db.prepare("UPDATE jobs SET state='done', finished_at=? WHERE id=?").run(fin, job.id);
