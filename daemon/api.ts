@@ -12,6 +12,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
 import { ingestFile } from "./pipeline.js";
+import { listPacks, loadPack, fyKeyFor, fyRange, type JurisdictionPack } from "./jurisdiction.js";
 
 export interface ApiOptions {
   port: number;
@@ -27,6 +28,21 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   const startedAt = Date.now();
   const ai = opts.ai ?? { available: false, model: "(none)" };
   const dropDir = opts.dropDir ?? "";
+
+  /**
+   * Active jurisdiction pack. Re-read per request so switching packs from the
+   * Setup page takes effect without a restart; loadPack is a small JSON read.
+   */
+  const activePack = (): JurisdictionPack => {
+    const row = db
+      .prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'")
+      .get() as { value?: string } | undefined;
+    try {
+      return loadPack(row?.value || "IN");
+    } catch {
+      return loadPack("IN");
+    }
+  };
 
   const send = (res: ServerResponse, code: number, body: unknown) => {
     const b = JSON.stringify(body);
@@ -46,6 +62,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const p = url.pathname;
+    const pack = activePack();
 
     try {
       // ── the demo UI (unauthenticated shell; it fetches with the token) ───
@@ -247,13 +264,17 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             db: ports.paths.dbPath(),
           },
           jurisdiction: {
-            id: kv["jurisdiction.id"] ?? "IN",
-            name: "India",
-            currency: "INR",
-            fy_start_month: 4,
-            fy_label: "1 Apr – 31 Mar",
-            grouping: "lakh/crore",
-            date_format: "DD-MM-YYYY",
+            id: pack.id,
+            name: pack.name,
+            version: pack.version,
+            currency: pack.currency.code,
+            symbol: pack.currency.symbol,
+            minor_units: pack.currency.minor_units,
+            fy_start_month: pack.financial_year.start_month,
+            fy_label: pack.financial_year.description,
+            grouping: pack.currency.grouping,
+            date_format: pack.dates.input_format,
+            available: listPacks(),
           },
         });
       }
@@ -266,6 +287,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           ["base_url", "ai.base_url"],
           ["model", "ai.model"],
           ["api_key", "ai.api_key"],
+          ["jurisdiction", "jurisdiction.id"],
         ] as const) {
           const v = b[field];
           if (typeof v === "string" && v.length > 0) {
@@ -284,7 +306,38 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       // ── queries ──────────────────────────────────────────────────────────
       switch (p) {
         case "/v1/snapshot":
-          return send(res, 200, snapshot(db, url.searchParams.get("fy")));
+          return send(res, 200, snapshot(db, resolvePeriod(pack, url.searchParams)));
+
+        case "/v1/periods": {
+          // What the UI's period selector offers. Months come from the data,
+          // so a vault with no July documents doesn't offer an empty July.
+          const months = db
+            .prepare(
+              `SELECT DISTINCT substr(occurred_at,1,7) m FROM transactions
+               WHERE status <> 'scheduled' ORDER BY m DESC LIMIT 24`,
+            )
+            .all() as { m: string }[];
+          const fys = db
+            .prepare(
+              `SELECT DISTINCT fy_key f FROM transactions
+               WHERE status <> 'scheduled' ORDER BY f DESC`,
+            )
+            .all() as { f: string }[];
+          const today = new Date().toISOString().slice(0, 10);
+          return send(res, 200, {
+            current_fy: fyKeyFor(pack, today),
+            current_month: today.slice(0, 7),
+            quick: [
+              { key: "this_month", label: "This month" },
+              { key: "last_month", label: "Last month" },
+              { key: "this_fy", label: `This ${pack.financial_year.label_format.split(" ")[0]}` },
+              { key: "last_fy", label: "Last year" },
+              { key: "all", label: "All time" },
+            ],
+            months: months.map((r) => r.m).filter(Boolean),
+            financial_years: fys.map((r) => r.f).filter(Boolean),
+          });
+        }
 
         case "/v1/documents":
           return send(res, 200, {
@@ -516,6 +569,70 @@ async function readJson(req: IncomingMessage): Promise<Record<string, string>> {
 }
 
 /**
+ * Resolve a period selector into an inclusive date range.
+ *
+ *   this_month | last_month | this_fy | last_fy | all
+ *   fy=FY 2026-27          explicit financial year
+ *   month=2026-07          explicit month
+ *
+ * The FY boundary comes from the jurisdiction pack, not a hardcoded April.
+ */
+export function resolvePeriod(
+  pack: JurisdictionPack,
+  params: URLSearchParams,
+  today = new Date(),
+): { from: string | null; to: string | null; label: string; key: string } {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const monthRange = (y: number, m: number) => {
+    const from = `${y}-${pad(m)}-01`;
+    const end = new Date(Date.UTC(y, m, 0)); // day 0 of next month = last day
+    return { from, to: end.toISOString().slice(0, 10) };
+  };
+  const monthLabel = (y: number, m: number) =>
+    new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en", { month: "long", year: "numeric" });
+
+  const explicitFy = params.get("fy");
+  if (explicitFy) {
+    const r = fyRange(pack, explicitFy);
+    return { ...r, label: explicitFy, key: explicitFy };
+  }
+
+  const explicitMonth = params.get("month");
+  if (explicitMonth && /^\d{4}-\d{2}$/.test(explicitMonth)) {
+    const [y, m] = explicitMonth.split("-").map(Number);
+    return { ...monthRange(y, m), label: monthLabel(y, m), key: explicitMonth };
+  }
+
+  const y = today.getUTCFullYear();
+  const m = today.getUTCMonth() + 1;
+
+  switch (params.get("period") ?? "this_fy") {
+    case "this_month":
+      return { ...monthRange(y, m), label: monthLabel(y, m), key: `${y}-${pad(m)}` };
+    case "last_month": {
+      const ly = m === 1 ? y - 1 : y;
+      const lm = m === 1 ? 12 : m - 1;
+      return { ...monthRange(ly, lm), label: monthLabel(ly, lm), key: `${ly}-${pad(lm)}` };
+    }
+    case "last_fy": {
+      const cur = fyKeyFor(pack, today.toISOString().slice(0, 10));
+      const prevStart = Number(cur.match(/(\d{4})/)?.[1]) - 1;
+      const prev = cur.replace(/\d{4}/, String(prevStart)).replace(/-\d{2}$/, (s) =>
+        `-${String((prevStart + 1) % 100).padStart(2, "0")}`,
+      );
+      return { ...fyRange(pack, prev), label: prev, key: prev };
+    }
+    case "all":
+      return { from: null, to: null, label: "All time", key: "all" };
+    case "this_fy":
+    default: {
+      const cur = fyKeyFor(pack, today.toISOString().slice(0, 10));
+      return { ...fyRange(pack, cur), label: cur, key: cur };
+    }
+  }
+}
+
+/**
  * THE COUNTING RULE (plan §3.3).
  * Totals come from `transactions`, never documents. Transfers are excluded
  * entirely — money moving between accounts I own is not income or spending.
@@ -525,10 +642,16 @@ async function readJson(req: IncomingMessage): Promise<Record<string, string>> {
  * INVESTMENTS are separated from spending. Buying shares is not consumption —
  * the money changes form, it doesn't leave your net worth. Lumping contract
  * notes into "Spending" made a Rs 2L portfolio look like a shopping spree.
+ *
+ * Filtering is by occurred_at (the ECONOMIC date), not fy_key, so month
+ * selection and financial-year selection share one code path.
  */
-export function snapshot(db: DatabaseSync, fy?: string | null) {
-  const where = fy ? "AND fy_key = ?" : "";
-  const args = fy ? [fy] : [];
+export function snapshot(
+  db: DatabaseSync,
+  period: { from: string | null; to: string | null; label: string; key: string },
+) {
+  const where = period.from && period.to ? "AND occurred_at BETWEEN ? AND ?" : "";
+  const args = period.from && period.to ? [period.from, period.to] : [];
 
   // A transaction counts as investment when it carries an instrument or is
   // categorised as one (contract notes, SIPs, fund purchases).
@@ -557,27 +680,31 @@ export function snapshot(db: DatabaseSync, fy?: string | null) {
         .get(dir, ...args) as { v: number }
     ).v;
 
+  const countIn = (sql: string, extra: (string | number)[] = []) =>
+    (db.prepare(sql).get(...extra) as { n: number }).n;
+
   const invested = sum("out", true);
   const divested = sum("in", true);
 
   return {
-    fy_key: fy ?? null,
+    period: { key: period.key, label: period.label, from: period.from, to: period.to },
+    fy_key: period.key,
     spending_minor: sum("out", false),
     income_minor: sum("in", false),
     transfers_minor: plainSum("transfer"),
-    // Net into investments: purchases minus redemptions.
     investments_minor: invested,
     investments_out_minor: invested,
     investments_in_minor: divested,
     investments_net_minor: invested - divested,
     currency: "INR",
     counts: {
-      documents: (db.prepare("SELECT COUNT(*) n FROM documents").get() as { n: number }).n,
-      transactions: (
-        db.prepare("SELECT COUNT(*) n FROM transactions WHERE status <> 'scheduled'").get() as { n: number }
-      ).n,
-      entities: (db.prepare("SELECT COUNT(*) n FROM entities").get() as { n: number }).n,
-      evidence_links: (db.prepare("SELECT COUNT(*) n FROM transaction_documents").get() as { n: number }).n,
+      documents: countIn("SELECT COUNT(*) n FROM documents"),
+      transactions: countIn(
+        `SELECT COUNT(*) n FROM transactions WHERE status <> 'scheduled' ${where}`,
+        args,
+      ),
+      entities: countIn("SELECT COUNT(*) n FROM entities"),
+      evidence_links: countIn("SELECT COUNT(*) n FROM transaction_documents"),
     },
     note: "totals derive from transactions; transfers excluded, investments separated from spending",
   };

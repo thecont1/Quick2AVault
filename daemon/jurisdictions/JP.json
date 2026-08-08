@@ -1,0 +1,65 @@
+{
+  "id": "JP",
+  "version": "1.0.0",
+  "name": "Japan",
+  "locale": "ja-JP",
+
+  "financial_year": {
+    "start_month": 4,
+    "start_day": 1,
+    "label_format": "FY{start}",
+    "description": "1 April – 31 March"
+  },
+
+  "currency": {
+    "code": "JPY",
+    "symbol": "¥",
+    "minor_units": 0,
+    "grouping": "thousands",
+    "grouping_description": "¥142,356 — no minor units, groups of 3"
+  },
+
+  "dates": {
+    "input_format": "YYYY/MM/DD",
+    "display_format": "YYYY年MM月DD日",
+    "note": "Japanese documents lead with the year."
+  },
+
+  "tax_ids": {
+    "CorporateNumber": "[0-9]{13}",
+    "InvoiceRegistration": "T[0-9]{13}"
+  },
+
+  "entity_suffixes": [
+    "kk", "kabushiki", "kaisha", "gk", "goudou", "co", "ltd", "inc", "corporation"
+  ],
+
+  "statutory_buckets": ["consumption_tax", "withholding_tax", "stamp_duty"],
+
+  "impact_buckets": [
+    "income", "spending", "investment", "transfer", "tax", "refund"
+  ],
+
+  "payment_rails": [
+    "card", "furikomi", "konbini", "auto_debit", "cash", "broker", "paypay"
+  ],
+
+  "settlement_windows_days": {
+    "card": 3,
+    "furikomi": 1,
+    "konbini": 2,
+    "default": 2
+  },
+
+  "fx": {
+    "source": "frankfurter",
+    "home_currency": "JPY",
+    "fallback": "prior_business_day"
+  },
+
+  "document_hints": {
+    "wallet_topup": ["チャージ", "CHARGE", "TOP-UP", "PayPay"],
+    "contract_note": ["取引報告書", "CONTRACT NOTE", "TSE"],
+    "salary": ["給与明細", "PAYSLIP", "NET PAY"]
+  }
+}
