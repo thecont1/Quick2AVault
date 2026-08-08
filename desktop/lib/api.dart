@@ -542,6 +542,46 @@ class VaultDoc {
       );
 }
 
+/// How a document can be shown, and how many pages it has.
+///
+/// Fetched separately from the image itself because Flutter's NetworkImage
+/// exposes no response headers — the daemon's x-page-count is invisible to it,
+/// so a viewer cannot otherwise know a PDF has more than one page.
+class PageInfo {
+  /// 'native' (serve as-is), 'rasterised' (rendered server-side), or 'none'.
+  final String kind;
+  final int pages;
+
+  /// False when the daemon can only render page 1 (no pdftoppm installed).
+  final bool pagerAvailable;
+
+  /// Why there is no page image, for display verbatim.
+  final String? reason;
+
+  const PageInfo({
+    required this.kind,
+    required this.pages,
+    required this.pagerAvailable,
+    this.reason,
+  });
+
+  bool get hasImage => kind != 'none';
+
+  /// A pager is only worth showing when there is more than one page AND the
+  /// daemon can actually render the others.
+  bool get showPager => pages > 1 && pagerAvailable;
+
+  static const none =
+      PageInfo(kind: 'none', pages: 0, pagerAvailable: false);
+
+  factory PageInfo.fromJson(Map<String, dynamic> j) => PageInfo(
+        kind: (j['kind'] as String?) ?? 'none',
+        pages: (j['pages'] as num?)?.toInt() ?? 0,
+        pagerAvailable: (j['pager_available'] as bool?) ?? false,
+        reason: j['reason'] as String?,
+      );
+}
+
 class VaultApi {
   final String baseUrl;
   final String token;
@@ -576,8 +616,26 @@ class VaultApi {
   /// Prefer this over [documentFileUrl] for display: the daemon rasterises PDFs
   /// server-side and caches the result, so the client needs no PDF plugin and
   /// treats every previewable document identically.
-  Uri documentPageUrl(String id, {int page = 1, int width = 1600}) =>
-      Uri.parse('$baseUrl/v1/documents/$id/page?n=$page&w=$width');
+  ///
+  /// Width defaults to the daemon's own default (2400px) by omission, so the
+  /// resolution decision lives in ONE place rather than being duplicated here.
+  Uri documentPageUrl(String id, {int page = 1, int? width}) => Uri.parse(
+      '$baseUrl/v1/documents/$id/page?n=$page${width == null ? '' : '&w=$width'}');
+
+  /// Page count and render capability for a document.
+  ///
+  /// Never throws for an unpageable document — a 409 means "no page image",
+  /// which is a legitimate answer (an email with no attachment), not a failure.
+  Future<PageInfo> pageInfo(String id) async {
+    final res = await _client
+        .get(Uri.parse('$baseUrl/v1/documents/$id/pageinfo'), headers: _headers)
+        .timeout(const Duration(seconds: 10));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, '/v1/documents/$id/pageinfo');
+    }
+    if (res.statusCode != 200) return PageInfo.none;
+    return PageInfo.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
 
   /// The extracted text, for the Document/Markdown toggle.
   ///

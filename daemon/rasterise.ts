@@ -51,6 +51,9 @@ function normaliseExt(ext: string | null | undefined): string {
 
 let cachedTools: { pdftoppm: boolean; pdfinfo: boolean; sips: boolean } | null = null;
 
+/** Warn once per process about the degraded backend, not once per render. */
+let warnedAboutSips = false;
+
 /** Probe once per process — these do not appear or vanish mid-run. */
 export async function detectTools() {
   if (cachedTools) return cachedTools;
@@ -215,6 +218,18 @@ export async function renderPage(req: RenderRequest): Promise<RenderResult> {
     // returning the wrong page with a 200.
     if (page !== 1) {
       throw new Error("only page 1 can be rendered without pdftoppm");
+    }
+    // Loud, once per process: pdftoppm is the intended backend and its absence
+    // silently caps a multi-page document at its first page. A warning in the
+    // log is how an operator discovers that, rather than wondering why the
+    // pager never appears.
+    if (!warnedAboutSips) {
+      warnedAboutSips = true;
+      console.warn(
+        "[rasterise] pdftoppm not found — falling back to sips, which renders " +
+          "page 1 ONLY. Install poppler (brew install poppler) for multi-page " +
+          "documents.",
+      );
     }
     await exec("sips", [
       "-s", "format", "png",

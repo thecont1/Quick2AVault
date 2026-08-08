@@ -35,10 +35,22 @@ VaultDoc _doc(
 class _FakeApi extends VaultApi {
   final List<VaultDoc> docs;
   final String? markdown;
-  int markdownCalls = 0;
 
-  _FakeApi({required this.docs, this.markdown})
-      : super(baseUrl: 'http://127.0.0.1:1', token: 'test');
+  /// Page count per document id. Absent means a single page.
+  final Map<String, int> pages;
+
+  /// Simulates a daemon without pdftoppm.
+  final bool pagerAvailable;
+
+  int markdownCalls = 0;
+  int pageInfoCalls = 0;
+
+  _FakeApi({
+    required this.docs,
+    this.markdown,
+    this.pages = const {},
+    this.pagerAvailable = true,
+  }) : super(baseUrl: 'http://127.0.0.1:1', token: 'test');
 
   @override
   Future<List<VaultDoc>> documents({int limit = 200}) async => docs;
@@ -47,6 +59,16 @@ class _FakeApi extends VaultApi {
   Future<String?> documentMarkdown(String id) async {
     markdownCalls++;
     return markdown;
+  }
+
+  @override
+  Future<PageInfo> pageInfo(String id) async {
+    pageInfoCalls++;
+    return PageInfo(
+      kind: 'rasterised',
+      pages: pages[id] ?? 1,
+      pagerAvailable: pagerAvailable,
+    );
   }
 }
 
@@ -250,7 +272,116 @@ void main() {
     expect(find.text('Markdown only'), findsOneWidget);
   });
 
-  testWidgets('an unanalysed document is visibly distinguished', (tester) async {
+  testWidgets('a single-page document shows no pager', (tester) async {
+    // A pager reading "1 / 1" is pure noise.
+    final api = _FakeApi(docs: [_doc('d1', 'one.pdf', ext: '.pdf')]);
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+    expect(find.text('1 / 1'), findsNothing);
+    expect(find.byTooltip('Next page'), findsNothing);
+  });
+
+  testWidgets('a multi-page document shows a pager and can advance',
+      (tester) async {
+    final api = _FakeApi(
+      docs: [_doc('d1', 'statement.pdf', ext: '.pdf')],
+      pages: {'d1': 5},
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+
+    expect(find.text('1 / 5'), findsOneWidget);
+    await tester.tap(find.byTooltip('Next page'));
+    await tester.pumpAndSettle();
+    expect(find.text('2 / 5'), findsOneWidget);
+  });
+
+  testWidgets('the pager is disabled at both boundaries, never wrapping',
+      (tester) async {
+    // Wrapping from page 1 to page 3 reads as a glitch rather than navigation.
+    final api = _FakeApi(
+      docs: [_doc('d1', 'three.pdf', ext: '.pdf')],
+      pages: {'d1': 3},
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+
+    // IconButton builds its Tooltip INTERNALLY, so the button is the tooltip's
+    // ancestor, not its descendant. Getting this backwards yields "Bad state:
+    // No element" rather than a useful failure.
+    IconButton btn(String tip) => tester.widget<IconButton>(
+          find.ancestor(
+            of: find.byTooltip(tip),
+            matching: find.byType(IconButton),
+          ),
+        );
+
+    expect(btn('Previous page').onPressed, isNull, reason: 'page 1 has no previous');
+    expect(btn('Next page').onPressed, isNotNull);
+
+    await tester.tap(find.byTooltip('Next page'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Next page'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('3 / 3'), findsOneWidget);
+    expect(btn('Next page').onPressed, isNull, reason: 'last page has no next');
+    expect(btn('Previous page').onPressed, isNotNull);
+  });
+
+  testWidgets('no pager when the daemon cannot render pages beyond the first',
+      (tester) async {
+    // Without pdftoppm the daemon 501s for page 2+. Offering a pager that
+    // cannot page is worse than offering none.
+    final api = _FakeApi(
+      docs: [_doc('d1', 'statement.pdf', ext: '.pdf')],
+      pages: {'d1': 5},
+      pagerAvailable: false,
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Next page'), findsNothing);
+    expect(find.text('1 / 5'), findsNothing);
+  });
+
+  testWidgets('selecting another document resets the pager to page 1',
+      (tester) async {
+    // Leftover page state would ask for page 4 of a 2-page document.
+    final api = _FakeApi(
+      docs: [
+        _doc('d1', 'five.pdf', ext: '.pdf'),
+        _doc('d2', 'two.pdf', ext: '.pdf'),
+      ],
+      pages: {'d1': 5, 'd2': 2},
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Next page'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Next page'));
+    await tester.pumpAndSettle();
+    expect(find.text('3 / 5'), findsOneWidget);
+
+    await tester.tap(find.text('two.pdf'));
+    await tester.pumpAndSettle();
+    expect(find.text('1 / 2'), findsOneWidget);
+  });
+
+  testWidgets('page info is not fetched for a document with no page image',
+      (tester) async {
+    // An email has no page. Asking the daemon about its pages is a pointless
+    // round trip on every selection.
+    final api = _FakeApi(
+      docs: [_doc('d1', 'alert.eml', ext: '.eml')],
+      markdown: '# Alert',
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+    expect(api.pageInfoCalls, 0);
+  });
+
+  testWidgets('the unanalysed document is visibly distinguished', (tester) async {
     // An unanalysed document contributes to NO total, so the list must not make
     // it look equivalent to an analysed one.
     final api = _FakeApi(docs: [

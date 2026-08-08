@@ -54,6 +54,11 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
   String? _markdown;
   bool _markdownLoading = false;
 
+  /// Page count / render capability for the selected document, and which page
+  /// is showing. 1-based, matching the daemon's ?n= parameter.
+  PageInfo _pageInfo = PageInfo.none;
+  int _page = 1;
+
   @override
   void initState() {
     super.initState();
@@ -78,6 +83,10 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
       final sel = _selected;
       if (sel != null && !sel.hasPageImage && _markdown == null) {
         _loadMarkdown(sel);
+      } else if (sel != null && sel.hasPageImage) {
+        // The auto-selected document bypasses _select(), so it needs its page
+        // count fetched here or a multi-page PDF opens with no pager.
+        _loadPageInfo(sel);
       }
     } on VaultAuthException catch (e) {
       if (!mounted) return;
@@ -116,12 +125,35 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
     setState(() {
       _selected = doc;
       _markdown = null;
+      // Reset the pager: page 4 of the previous document is meaningless here,
+      // and a stale count would render a pager for a single-page document.
+      _pageInfo = PageInfo.none;
+      _page = 1;
       // Image documents default to the magnifiable image; everything else has
       // only a markdown view, so land there rather than on a pane that cannot
       // render and a toggle the user must discover.
       _showMarkdown = !doc.hasPageImage;
     });
-    if (!doc.hasPageImage) _loadMarkdown(doc);
+    if (!doc.hasPageImage) {
+      _loadMarkdown(doc);
+    } else {
+      _loadPageInfo(doc);
+    }
+  }
+
+  /// Fetch page count for the selected document.
+  ///
+  /// Guarded against a stale response: selecting B while A's request is in
+  /// flight must not apply A's page count to B.
+  Future<void> _loadPageInfo(VaultDoc doc) async {
+    try {
+      final info = await widget.api.pageInfo(doc.id);
+      if (!mounted || _selected?.id != doc.id) return;
+      setState(() => _pageInfo = info);
+    } catch (_) {
+      // A failed page count costs the pager, not the preview — the image
+      // request is independent and page 1 still renders.
+    }
   }
 
   /// Filtered list. Matches filename, doc type and source so a search for
@@ -186,6 +218,9 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
                         showMarkdown: _showMarkdown,
                         markdown: _markdown,
                         markdownLoading: _markdownLoading,
+                        pageInfo: _pageInfo,
+                        page: _page,
+                        onPage: (n) => setState(() => _page = n),
                         onToggle: (wantMarkdown) {
                           setState(() => _showMarkdown = wantMarkdown);
                           if (wantMarkdown && _markdown == null) {
@@ -357,6 +392,9 @@ class _Detail extends StatelessWidget {
   final bool showMarkdown;
   final String? markdown;
   final bool markdownLoading;
+  final PageInfo pageInfo;
+  final int page;
+  final ValueChanged<int> onPage;
   final ValueChanged<bool> onToggle;
 
   const _Detail({
@@ -365,6 +403,9 @@ class _Detail extends StatelessWidget {
     required this.showMarkdown,
     required this.markdown,
     required this.markdownLoading,
+    required this.pageInfo,
+    required this.page,
+    required this.onPage,
     required this.onToggle,
   });
 
@@ -410,13 +451,24 @@ class _Detail extends StatelessWidget {
           ),
           Expanded(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
               child: showMarkdown
                   ? _MarkdownPane(
                       markdown: markdown, loading: markdownLoading)
-                  : _DocumentPane(api: api, doc: doc),
+                  : _DocumentPane(api: api, doc: doc, page: page),
             ),
           ),
+          // The pager sits BELOW the document, not above: it is navigation for
+          // what you are looking at, and putting it under the image keeps the
+          // document top-aligned with the metadata beside it.
+          if (!showMarkdown && pageInfo.showPager)
+            _Pager(
+              page: page,
+              pages: pageInfo.pages,
+              onPage: onPage,
+            )
+          else
+            const SizedBox(height: 12),
         ],
       );
 }
@@ -513,11 +565,69 @@ class _Seg extends StatelessWidget {
       );
 }
 
+/// Page navigation for a multi-page document.
+///
+/// Only rendered when there is more than one page AND the daemon can render
+/// pages beyond the first — a pager that cannot page is worse than none.
+class _Pager extends StatelessWidget {
+  final int page;
+  final int pages;
+  final ValueChanged<int> onPage;
+
+  const _Pager({
+    required this.page,
+    required this.pages,
+    required this.onPage,
+  });
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            IconButton(
+              // Disabled at the boundary rather than wrapping: silently jumping
+              // from page 1 to page 5 reads as a glitch.
+              onPressed: page > 1 ? () => onPage(page - 1) : null,
+              icon: const Icon(Icons.chevron_left, size: 18),
+              tooltip: 'Previous page',
+              visualDensity: VisualDensity.compact,
+            ),
+            // State both numbers: "2 / 5" tells you where you are AND how much
+            // is left, which a bare "2" does not.
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Text(
+                '$page / $pages',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: VaultColors.dim,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ),
+            IconButton(
+              onPressed: page < pages ? () => onPage(page + 1) : null,
+              icon: const Icon(Icons.chevron_right, size: 18),
+              tooltip: 'Next page',
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
+        ),
+      );
+}
+
 class _DocumentPane extends StatelessWidget {
   final VaultApi api;
   final VaultDoc doc;
+  final int page;
 
-  const _DocumentPane({required this.api, required this.doc});
+  const _DocumentPane({
+    required this.api,
+    required this.doc,
+    required this.page,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -537,12 +647,16 @@ class _DocumentPane extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: MagnifiedDocument(
+        // A ValueKey on the page number forces a fresh image when paging.
+        // Without it Flutter reuses the element and the previous page's decoded
+        // bitmap stays on screen — the pager appears to do nothing.
+        key: ValueKey('${doc.id}-p$page'),
         // The PAGE endpoint, not the raw file: the daemon rasterises PDFs
         // server-side, so a 67-PDF vault gets the magnifier too. Bearer auth,
         // not a query token — query-string credentials are refused on every
         // route except the SSE stream.
         image: NetworkImage(
-          api.documentPageUrl(doc.id).toString(),
+          api.documentPageUrl(doc.id, page: page).toString(),
           headers: api.imageHeaders,
         ),
         fallback: const Center(

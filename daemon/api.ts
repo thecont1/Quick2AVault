@@ -942,7 +942,37 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
 
         default: {
-          // getDocumentPage — /v1/documents/<id>/page?n=1&w=1600
+          // getDocumentPageInfo — /v1/documents/<id>/pageinfo
+          //
+          // How many pages, and can they be rendered? Separate from /page
+          // because an image fetch cannot return metadata the client can read:
+          // Flutter's NetworkImage exposes no response headers, so x-page-count
+          // is invisible to it. Without this endpoint a viewer literally cannot
+          // know a PDF has more than one page.
+          const infoMatch = p.match(/^\/v1\/documents\/([^/]+)\/pageinfo$/);
+          if (infoMatch) {
+            const doc = db
+              .prepare("SELECT id, ext, raw_path FROM documents WHERE id = ?")
+              .get(infoMatch[1]) as Record<string, unknown> | undefined;
+            if (!doc) {
+              return send(res, 404, { error: "document_not_found", document_id: infoMatch[1] });
+            }
+            const resolved = path.resolve(String(doc.raw_path ?? ""));
+            const vaultRoot = path.resolve(opts.vaultDir);
+            if (!resolved.startsWith(vaultRoot + path.sep)) {
+              return send(res, 403, { error: "outside_vault" });
+            }
+            const cap = await pageCapability(doc.ext as string, resolved);
+            return send(res, 200, {
+              document_id: doc.id,
+              kind: cap.kind,
+              pages: cap.pages,
+              pager_available: cap.pagerAvailable,
+              reason: cap.reason ?? null,
+            });
+          }
+
+          // getDocumentPage — /v1/documents/<id>/page?n=1&w=2400
           //
           // A magnifiable page image. Images are served as-is; PDFs are
           // rasterised and cached. This is what makes the Review magnifier
@@ -993,9 +1023,18 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             }
 
             const wanted = Number(url.searchParams.get("n") ?? 1);
+            // Default 2400px, ceiling 6144.
+            //
+            // These users ingest a handful of documents at a time on their own
+            // machine, so render time is not the constraint — legibility under
+            // magnification is. Measured on a real invoice: 1600px renders in
+            // 0.35s, 2400px in 0.60s, 3200px in 0.96s, and the extra pixels are
+            // genuine detail rather than interpolation (HSN codes and the small
+            // '9%' tax annotations stay crisp). Renders are cached, so the cost
+            // is paid once per page.
             const width = Math.min(
-              4096,
-              Math.max(256, Number(url.searchParams.get("w") ?? 1600)),
+              6144,
+              Math.max(256, Number(url.searchParams.get("w") ?? 2400)),
             );
             if (!Number.isInteger(wanted) || wanted < 1 || wanted > cap.pages) {
               return send(res, 400, {
