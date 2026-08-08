@@ -177,8 +177,12 @@ export async function syncGmail(
     },
 
     async markProcessed(id) {
+      // NOTE: the column is created_at, not seen_at. There is no document_id
+      // here — one email can yield several documents, each of which records
+      // its own source_events row keyed "<messageId>:<attachmentId>". This row
+      // marks the MESSAGE as handled so a re-sync skips it wholesale.
       db.prepare(
-        `INSERT OR IGNORE INTO source_events (source, external_id, seen_at)
+        `INSERT OR IGNORE INTO source_events (source, external_id, created_at)
          VALUES (?,?,?)`,
       ).run(PROVIDER, id, ports.clock.isoNow());
     },

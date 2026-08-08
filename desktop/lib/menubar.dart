@@ -21,10 +21,22 @@ const kPopupSize = Size(420, 620);
 const kFullSize = Size(1360, 880);
 
 class MenubarController with TrayListener, WindowListener {
-  MenubarController({required this.onOpenFull, required this.onQuit});
+  MenubarController({
+    required this.onOpenFull,
+    required this.onQuit,
+    this.onShowPopup,
+  });
 
   final VoidCallback onOpenFull;
   final VoidCallback onQuit;
+
+  /// Fired when the window returns to POPUP mode.
+  ///
+  /// Without this the app was a one-way door: `onOpenFull` flipped the widget
+  /// into the full Document Viewer and nothing ever flipped it back, so a
+  /// later tray click resized the window to 420x620 while still rendering the
+  /// 1360-wide viewer inside it — a column-per-letter mess.
+  final VoidCallback? onShowPopup;
 
   bool _popupVisible = false;
   bool get popupVisible => _popupVisible;
@@ -42,6 +54,10 @@ class MenubarController with TrayListener, WindowListener {
     ]));
 
     // Start hidden: a menubar app should not steal a window on launch.
+    // preventClose is required for onWindowClose to fire at all — without it
+    // the red button destroys the window and the app is left with a tray icon
+    // that opens nothing.
+    await windowManager.setPreventClose(true);
     await windowManager.setSkipTaskbar(true);
     await windowManager.hide();
   }
@@ -82,6 +98,17 @@ class MenubarController with TrayListener, WindowListener {
     // Order matters: size and position BEFORE show, otherwise the panel flashes
     // at its old geometry. setAsFrameless is done once at startup, not here —
     // calling it repeatedly on macOS can leave the window unmapped.
+    //
+    // Tell the widget to render the POPUP layout first. openFullWindow() may
+    // have switched it to the 1360-wide Document Viewer, and shrinking the
+    // window to 420x620 around that layout is what produced the broken,
+    // one-letter-per-column interface.
+    onShowPopup?.call();
+    // openFullWindow() gave the window a normal title bar and put it in the
+    // taskbar; both must be undone or the "popup" arrives as a small ordinary
+    // window with a title bar rather than a frameless panel.
+    await windowManager.setTitleBarStyle(TitleBarStyle.hidden);
+    await windowManager.setSkipTaskbar(true);
     await windowManager.setSize(kPopupSize);
     await _anchorUnderTray();
     await windowManager.setAlwaysOnTop(true);
@@ -144,6 +171,16 @@ class MenubarController with TrayListener, WindowListener {
       case 'quit':
         onQuit();
     }
+  }
+
+  /// Closing the full window with its red button must return the app to popup
+  /// mode. Otherwise `_fullWindow` stays latched and the next tray click
+  /// renders the Document Viewer inside a 420px panel.
+  @override
+  void onWindowClose() {
+    _popupVisible = false;
+    onShowPopup?.call();
+    windowManager.hide();
   }
 
   // ── WindowListener ────────────────────────────────────────────────────────

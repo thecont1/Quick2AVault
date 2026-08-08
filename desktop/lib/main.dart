@@ -96,6 +96,12 @@ class _VaultHomeState extends State<VaultHome> {
   Future<void> _initMenubar() async {
     final m = MenubarController(
       onOpenFull: () => setState(() => _fullWindow = true),
+      // The return path. Without it _fullWindow was a latch: once true it
+      // never cleared, so every later tray click rendered the full viewer
+      // inside a 420px popup.
+      onShowPopup: () {
+        if (mounted && _fullWindow) setState(() => _fullWindow = false);
+      },
       onQuit: () => exit(0),
     );
     await m.init();
@@ -106,6 +112,16 @@ class _VaultHomeState extends State<VaultHome> {
     //   flutter run --dart-define=Q2AV_START_FULL=true
     if (const bool.fromEnvironment('Q2AV_START_FULL')) {
       await m.openFullWindow();
+    }
+    // QA: exercise the full -> popup transition that regressed once. Opens the
+    // viewer, then returns to the popup exactly as a tray click does, so the
+    // round trip can be screenshotted without simulating a status-item click
+    // (macOS does not expose the tray context menu to the accessibility API).
+    //   flutter build macos --dart-define=Q2AV_QA_ROUNDTRIP=true
+    if (const bool.fromEnvironment('Q2AV_QA_ROUNDTRIP')) {
+      await m.openFullWindow();
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await m.showPopup();
     }
   }
 
@@ -241,7 +257,14 @@ class _VaultHomeState extends State<VaultHome> {
 
     // Menubar panel — the default surface. Compact, glanceable, dismissed on
     // click-away. The full window is opened deliberately.
-    if (!_fullWindow) {
+    //
+    // The width check is a SAFETY NET, not the primary switch. The Document
+    // Viewer's three-column hero row and side rail cannot fit 420px: if state
+    // and geometry ever disagree again, render the popup rather than a broken
+    // viewer squeezed into a panel.
+    final tooNarrowForViewer =
+        MediaQuery.of(context).size.width < kFullSize.width * 0.6;
+    if (!_fullWindow || tooNarrowForViewer) {
       return Scaffold(
         backgroundColor: Colors.transparent,
         body: VaultDropTarget(
