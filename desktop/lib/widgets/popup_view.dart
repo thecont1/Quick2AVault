@@ -13,6 +13,7 @@ class PopupView extends StatelessWidget {
   final bool connected;
   final VoidCallback onOpenFull;
   final VoidCallback onQuit;
+  final VoidCallback onSetup;
 
   const PopupView({
     super.key,
@@ -22,6 +23,7 @@ class PopupView extends StatelessWidget {
     required this.connected,
     required this.onOpenFull,
     required this.onQuit,
+    required this.onSetup,
   });
 
   @override
@@ -38,13 +40,13 @@ class PopupView extends StatelessWidget {
         border: Border.all(color: VaultColors.line),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        _Header(connected: connected, busy: busy, onQuit: onQuit),
+        _Header(connected: connected, busy: busy, onQuit: onQuit, onSetup: onSetup),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-          child: _SpendCard(snapshot: snapshot),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: _MoneyTriple(snapshot: snapshot),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+          padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
           child: _TransferNote(snapshot: snapshot),
         ),
         const Divider(height: 1, color: VaultColors.line),
@@ -71,31 +73,56 @@ class _Header extends StatelessWidget {
   final bool connected;
   final bool busy;
   final VoidCallback onQuit;
-  const _Header({required this.connected, required this.busy, required this.onQuit});
+  final VoidCallback onSetup;
+  const _Header({
+    required this.connected,
+    required this.busy,
+    required this.onQuit,
+    required this.onSetup,
+  });
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 14, 10, 0),
+        padding: const EdgeInsets.fromLTRB(14, 12, 8, 0),
         child: Row(children: [
-          Container(
-            width: 22, height: 22,
-            decoration: BoxDecoration(
-              color: VaultColors.accent.withValues(alpha: busy ? 0.9 : 0.18),
-              shape: BoxShape.circle,
-              border: Border.all(color: VaultColors.accent.withValues(alpha: 0.6)),
+          // The brand mark. Falls back to a tinted ₹ disc if the asset is
+          // missing, so the header never renders as a broken-image box.
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: Image.asset(
+              'assets/logo.png',
+              width: 26,
+              height: 26,
+              filterQuality: FilterQuality.medium,
+              errorBuilder: (_, _, _) => Container(
+                width: 26, height: 26,
+                decoration: BoxDecoration(
+                  color: VaultColors.accent.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                alignment: Alignment.center,
+                child: const Text('₹',
+                    style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: VaultColors.accent)),
+              ),
             ),
-            alignment: Alignment.center,
-            child: Text('₹',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: busy ? Colors.white : VaultColors.accent)),
           ),
           const SizedBox(width: 9),
-          const Text('Quick2AVault',
+          const Text('Quick2A Vault',
               style: TextStyle(
                   fontSize: 13.5, fontWeight: FontWeight.w600, color: VaultColors.primary)),
           const Spacer(),
+          if (busy)
+            const Padding(
+              padding: EdgeInsets.only(right: 8),
+              child: SizedBox(
+                width: 10, height: 10,
+                child: CircularProgressIndicator(
+                    strokeWidth: 1.6, color: VaultColors.accent),
+              ),
+            ),
           Container(
             width: 6, height: 6,
             decoration: BoxDecoration(
@@ -103,38 +130,78 @@ class _Header extends StatelessWidget {
               shape: BoxShape.circle,
             ),
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 6),
+          _IconButton(icon: Icons.tune_rounded, tooltip: 'Setup', onTap: onSetup),
           _IconButton(icon: Icons.close_rounded, tooltip: 'Quit', onTap: onQuit),
         ]),
       );
 }
 
-class _SpendCard extends StatelessWidget {
+/// Income · Expenses · Investments — the three numbers that matter, side by
+/// side. Investments are deliberately NOT folded into Expenses: buying shares
+/// is not consumption, and mixing them makes a portfolio look like spending.
+class _MoneyTriple extends StatelessWidget {
   final Snapshot snapshot;
-  const _SpendCard({required this.snapshot});
+  const _MoneyTriple({required this.snapshot});
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.fromLTRB(16, 15, 16, 15),
         decoration: vaultCard(fill: VaultColors.controlSubtle40),
+        child: IntrinsicHeight(
+          child: Row(children: [
+            Expanded(
+              child: _Money(
+                label: 'INCOME',
+                minor: snapshot.incomeMinor,
+                color: VaultColors.income,
+              ),
+            ),
+            const VerticalDivider(width: 1, color: VaultColors.line),
+            Expanded(
+              child: _Money(
+                label: 'EXPENSES',
+                minor: snapshot.spendingMinor,
+                color: VaultColors.out,
+              ),
+            ),
+            const VerticalDivider(width: 1, color: VaultColors.line),
+            Expanded(
+              child: _Money(
+                label: 'INVESTED',
+                minor: snapshot.investmentsMinor,
+                color: VaultColors.transfer,
+              ),
+            ),
+          ]),
+        ),
+      );
+}
+
+class _Money extends StatelessWidget {
+  final String label;
+  final int minor;
+  final Color color;
+  const _Money({required this.label, required this.minor, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(11, 13, 11, 13),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('SPENDING THIS FY',
-              style: TextStyle(
-                  fontSize: 9.5, letterSpacing: 1.0,
-                  fontWeight: FontWeight.w600, color: VaultColors.tertiary)),
-          const SizedBox(height: 8),
+          Text(label,
+              style: const TextStyle(
+                  fontSize: 8.5,
+                  letterSpacing: 0.9,
+                  fontWeight: FontWeight.w700,
+                  color: VaultColors.tertiary)),
+          const SizedBox(height: 7),
+          // Money must never wrap mid-number; scale down instead.
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: Text(rupees(snapshot.spendingMinor),
+            child: Text(rupees(minor),
                 maxLines: 1,
                 softWrap: false,
-                style: moneyStyle.copyWith(fontSize: 32, color: VaultColors.primary)),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '${snapshot.documents} documents → ${snapshot.transactions} transactions',
-            style: const TextStyle(fontSize: 11.5, color: VaultColors.tertiary),
+                style: moneyStyle.copyWith(fontSize: 16, color: color)),
           ),
         ]),
       );

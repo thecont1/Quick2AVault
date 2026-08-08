@@ -65,6 +65,7 @@ flutter:
   # image and inverts it automatically for light/dark menu bars.
   assets:
     - assets/tray_icon_Template.png
+    - assets/logo.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

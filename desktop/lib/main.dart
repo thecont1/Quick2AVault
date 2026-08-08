@@ -22,6 +22,7 @@ import 'widgets/evidence_panel.dart';
 import 'widgets/feed_rail.dart';
 import 'widgets/drop_target.dart';
 import 'widgets/popup_view.dart';
+import 'widgets/setup_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -67,6 +68,8 @@ class _VaultHomeState extends State<VaultHome> {
   bool _daemonUp = false;
   /// Popup (menubar panel) vs the full resizable window.
   bool _fullWindow = false;
+  /// Setup pane overrides whichever surface is showing.
+  bool _setup = false;
 
   @override
   void initState() {
@@ -154,6 +157,13 @@ class _VaultHomeState extends State<VaultHome> {
 
   @override
   Widget build(BuildContext context) {
+    if (_setup) {
+      return Scaffold(
+        backgroundColor: VaultColors.bg,
+        body: SetupView(api: _api, onClose: () => setState(() => _setup = false)),
+      );
+    }
+
     // Menubar panel — the default surface. Compact, glanceable, dismissed on
     // click-away. The full window is opened deliberately.
     if (!_fullWindow) {
@@ -168,6 +178,7 @@ class _VaultHomeState extends State<VaultHome> {
             connected: _connected && _daemonUp,
             onOpenFull: () => _menubar?.openFullWindow(),
             onQuit: () => exit(0),
+            onSetup: () => setState(() => _setup = true),
           ),
         ),
       );

@@ -15,6 +15,8 @@ class Snapshot {
   final int spendingMinor;
   final int incomeMinor;
   final int transfersMinor;
+  final int investmentsMinor;
+  final int investmentsInMinor;
   final int documents;
   final int transactions;
   final int entities;
@@ -24,6 +26,8 @@ class Snapshot {
     required this.spendingMinor,
     required this.incomeMinor,
     required this.transfersMinor,
+    this.investmentsMinor = 0,
+    this.investmentsInMinor = 0,
     required this.documents,
     required this.transactions,
     required this.entities,
@@ -41,6 +45,8 @@ class Snapshot {
       spendingMinor: (j['spending_minor'] ?? 0) as int,
       incomeMinor: (j['income_minor'] ?? 0) as int,
       transfersMinor: (j['transfers_minor'] ?? 0) as int,
+      investmentsMinor: (j['investments_minor'] ?? 0) as int,
+      investmentsInMinor: (j['investments_in_minor'] ?? 0) as int,
       documents: (c['documents'] ?? 0) as int,
       transactions: (c['transactions'] ?? 0) as int,
       entities: (c['entities'] ?? 0) as int,
@@ -244,6 +250,30 @@ class VaultApi {
 
   Future<List<Map<String, dynamic>>> reviews() => _get('/v1/reviews',
       (j) => ((j['reviews'] ?? const []) as List).cast<Map<String, dynamic>>());
+
+  /// Setup page: AI provider config, vault paths, active jurisdiction.
+  Future<Map<String, dynamic>> settings() =>
+      _get('/v1/settings', (j) => j);
+
+  /// Persist AI provider settings. The daemon reloads them on restart.
+  /// NOTE: the parameter is `aiBaseUrl`, not `baseUrl` — the latter would
+  /// shadow the client's own field and build a nonsense URL.
+  Future<Map<String, dynamic>> saveSettings({
+    String? aiBaseUrl,
+    String? model,
+    String? apiKey,
+  }) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/settings'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({
+        if (aiBaseUrl != null && aiBaseUrl.isNotEmpty) 'base_url': aiBaseUrl,
+        if (model != null && model.isNotEmpty) 'model': model,
+        if (apiKey != null && apiKey.isNotEmpty) 'api_key': apiKey,
+      }),
+    );
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
 
   /// Push a file into P0 intake. Used by drag-and-drop.
   Future<Map<String, dynamic>> ingest(String path) async {
