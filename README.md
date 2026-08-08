@@ -1,8 +1,10 @@
 # Quick2AVault
 
-A macOS desktop utility that turns your financial document chaos into a calm, organised, AI-powered vault. Drop a PDF, spreadsheet, or photo of a receipt onto a floating orb, and **Quick2AVault** safely archives it, converts it to searchable Markdown, reads its contents, classifies it by person and financial period, converts foreign currencies at official exchange rates, and surfaces only the things that actually need your attention.
+A macOS desktop utility that turns your financial document chaos into a calm, organised, AI-powered vault. Drop a PDF, spreadsheet, or photo of a receipt into the vault and **Quick2AVault** safely archives it, converts it to searchable Markdown, reads its contents, classifies it by person and financial period, converts foreign currencies at official exchange rates, and surfaces only the things that actually need your attention.
 
-> **Platform note:** **Quick2AVault** is a Glaze SDK accessory app (`activationPolicy: "accessory"`). It has no Dock icon and no Cmd-Tab presence — the only visible UI is the floating orb and the transient windows it opens.
+> **Architecture note:** Quick2AVault is two programs. A **headless TypeScript daemon** owns the vault, the SQLite ledger, and every AI call, exposing a token-authenticated HTTP API on `localhost:4477`. A **Flutter macOS client** in `desktop/` is one consumer of that API — not the app itself. Any client (CLI, MCP server, another UI) can speak the same protocol.
+>
+> The original Electron/Glaze implementation was retired on 2026-08-09. Its complete history is archived at [thecont1/Quick2AVault-archived](https://github.com/thecont1/Quick2AVault-archived), tagged `glaze-final`.
 
 ## The Problem
 
@@ -20,26 +22,29 @@ Personal financial documents live everywhere: email attachments, phone photos, d
 - **How much** money moved, and in what direction — income, expense, investment, tax?
 - **What does it mean** — suggested accounting treatment, financial impact, and confidence-backed insights?
 
-It's a safe deposit box, a filing cabinet, a financial analyst, and a compliance assistant — all in a tiny orb that lives on your desktop.
+It's a safe deposit box, a filing cabinet, a financial analyst, and a compliance assistant — running quietly as a local daemon you own.
 
 ## Core Features
 
-### Floating Orb Interface
-A frameless, transparent, always-on-top circle that lives on all workspaces, remembers its position, and accepts drag-and-drop files. A single click opens the **Financial Snapshot**; a right-click shows the native menu. The orb pulses during processing and stays calm when idle.
+### Local-First, Client-Agnostic
+The daemon is the product; the UI is a client. Everything — your documents, the
+ledger, the learned rules — stays on your machine, reachable over a
+token-authenticated API on `localhost`. The Flutter client in `desktop/` is the
+reference UI, but the CLI and MCP server are equally first-class consumers.
 
 ### Non-Blocking, Safe-Receipt Ingestion
-Drop a file — any file — and the moment it's safely copied into your vault, you get immediate positive feedback. The orb acknowledges receipt with a check animation before background processing begins. The app stays fully responsive: you can drop another batch while the first is still processing, and it queues cleanly instead of freezing.
+Drop a file — any file — and the moment it's safely copied into your vault, you get an immediate receipt. Heavy work happens afterwards on a persisted job queue, so you can add another batch while the first is still processing, and a crash resumes where it left off instead of starting over.
 
 - **Phase 1 (intake):** Hash with SHA-256, deduplicate, copy the original into `~/Documents/Quick2AVault/Raw/<YYYY-MM-DD>/` — returns instantly.
 - **Phase 2 (processing):** Convert to Markdown, run AI extraction, classify, and record — all in the background.
 - **Batch support:** Drop 10 files at once; see live progress.
-- **Failure safety:** If processing fails, the original is always safe. A near-orb toast explains what happened.
+- **Failure safety:** If processing fails, the original is always safe. The job records why, and the document can be retried.
 
 ### Gmail Financial Dropbox (Gmail Only)
 Settings can connect one user-chosen Gmail address by entering only its local part; the app derives
 `<local-part>@gmail.com` and stores no hardcoded mailbox. Google authorization uses an installed-desktop
-PKCE flow with a loopback callback and read-only Gmail scope. Refresh tokens are held by Glaze's encrypted
-OAuth token store, never in SQLite preferences.
+PKCE flow with a loopback callback and read-only Gmail scope. Refresh tokens are held in the macOS Keychain
+(`daemon/gmail/token-store.ts`), never in SQLite preferences.
 
 Quick2A Vault performs a bounded 30-day bootstrap (up to 100 messages), then advances via Gmail history IDs
 every five minutes. Supported attachments and relevant body-only transaction alerts enter the same SHA-256
@@ -88,7 +93,7 @@ Once a document is recognized as a financial transaction, **Quick2AVault** deriv
 A real person may appear across documents under several name variants: first-name/last-name form, reversed form, or an initialled form. **Quick2AVault** introduces a canonical Person entity with known aliases, semantic roles (self, spouse, client, supplier, bank RM, accountant, etc.), confidence, and supporting evidence. Entity resolution matches detected names using exact alias match, reordered first/last names, and initials/shortened variants. High-confidence matches link silently; uncertain ones create candidates that Learning Mode asks about. User-confirmed fields are never overwritten by AI.
 
 ### Financial Snapshot
-A click-to-open popup beside the orb that summarizes the vault by person — counts, date ranges, categories, foreign-invoice totals converted to INR, an Unidentified bucket, and a global Needs Review count. Cached in SQLite for instant opening; a refresh re-runs AI attribution. Income, Spending, and Investments are strictly document-derived: every rupee in a hero total is represented by a document in its drill-down. Scheduled/manual recurring entries are tracked separately and may appear in clearly labelled watch-category rollups, but are not merged into hero totals until trustworthy scheduled-to-actual reconciliation exists.
+A summary view of the vault by person — counts, date ranges, categories, foreign-invoice totals converted to INR, an Unidentified bucket, and a global Needs Review count. Cached in SQLite for instant opening; a refresh re-runs AI attribution. Income, Spending, and Investments are strictly document-derived: every rupee in a hero total is represented by a document in its drill-down. Scheduled/manual recurring entries are tracked separately and may appear in clearly labelled watch-category rollups, but are not merged into hero totals until trustworthy scheduled-to-actual reconciliation exists.
 
 ### Review Queue
 A lightweight triage inbox for document intelligence the app isn't confident about. Every ingested document gets one review row per tracked field (person, document type, vendor, date, financial year, amount, currency conversion, accounting hint, financial impact). Anything low-confidence, conflicting, or missing stays pending and surfaces in the queue. Resolving a field keeps a full audit trail, never overwrites a user-confirmed value, and feeds corrections back into learned rules. Zero-value invoices are correctly treated as valid when the rest of the extraction is coherent.
@@ -105,8 +110,11 @@ Stock-broker contract notes ("Contract Note cum Tax Invoice") are recognized as 
 ### Manual Recurring Entries
 Not everything arrives as a document. Salary, rent, SIPs, school fees, subscriptions, EMIs, and utilities are tracked as manual recurring entries with configurable frequency, scope (business/personal), impact bucket, and optional watch category. They are clearly marked as scheduled/manual. They can feed labelled watch-category planning rollups with a separate scheduled-entry count, but do not alter document-derived Income, Spending, or Investments hero totals. A future reconciliation layer may link schedules to actual documents; v1.1.1 deliberately does not infer those matches.
 
-### Native Notifications & Near-Orb Toasts
-Every batch gets a native macOS notification summarizing what happened — documents added, duplicates skipped, irrelevant files filed, conversion failures. Genuine (non-AI-blocked) conversion failures surface as a near-orb, non-focusable toast that makes clear: the original is safe, processing failed, and the document may need review.
+### Live Event Stream
+The daemon publishes domain events (`DocumentReceived`, `MarkdownReady`,
+`AnalysisComplete`, `TransactionReResolved`) over SSE on `/v1/events`. Clients
+subscribe rather than poll, so progress appears as it happens and any number of
+UIs stay in sync with one vault.
 
 ### Lifecycle Management
 Documents move through clear, reversible states: **active**, **irrelevant**, **excluded**, **reprocess requested**. You can delete from the active working set without erasing from disk, restore excluded documents, and reprocess from the existing raw file — no re-drop needed. The state model is surfaced everywhere: Review Queue, Document Browser, and Evidence Card.
@@ -118,12 +126,13 @@ On installation, **Quick2AVault** prompts you to confirm a small set of financia
 
 | Layer | Technology |
 |-------|-----------|
-| **Runtime / Framework** | Glaze SDK (`@glaze/core/backend`, `@glaze/core/ai`) |
-| **Language** | TypeScript 5.5+ (ES modules) |
-| **Frontend** | React 19, TanStack Router, TanStack Query, Tailwind CSS 4, Radix UI / `@radix-ui/colors`, Lucide icons, `cmdk`, `class-variance-authority`, `tailwind-merge` |
-| **Backend** | Node.js main process, `node:sqlite`, `pdf-parse`, `xlsx` |
-| **Build** | Vite 8, esbuild, `glaze.ts` CLI wrapper |
-| **Node Engine** | `>= 24` |
+| **Daemon** | Node.js ≥ 24, plain TypeScript (ES modules), no framework |
+| **Ledger** | `node:sqlite` (`DatabaseSync`), FTS5 for search |
+| **AI** | `@anthropic-ai/sdk` — extraction only; never rewrites your documents |
+| **Conversion** | `@firecrawl/anydoc`, native macOS Vision OCR (`daemon/ocr.swift`) |
+| **Desktop client** | Flutter (macOS), talks to the daemon over HTTP |
+| **Integrations** | `@modelcontextprotocol/sdk` (MCP server), Gmail API |
+| **Dev tooling** | `tsx`, `eslint`, `oxfmt`, per-file `*.smoke.ts` tests |
 | **Package Manager** | npm (pinned via `packageManager` in `package.json`) |
 
 ## Data & Storage Paths
@@ -134,38 +143,39 @@ On installation, **Quick2AVault** prompts you to confirm a small set of financia
 | **Vault Markdown** | `~/Documents/Quick2AVault/Markdown/<YYYY-MM-DD>/` |
 | **Irrelevant docs** | `~/Documents/Quick2AVault/Irrelevant/<YYYY-MM-DD>/` |
 | **Learned rules mirror** | `~/Documents/Quick2AVault/RULES.md` |
-| **SQLite database** | `~/Library/Application Support/Quick2AVault/quick2avault.db` |
-| **Orb position/state** | `~/Library/Application Support/Quick2AVault/orb-state.json` |
+| **SQLite database** | `~/Documents/Quick2AVault/vault.db` |
+
+The database lives *inside* the vault directory, not in Application Support. The
+vault is one self-contained, portable, backup-able folder: copy it and you have
+moved everything, ledger included.
 
 ## Architecture Overview
 
 ### Non-Blocking Ingestion Pipeline
 
 ```
-Drop → intakeFile() → enqueueDrop() → [background queue] → processIntake()
-  │         │              │                  │
-  │         │              │                  └── 1. Read text (extractText / OCR)
-  │         │              │                  └── 2. Triage relevance (triage.ts)
-  │         │              │                  └── 3. Convert to Markdown (converter.ts)
-  │         │              │                  └── 4. Extract fields (extraction.ts)
-  │         │              │                  └── 5. Classify FY (preferences.ts)
-  │         │              │                  └── 6. Derive accounting hint (accounting.ts)
-  │         │              │                  └── 7. Derive financial impact (impact.ts)
-  │         │              │                  └── 8. Extract contract note (contract-note.ts)
-  │         │              │                  └── 9. Insert document record (database.ts)
-  │         │              │                  └── 10. Record reviews (reviews.ts)
-  │         │              │                  └── 11. Prepare training (training.ts)
+Drop → ingestFile() → job queue → convert → analyse → link
   │         │              │
-  │         │              └── Returns receipt immediately (accepted/duplicate/error)
+  │         │              ├── 1. Convert to markdown (adapters.ts: anydoc / Vision OCR)
+  │         │              │      records converter, version, and a hash of the text
+  │         │              ├── 2. Extract fields (ai-provider.ts → extraction-contract.ts)
+  │         │              │      records the model and the markdown hash it read
+  │         │              ├── 3. Index for search (search.ts → FTS5)
+  │         │              ├── 4. Match against existing transactions (matcher.ts)
+  │         │              ├── 5. Record or link the transaction (ledger.ts)
+  │         │              └── 6. Resolve canonical fields from claims (claims.ts)
   │         │
-  │         └── SHA-256 hash → check duplicates → copy to vault → return receipt
+  │         └── SHA-256 hash → dedupe → copy into the vault → return a receipt
   │
-  └── File dropped on orb → immediate visual acknowledgment (check animation)
+  └── Any client: Flutter UI, CLI, MCP, or a POST to /v1/intake
 ```
+
+Every step is a row in `jobs`, so a crash resumes rather than restarts, and a
+failed conversion never blocks the original from being safely stored.
 
 ### AI Behavior & Graceful Degradation
 
-AI is **optional** (`capabilities.ai.mode: "optional"`, grade `fast`). If the user hasn't enabled AI or credits are exhausted:
+AI is **optional**. Without an API key, or when a call fails:
 
 - Markdown conversion falls back to the deterministic extracted representation.
 - Extraction returns empty/uncertain fields that go to the Review Queue.
@@ -173,12 +183,12 @@ AI is **optional** (`capabilities.ai.mode: "optional"`, grade `fast`). If the us
 - Learning Mode doesn't run without AI.
 - OCR falls back to empty text; the document is still stored safely.
 
-The app **never overwrites** a `user_confirmed` or `manual` field with AI output. This is enforced by `canOverwrite()` in `database.ts` and by the resolve logic in `reviews.ts`.
+The app **never overwrites** a user-confirmed field with AI output. Authority is `user > rule > import > ai`, and a confirmed claim is never overwritten by anything below it — enforced in one place, `writeClaim()` in `daemon/claims.ts`.
 
 ## Key Design Principles
 
 - **Calm but reversible.** The app doesn't destroy anything. Irrelevant files are kept, not deleted. Duplicates are logged, not silently dropped. Excluded documents can be restored.
-- **Immediate feedback, background processing.** "Received" comes before "processed." The orb acknowledges receipt instantly; heavy work happens off the critical path.
+- **Immediate feedback, background processing.** "Received" comes before "processed." Intake returns a receipt instantly; heavy work happens off the critical path on a resumable queue.
 - **Confidence-backed, never overpromised.** Every AI-derived field carries a confidence flag. Low-confidence results surface in the Review Queue with a clear explanation of what's uncertain.
 - **User authority over AI.** User-confirmed values are never overwritten. Corrections feed learned rules that auto-apply in the future.
 - **Financial-period aware.** Documents are classified into financial years from day one. The app reasons in accounting periods, not just raw dates.
@@ -186,46 +196,81 @@ The app **never overwrites** a `user_confirmed` or `manual` field with AI output
 
 ## Development
 
-All commands run from this directory:
-
 ```bash
 npm install
-npm run dev          # start the app in dev mode
-npm run dev:renderer
-npm run build        # build the app into ../.glaze/build
-npm run lint
+
+npm run daemon       # start the daemon (prints its auth token on boot)
+npm run daemon:dev   # same, with watch-reload
+
+npm test             # every daemon/*.smoke.ts
 npm run type-check
+npm run lint
 npm run format
+
+npm run app          # Flutter client (macOS)
+npm run app:test
+npm run app:build
 ```
 
-### Gmail OAuth build setup
-
-Create a Google Cloud OAuth client with application type **Desktop app**, enable the Gmail API, and configure
-the OAuth consent screen. Expose its public client ID to the app process as:
+The daemon binds `localhost:4477` and mints a random bearer token each boot,
+printed to stdout. Pin it for scripting:
 
 ```bash
-QUICK2AVAULT_GMAIL_CLIENT_ID="<desktop OAuth client ID>" npm run dev
+Q2AV_TOKEN=devtoken npm run daemon
+curl -H "Authorization: Bearer devtoken" localhost:4477/v1/health
 ```
 
-No client secret is required or stored for the desktop PKCE flow. For an OAuth app still in Testing mode,
-add intended Gmail accounts as test users. Gmail setup remains unavailable in Settings when the client ID is
-absent; no mailbox value is supplied by the build.
+| Variable | Meaning |
+|----------|---------|
+| `Q2AV_PORT` | API port (default `4477`) |
+| `Q2AV_TOKEN` | Bearer token; random per boot when unset |
+| `Q2AV_VAULT` | Vault root (default `~/Documents/Quick2AVault`) |
 
-`glaze.ts` resolves the Glaze CLI from one of:
-- `../glaze-core/cli/glaze.js`
-- `../../../sdk/current/@glaze/core/cli/glaze.js`
+### Migrating from the Glaze app
 
-This means the repo is expected to live inside a Glaze app container.
+A one-time importer carries corrections out of the retired Electron app's
+database into the daemon's claim store, matching documents by SHA-256:
+
+```bash
+npm run migrate:glaze -- --dry-run   # report only, writes nothing
+npm run migrate:glaze -- --apply
+```
+
+It is idempotent and deliberately conservative: it imports vendor, document
+type, document date, amount, person links and confirmed aliases, and **refuses**
+to import fields whose vocabularies don't match between the two apps (Glaze's
+accounting treatment and impact classification). Those stay in the archive
+rather than being guessed at.
+
+### Gmail OAuth setup
+
+Create a Google Cloud OAuth client with application type **Desktop app**, enable
+the Gmail API, and configure the consent screen. Expose the public client ID:
+
+```bash
+QUICK2AVAULT_GMAIL_CLIENT_ID="<desktop OAuth client ID>" npm run daemon
+```
+
+No client secret is required or stored for the desktop PKCE flow. For an OAuth
+app still in Testing mode, add intended Gmail accounts as test users. Gmail setup
+stays unavailable when the client ID is absent.
 
 ## Status & Known Limitations
 
-The app is functionally complete through Gmail-only intake and the Document Browser + Evidence Card. Gmail
-requires network access, a configured Google desktop OAuth client ID, and user consent. The AI-dependent paths
-(conversion, extraction, snapshot refresh, training question generation, FX conversion, OCR, contract note
-extraction) are validated statically and by schema, but their quality and runtime behavior depend on actual
-inputs and available AI credits. The Frankfurter FBIL API is keyless but requires network access.
+The daemon is the working implementation: intake, conversion, extraction,
+matching, the ledger, provenance, lexical search and the claims resolver all run
+against a real vault. The Flutter client is in active development and does not
+yet cover every daemon capability.
 
-Recurring entries are planning records, not booked transactions. They remain separate from hero totals to prevent double-counting when a rent receipt, contract note, subscription invoice, or other actual document is also present. Reconciliation states (scheduled, actual, matched) are reserved for a later release rather than shipped as an unreliable heuristic.
+AI-dependent paths (conversion, extraction, snapshot refresh, FX conversion, OCR,
+contract-note extraction) are validated statically and by schema, but their
+quality depends on actual inputs and available credits. The Frankfurter FBIL API
+is keyless but requires network access.
+
+Recurring entries are planning records, not booked transactions. They stay
+separate from hero totals to prevent double-counting when an actual document is
+also present. Reconciliation states (scheduled, actual, matched) are reserved for
+a later release rather than shipped as an unreliable heuristic.
 
 ## License
 
