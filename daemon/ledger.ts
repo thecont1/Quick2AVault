@@ -375,6 +375,61 @@ export function recordTransaction(
   if (sourceAccountId) addLeg(sourceAccountId, "debit");
   if (isTransfer && destAccountId) addLeg(destAccountId, "credit");
 
+  // ── holdings (portfolio line items) ───────────────────────────────────────
+  // A contract note's net amount says what left the bank; only these rows say
+  // what is held. Each security becomes an `instrument` entity, so "Tata
+  // Motors" bought across three notes resolves to ONE instrument.
+  const holdings = Array.isArray(x.holdings) ? x.holdings : [];
+  let holdingsWritten = 0;
+  for (const h of holdings) {
+    const name = typeof h?.name === "string" ? h.name.trim() : "";
+    if (!name) continue;
+    // ISIN is the strongest identity a security has — pass it as an
+    // identifier so two spellings of the same scrip converge.
+    const instrumentId = resolveEntity(db, ports, name, "instrument", {
+      identifiers: h.isin ? { isin: String(h.isin) } : undefined,
+    });
+    // Side defaults to the transaction's own direction: money out = buy.
+    const side = h.side === "sell" || h.side === "buy" ? h.side : direction === "in" ? "sell" : "buy";
+    db.prepare(
+      `INSERT INTO holdings
+        (id, transaction_id, document_id, instrument_entity_id, side,
+         quantity, price_minor, amount_minor, isin, occurred_at, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      newId("hld"),
+      id,
+      documentId,
+      instrumentId,
+      side,
+      typeof h.quantity === "number" ? h.quantity : null,
+      typeof h.price_minor === "number" ? Math.round(h.price_minor) : null,
+      typeof h.amount_minor === "number" ? Math.round(h.amount_minor) : null,
+      h.isin ?? null,
+      occurred,
+      now,
+    );
+    holdingsWritten++;
+  }
+  // A single-security trade also fills the transaction's own instrument
+  // columns, so the simple case needs no join.
+  if (holdingsWritten === 1) {
+    const h = holdings.find((v) => typeof v?.name === "string" && v.name.trim());
+    if (h) {
+      db.prepare(
+        "UPDATE transactions SET instrument_entity_id=(SELECT instrument_entity_id FROM holdings WHERE transaction_id=? LIMIT 1), quantity=?, price_minor=? WHERE id=?",
+      ).run(
+        id,
+        typeof h.quantity === "number" ? h.quantity : null,
+        typeof h.price_minor === "number" ? Math.round(h.price_minor) : null,
+        id,
+      );
+    }
+  }
+  if (holdingsWritten) {
+    ports.logger.info("holdings recorded", { transaction_id: id, securities: holdingsWritten });
+  }
+
   // ── evidence ──────────────────────────────────────────────────────────────
   db.prepare(
     `INSERT OR IGNORE INTO transaction_documents

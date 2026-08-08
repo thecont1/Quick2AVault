@@ -568,6 +568,37 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
       // ── queries ──────────────────────────────────────────────────────────
       switch (p) {
+        case "/v1/portfolio": {
+          // Net position per security, derived from holdings line items —
+          // never from the transaction's net rupee figure, which says what
+          // left the bank rather than what is held.
+          const rows = db
+            .prepare(
+              `SELECT e.id, e.display_name AS name, h.isin,
+                      SUM(CASE WHEN h.side='buy' THEN h.quantity ELSE -h.quantity END) AS quantity,
+                      SUM(CASE WHEN h.side='buy'
+                               THEN COALESCE(h.amount_minor, h.quantity*h.price_minor)
+                               ELSE -COALESCE(h.amount_minor, h.quantity*h.price_minor) END) AS cost_minor,
+                      COUNT(*) AS trades,
+                      MIN(h.occurred_at) AS first_bought,
+                      MAX(h.occurred_at) AS last_traded
+                 FROM holdings h
+                 JOIN entities e ON e.id = h.instrument_entity_id
+                GROUP BY e.id
+                ORDER BY cost_minor DESC`,
+            )
+            .all() as Array<Record<string, unknown>>;
+          // Fully-exited positions are kept out of the holdings list but their
+          // realised cost still belongs in the totals.
+          const open = rows.filter((r) => Number(r.quantity) > 0);
+          return send(res, 200, {
+            holdings: open,
+            closed: rows.filter((r) => Number(r.quantity) <= 0),
+            total_cost_minor: open.reduce((s, r) => s + Number(r.cost_minor || 0), 0),
+            securities: open.length,
+          });
+        }
+
         case "/v1/snapshot":
           return send(res, 200, snapshot(db, resolvePeriod(pack, url.searchParams)));
 

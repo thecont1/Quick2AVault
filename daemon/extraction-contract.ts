@@ -60,6 +60,20 @@ export interface ExtractionResult {
   };
   /** Raw merchant descriptor as printed (e.g. "SWIGGY*BLR 080"). */
   counterparty_descriptor: string | null;
+  /**
+   * Securities traded, when the document is a contract note or trade
+   * confirmation. One entry per SECURITY, not per document: a single note
+   * often settles a dozen different scrips, and collapsing them into one
+   * rupee figure loses the portfolio entirely.
+   */
+  holdings?: Array<{
+    name: string;
+    isin?: string | null;
+    quantity?: number | null;
+    price_minor?: number | null;
+    amount_minor?: number | null;
+    side?: "buy" | "sell" | null;
+  }> | null;
   /** Account the money moved FROM, as printed (e.g. "Example Bank Credit Card ending 4242"). */
   source_of_funds_text: string | null;
   /** For transfers: the account money moved INTO. */
@@ -125,6 +139,23 @@ export const EXTRACTION_TOOL_SCHEMA = {
         description: "order_no, invoice_no, approval_code, utr, wallet_ref, auth_code. Include every ID present.",
       },
       counterparty_descriptor: { type: ["string", "null"] },
+      holdings: {
+        type: ["array", "null"],
+        description:
+          "Securities traded. ONE ENTRY PER SECURITY — a contract note settling 18 scrips must return 18 entries, not 1. Omit entirely for non-trade documents.",
+        items: {
+          type: "object",
+          properties: {
+            name: { type: "string", description: "Security name exactly as printed." },
+            isin: { type: ["string", "null"], description: "ISIN when printed (INE... / INF...)." },
+            quantity: { type: ["number", "null"], description: "Number of shares/units." },
+            price_minor: { type: ["integer", "null"], description: "Per-unit price in paise." },
+            amount_minor: { type: ["integer", "null"], description: "Line value in paise." },
+            side: { type: ["string", "null"], enum: ["buy", "sell", null] },
+          },
+          required: ["name"],
+        },
+      },
       source_of_funds_text: { type: ["string", "null"] },
       destination_of_funds_text: { type: ["string", "null"] },
       purpose_text: { type: ["string", "null"] },
@@ -137,7 +168,12 @@ export const EXTRACTION_TOOL_SCHEMA = {
       confidence: { type: "number" },
       notes: { type: ["string", "null"] },
     },
-    required: ["doc_type", "currency", "parties", "reference_ids", "is_wallet_topup", "confidence"],
+    // `holdings` is REQUIRED even though it is nullable. Left optional, the
+    // model simply omitted it on every contract note — the securities are the
+    // most expensive part of the document to read, so an optional field is an
+    // invitation to skip the work. Required-and-nullable forces a decision:
+    // return the line items, or explicitly return null for a non-trade doc.
+    required: ["doc_type", "currency", "parties", "reference_ids", "is_wallet_topup", "confidence", "holdings"],
   },
 } as const;
 
@@ -197,6 +233,13 @@ Rules that matter more than anything else:
      - SELL of shares/units  -> direction="in".
    Report the trade's net amount, and set category_hint="investment" so it can
    be separated from consumption. Never label a security as an "account".
+
+   ALSO fill the holdings array, ONE ENTRY PER SECURITY. A contract note that
+   settles eighteen different scrips must return eighteen entries — each with
+   the security name as printed, ISIN if shown, quantity, per-unit price in
+   paise, and side ("buy" or "sell"). The net rupee figure alone is not a
+   portfolio: without the line items there is no way to know what is held.
+   For a single-security note, return one entry.
 
 6. WALLET TOP-UPS ARE NOT PURCHASES. If the document shows money moving from
    your bank/card INTO a wallet balance ("ADD MONEY", "load", "top-up", balance

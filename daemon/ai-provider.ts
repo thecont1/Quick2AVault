@@ -65,7 +65,11 @@ export function createAnthropicProvider(cfg: AiConfig, logger: Logger): AiProvid
       try {
         const res = await client.messages.create({
           model,
-          max_tokens: cfg.maxTokens ?? 2048,
+          // A contract note settling 18 securities needs ~18 line items with
+          // name, ISIN, quantity and price. At 2048 the model silently
+          // dropped the holdings array rather than exceed the budget — the
+          // extraction looked fine and the portfolio was simply absent.
+          max_tokens: cfg.maxTokens ?? 8192,
           // NOTE: `temperature` is REJECTED by Claude 5 models
           // ("`temperature` is deprecated for this model", HTTP 400).
           // Determinism comes from the forced tool_choice + strict schema.
@@ -124,6 +128,14 @@ function normalise(raw: Record<string, unknown>): ExtractionResult {
     is_wallet_topup: raw.is_wallet_topup === true,
     confidence: typeof raw.confidence === "number" ? raw.confidence : 0.5,
     notes: (raw.notes as string) ?? null,
+    // Portfolio line items. NOTE: this function rebuilds the result field by
+    // field, so ANY field added to the contract must be copied here too —
+    // otherwise the model returns it and this silently discards it. That is
+    // exactly what happened to holdings: the extraction was correct and the
+    // data died in normalisation.
+    holdings: Array.isArray(raw.holdings)
+      ? (raw.holdings as ExtractionResult["holdings"])
+      : null,
   };
 }
 

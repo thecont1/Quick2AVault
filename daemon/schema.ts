@@ -187,6 +187,27 @@ CREATE TABLE IF NOT EXISTS source_events (
   PRIMARY KEY (source, external_id)
 );
 
+-- ── Holdings (portfolio line items) ────────────────────────────────────────
+-- One row per SECURITY per trade. A contract note settling eighteen scrips
+-- produces eighteen rows: the net rupee figure on the transaction is what left
+-- the bank, but only these rows say what is actually held.
+CREATE TABLE IF NOT EXISTS holdings (
+  id                  TEXT PRIMARY KEY,
+  transaction_id      TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+  document_id         TEXT REFERENCES documents(id),
+  instrument_entity_id TEXT NOT NULL REFERENCES entities(id),
+  side                TEXT NOT NULL CHECK (side IN ('buy','sell')),
+  quantity            REAL,
+  price_minor         INTEGER,
+  amount_minor        INTEGER,
+  isin                TEXT,
+  occurred_at         TEXT NOT NULL,
+  created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_holdings_instrument ON holdings(instrument_entity_id);
+CREATE INDEX IF NOT EXISTS idx_holdings_txn ON holdings(transaction_id);
+CREATE INDEX IF NOT EXISTS idx_holdings_date ON holdings(occurred_at);
+
 CREATE TABLE IF NOT EXISTS app_settings (
   key   TEXT PRIMARY KEY,
   value TEXT
