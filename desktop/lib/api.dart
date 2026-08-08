@@ -547,11 +547,22 @@ class VaultApi {
   /// The ledger for a period. Must be given the SAME period as the snapshot —
   /// a list from a different window than the totals above it is what made the
   /// period buttons look broken.
-  Future<List<Txn>> transactions({String? period, String? month, String? fy}) {
+  ///
+  /// [bucket] narrows the list to the transactions that produced one hero
+  /// figure: 'income', 'spending', 'investments' or 'transfers'. The daemon
+  /// applies the same predicates snapshot() uses, so the list always sums to
+  /// the figure it explains.
+  Future<List<Txn>> transactions({
+    String? period,
+    String? month,
+    String? fy,
+    String? bucket,
+  }) {
     final q = <String, String>{};
     if (period != null) q['period'] = period;
     if (month != null) q['month'] = month;
     if (fy != null) q['fy'] = fy;
+    if (bucket != null) q['bucket'] = bucket;
     final qs = q.isEmpty ? '' : '?${Uri(queryParameters: q).query}';
     return _get('/v1/transactions$qs', (j) =>
         ((j['transactions'] ?? const []) as List)

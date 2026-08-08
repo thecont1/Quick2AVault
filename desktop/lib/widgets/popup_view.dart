@@ -30,6 +30,11 @@ class PopupView extends StatelessWidget {
   /// Non-null when the daemon rejected our token. The totals are then
   /// placeholders, and showing them as Rs 0 would read as an empty vault.
   final String? authError;
+  /// Which hero figure the receipts list is explaining: 'income', 'spending',
+  /// 'investments' or 'transfers'. Defaults to spending — the figure people
+  /// actually interrogate.
+  final String bucket;
+  final ValueChanged<String>? onBucketChanged;
 
   const PopupView({
     super.key,
@@ -50,6 +55,8 @@ class PopupView extends StatelessWidget {
     this.reviewCount = 0,
     this.treemap = TreemapData.empty,
     this.authError,
+    this.bucket = 'spending',
+    this.onBucketChanged,
   });
 
   @override
@@ -88,7 +95,11 @@ class PopupView extends StatelessWidget {
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-          child: _MoneyTriple(snapshot: snapshot),
+          child: _MoneyTriple(
+            snapshot: snapshot,
+            selected: bucket,
+            onSelect: onBucketChanged ?? (_) {},
+          ),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
@@ -116,14 +127,13 @@ class PopupView extends StatelessWidget {
                       ),
                       const SizedBox(height: 14),
                     ],
-                    // Say what this list actually is. "RECENT" alone left the
-                    // rule invisible: it is the newest few transactions IN THE
-                    // SELECTED PERIOD, capped at 4, with the rest in the full
-                    // window. Without the count the list looked arbitrarily
-                    // truncated.
+                    // RECEIPTS, not RECENT: this list is now the evidence for
+                    // whichever hero card is selected, so it must name the
+                    // bucket it explains. "Recent" described an ordering; what
+                    // matters here is WHICH figure these documents produced.
                     _Label(txns.length > recent.length
-                        ? 'RECENT · ${recent.length} of ${txns.length} this period'
-                        : 'RECENT · ${txns.length} this period'),
+                        ? '${_bucketLabel(bucket)} · ${recent.length} of ${txns.length}'
+                        : '${_bucketLabel(bucket)} · ${txns.length}'),
                     const SizedBox(height: 8),
                     ...recent.map((t) => _MiniTxn(txn: t)),
                   ],
@@ -206,103 +216,155 @@ class _Header extends StatelessWidget {
 /// Income · Spending · Investments as stacked tinted cards, matching the
 /// reference design: saturated heading, document count beneath, and a large
 /// right-aligned figure.
+/// Section heading for the receipts list, naming the figure it explains.
+String _bucketLabel(String bucket) => switch (bucket) {
+      'income' => 'INCOME RECEIPTS',
+      'investments' => 'INVESTMENT RECEIPTS',
+      'transfers' => 'TRANSFER RECEIPTS',
+      _ => 'SPENDING RECEIPTS',
+    };
+
 class _MoneyTriple extends StatelessWidget {
   final Snapshot snapshot;
-  const _MoneyTriple({required this.snapshot});
+  final String selected;
+  final ValueChanged<String> onSelect;
+  const _MoneyTriple({
+    required this.snapshot,
+    required this.selected,
+    required this.onSelect,
+  });
 
   @override
   Widget build(BuildContext context) => Column(children: [
         _MoneyCard(
           label: 'Income',
+          bucket: 'income',
           minor: snapshot.incomeMinor,
           fill: VaultColors.incomeFill,
           border: VaultColors.incomeBorder,
           ink: VaultColors.incomeInk,
           documents: snapshot.incomeDocs,
+          selected: selected == 'income',
+          onTap: () => onSelect('income'),
         ),
         const SizedBox(height: 9),
         _MoneyCard(
           label: 'Spending',
+          bucket: 'spending',
           minor: snapshot.spendingMinor,
           fill: VaultColors.spendFill,
           border: VaultColors.spendBorder,
           ink: VaultColors.spendInk,
           documents: snapshot.spendingDocs,
+          selected: selected == 'spending',
+          onTap: () => onSelect('spending'),
         ),
         const SizedBox(height: 9),
         _MoneyCard(
           label: 'Investments',
+          bucket: 'investments',
           minor: snapshot.investmentsMinor,
           fill: VaultColors.investFill,
           border: VaultColors.investBorder,
           ink: VaultColors.investInk,
           documents: snapshot.investmentDocs,
+          selected: selected == 'investments',
+          onTap: () => onSelect('investments'),
         ),
       ]);
 }
 
 class _MoneyCard extends StatelessWidget {
   final String label;
+  final String bucket;
   final int minor;
   final Color fill;
   final Color border;
   final Color ink;
   final int documents;
+  final bool selected;
+  final VoidCallback onTap;
 
   const _MoneyCard({
     required this.label,
+    required this.bucket,
     required this.minor,
     required this.fill,
     required this.border,
     required this.ink,
     required this.documents,
+    required this.selected,
+    required this.onTap,
   });
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        decoration: vaultCard(fill: fill, border: border),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            // Label column takes only what it needs, so the figure can hold
-            // the right edge of the card rather than floating beside the text.
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: TextStyle(
-                        fontFamily: displayFont,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: -0.2,
-                        color: ink)),
-                const SizedBox(height: 2),
-                Text(
-                  '$documents document${documents == 1 ? '' : 's'} processed',
-                  style: TextStyle(fontSize: 11, color: ink.withValues(alpha: 0.65)),
-                ),
-              ],
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Align(
-                alignment: Alignment.centerRight,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerRight,
-                  child: Text(
-                    rupeesWhole(minor),
-                    maxLines: 1,
-                    softWrap: false,
-                    textAlign: TextAlign.right,
-                    style: moneyStyle.copyWith(fontSize: 24, color: ink),
-                  ),
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        selected: selected,
+        label: '$label, ${rupeesWhole(minor)}, '
+            '$documents document${documents == 1 ? '' : 's'}'
+            '${selected ? ', showing receipts' : ''}',
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: onTap,
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              decoration: vaultCard(fill: fill, border: border).copyWith(
+                // The selected card is marked by a heavier border in its OWN
+                // ink, not a new accent colour: the card already carries the
+                // bucket's identity, and introducing a fourth hue to mean
+                // "selected" would compete with the three that mean money.
+                border: Border.all(
+                  color: selected ? ink : border,
+                  width: selected ? 2 : 1,
                 ),
               ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Label column takes only what it needs, so the figure can hold
+                  // the right edge of the card rather than floating beside the text.
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(label,
+                          style: TextStyle(
+                              fontFamily: displayFont,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.2,
+                              color: ink)),
+                      const SizedBox(height: 2),
+                      Text(
+                        '$documents document${documents == 1 ? '' : 's'} processed',
+                        style: TextStyle(fontSize: 11, color: ink.withValues(alpha: 0.65)),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerRight,
+                        child: Text(
+                          rupeesWhole(minor),
+                          maxLines: 1,
+                          softWrap: false,
+                          textAlign: TextAlign.right,
+                          style: moneyStyle.copyWith(fontSize: 24, color: ink),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ],
+          ),
         ),
       );
 }

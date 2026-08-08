@@ -776,12 +776,41 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           // always-true clause rather than passed through as NULL bounds —
           // otherwise "All time" returns an empty ledger.
           const bounded = period.from !== null && period.to !== null;
+
+          // Optional bucket filter, so clicking a hero card can show exactly
+          // the transactions that produced it.
+          //
+          // These predicates are LIFTED FROM snapshot() verbatim — the same
+          // INVEST test, the same `status <> 'scheduled'` exclusion, the same
+          // direction. If they drift apart the receipts list stops summing to
+          // the figure it claims to explain, which is the one thing this
+          // feature must never do. See daemon/api.ts snapshot().
+          const bucket = url.searchParams.get("bucket");
+          const INVEST = `(t.instrument_entity_id IS NOT NULL
+                           OR lower(COALESCE(t.category_id,'')) LIKE '%invest%'
+                           OR lower(COALESCE(t.impact_bucket,'')) LIKE '%invest%')`;
+          const bucketClause =
+            bucket === "income"
+              ? `t.direction='in' AND t.status <> 'scheduled' AND NOT ${INVEST}`
+              : bucket === "spending"
+                ? `t.direction='out' AND t.status <> 'scheduled' AND NOT ${INVEST}`
+                : bucket === "investments"
+                  ? `t.direction='out' AND t.status <> 'scheduled' AND ${INVEST}`
+                  : bucket === "transfers"
+                    ? `t.direction='transfer' AND t.status <> 'scheduled'`
+                    : null;
+
+          const clauses: string[] = [];
+          if (bounded) clauses.push("date(t.occurred_at) BETWEEN date(?) AND date(?)");
+          if (bucketClause) clauses.push(bucketClause);
+          const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+
           const rows = db
             .prepare(
               `SELECT t.*, e.display_name AS counterparty_name
                FROM transactions t
                LEFT JOIN entities e ON e.id = t.counterparty_entity_id
-               ${bounded ? "WHERE date(t.occurred_at) BETWEEN date(?) AND date(?)" : ""}
+               ${whereSql}
                ORDER BY t.occurred_at DESC LIMIT ?`,
             )
             .all(

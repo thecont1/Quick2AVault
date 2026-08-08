@@ -15,6 +15,7 @@ import 'package:window_manager/window_manager.dart';
 
 import 'api.dart';
 import 'menubar.dart';
+import 'window_store.dart';
 import 'theme.dart';
 import 'widgets/hero_row.dart';
 import 'widgets/txn_card.dart';
@@ -24,6 +25,8 @@ import 'widgets/drop_target.dart';
 import 'widgets/popup_view.dart';
 import 'widgets/setup_view.dart';
 import 'widgets/period_bar.dart';
+import 'widgets/vault_tabs.dart';
+import 'widgets/ledger_tab.dart';
 import 'widgets/treemap.dart';
 import 'widgets/people_view.dart';
 import 'widgets/review_view.dart';
@@ -79,12 +82,13 @@ class _VaultHomeState extends State<VaultHome> {
   bool _daemonUp = false;
   /// Popup (menubar panel) vs the full resizable window.
   bool _fullWindow = false;
-  /// Setup pane overrides whichever surface is showing.
-  bool _setup = false;
-  bool _people = false;
-  /// Document Review (Learning Mode). Its own view — it used to share the
-  /// _setup flag, so the review button opened Settings.
-  bool _review = false;
+  /// Which surface the full window is showing.
+  ///
+  /// Replaces three mutually-exclusive booleans (_setup / _review / _people).
+  /// Those could disagree — the Document Review bug was exactly that: onReview
+  /// and onSetup both set _setup, so Review opened Settings. An enum makes the
+  /// invalid state unrepresentable.
+  VaultTab _tab = VaultTab.ledger;
   bool _learningOn = true;
   int _reviewCount = 0;
   /// True when the last fetch failed, so the figures on screen describe an
@@ -93,6 +97,11 @@ class _VaultHomeState extends State<VaultHome> {
   bool _stale = false;
   /// Guards against overlapping reconnect loops.
   bool _reconnecting = false;
+  /// Which hero figure the receipts list is explaining.
+  ///
+  /// Defaults to spending: it is the figure people actually interrogate, and
+  /// an unfiltered "everything" list answers no question in particular.
+  String _bucket = 'spending';
 
   @override
   void initState() {
@@ -104,12 +113,26 @@ class _VaultHomeState extends State<VaultHome> {
     const base = String.fromEnvironment('Q2AV_URL', defaultValue: 'http://127.0.0.1:4479');
     const token = String.fromEnvironment('Q2AV_TOKEN');
     _api = VaultApi(baseUrl: base, token: token);
-    _initMenubar();
+    // Errors MUST be surfaced. This was fire-and-forget, so any throw inside
+    // _initMenubar (a missing plugin registration, a platform channel that is
+    // not ready) vanished silently: the tray never installed, the QA start
+    // flags never fired, and the app just sat at its startup geometry looking
+    // like a layout bug rather than a crashed initialiser.
+    _initMenubar().catchError((Object e, StackTrace st) {
+      // ignore: avoid_print
+      print('MENUBAR INIT FAILED: $e\n$st');
+    });
     _boot();
   }
 
   Future<void> _initMenubar() async {
+    // Load remembered geometry BEFORE the controller can show a window,
+    // otherwise the first showPopup() reads an empty store and falls back to
+    // the tray anchor even though a saved position exists.
+    final store = WindowStore.defaultLocation();
+    await store.load();
     final m = MenubarController(
+      store: store,
       onOpenFull: () => setState(() => _fullWindow = true),
       // The return path. Without it _fullWindow was a latch: once true it
       // never cleared, so every later tray click rendered the full viewer
@@ -171,6 +194,8 @@ class _VaultHomeState extends State<VaultHome> {
           period: _period.quick,
           month: _period.month,
           fy: _period.fy,
+          // The receipts list explains ONE hero figure at a time.
+          bucket: _bucket,
         ),
         _api.periods(),
         // Same period as the snapshot — the treemap must always total to the
@@ -255,8 +280,34 @@ class _VaultHomeState extends State<VaultHome> {
     }
   }
 
+  /// Open the full window on a given tab.
+  ///
+  /// The popup's Settings and Review buttons route through here. Setting the
+  /// tab BEFORE opening the window matters: openFullWindow() fires onOpenFull,
+  /// which flips _fullWindow and triggers a rebuild — if the tab were set
+  /// after, the window would flash the ledger first.
+  void _openTab(VaultTab tab) {
+    setState(() => _tab = tab);
+    _menubar?.openFullWindow();
+  }
+
   void _setPeriod(PeriodSelection p) {
     setState(() => _period = p);
+    _refresh();
+  }
+
+  /// Switch which hero figure the receipts list explains.
+  ///
+  /// Clears the open evidence panel: it belongs to a transaction that may not
+  /// be in the new list, and leaving it open shows proof for a row the user
+  /// can no longer see.
+  void _setBucket(String bucket) {
+    if (_bucket == bucket) return;
+    setState(() {
+      _bucket = bucket;
+      _selectedId = null;
+      _card = null;
+    });
     _refresh();
   }
 
@@ -321,39 +372,9 @@ class _VaultHomeState extends State<VaultHome> {
 
   @override
   Widget build(BuildContext context) {
-    if (_people) {
-      return Scaffold(
-        backgroundColor: VaultColors.bg,
-        body: PeopleView(api: _api, onClose: () => setState(() => _people = false)),
-      );
-    }
-
-    if (_review) {
-      return Scaffold(
-        backgroundColor: VaultColors.bg,
-        body: ReviewView(
-          api: _api,
-          onClose: () => setState(() => _review = false),
-          // The badge must drop the moment a question is answered, not on the
-          // next poll — otherwise the count lies about work already done.
-          onChanged: _refresh,
-        ),
-      );
-    }
-
-    if (_setup) {
-      return Scaffold(
-        backgroundColor: VaultColors.bg,
-        body: SetupView(
-          api: _api,
-          onClose: () => setState(() => _setup = false),
-          onOpenPeople: () => setState(() { _setup = false; _people = true; }),
-        ),
-      );
-    }
-
-    // Menubar panel — the default surface. Compact, glanceable, dismissed on
-    // click-away. The full window is opened deliberately.
+    // Menubar panel — the glanceable surface. Compact, dismissed on click-away.
+    // The full window is opened deliberately and holds EVERYTHING the user can
+    // do, as tabs.
     //
     // The width check is a SAFETY NET, not the primary switch. The Document
     // Viewer's three-column hero row and side rail cannot fit 420px: if state
@@ -390,12 +411,17 @@ class _VaultHomeState extends State<VaultHome> {
             connected: _connected && _daemonUp,
             onOpenFull: () => _menubar?.openFullWindow(),
             onQuit: () => exit(0),
-            onSetup: () => setState(() => _setup = true),
-            onReview: () => setState(() => _review = true),
+            // Settings and Review are no longer popup-local takeovers: they are
+            // tabs in the full window. The popup asks for the window and names
+            // the tab, so there is exactly ONE place each surface lives.
+            onSetup: () => _openTab(VaultTab.settings),
+            onReview: () => _openTab(VaultTab.review),
             onRefresh: _refresh,
             onToggleLearning: _toggleLearning,
             learningOn: _learningOn,
             reviewCount: _reviewCount,
+            bucket: _bucket,
+            onBucketChanged: _setBucket,
           ),
         ),
       );
@@ -409,89 +435,72 @@ class _VaultHomeState extends State<VaultHome> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _TitleBar(connected: _connected, daemonUp: _daemonUp),
+            VaultTabBar(
+              current: _tab,
+              onChanged: (t) => setState(() => _tab = t),
+              reviewCount: _reviewCount,
+              // Charts is declared but unbuilt. Shown disabled rather than
+              // hidden: a greyed tab is an honest promise about what is coming,
+              // a missing one is a surprise later.
+              disabled: const {VaultTab.charts},
+            ),
             if (!_daemonUp)
               const Expanded(child: _WaitingForDaemon())
             else
-              Expanded(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      flex: 3,
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(28, 20, 20, 40),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            HeroRow(snapshot: _snap, txns: _txns),
-                            const SizedBox(height: 22),
-                            // Where the money went. Sits directly under the
-                            // hero row because it decomposes the Spending
-                            // figure shown there — same period, same total.
-                            _SectionLabel('Where it went'),
-                            const SizedBox(height: 10),
-                            SizedBox(
-                              height: 260,
-                              child: Treemap(
-                                nodes: _treemap.nodes,
-                                totalMinor: _treemap.totalMinor,
-                              ),
-                            ),
-                            if (_treemap.rawBuckets > _treemap.nodes.length)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 8),
-                                child: Text(
-                                  '${_treemap.rawBuckets} raw categories folded into '
-                                  '${_treemap.nodes.length}',
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    color: Color(0xFF8A9099),
-                                  ),
-                                ),
-                              ),
-                            const SizedBox(height: 22),
-                            _SectionLabel('Transactions'),
-                            const SizedBox(height: 10),
-                            if (_txns.isEmpty)
-                              const _EmptyState()
-                            else
-                              // Evidence opens INLINE, directly beneath the
-                              // transaction it belongs to. Rendering it after
-                              // the whole list forced a scroll to the bottom
-                              // and broke the link between claim and proof.
-                              ..._txns.map((t) => Padding(
-                                    padding: const EdgeInsets.only(bottom: 10),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        TxnCard(
-                                          txn: t,
-                                          selected: _selectedId == t.id,
-                                          onTap: () => _select(t),
-                                        ),
-                                        if (_selectedId == t.id && _card != null)
-                                          Padding(
-                                            padding: const EdgeInsets.only(
-                                                top: 8, left: 14),
-                                            child: EvidencePanel(card: _card!),
-                                          ),
-                                      ],
-                                    ),
-                                  )),
-                          ],
-                        ),
-                      ),
-                    ),
-                    FeedRail(events: _feed, connected: _connected),
-                  ],
-                ),
-              ),
+              Expanded(child: _tabBody()),
           ],
         ),
       ),
     );
   }
+
+  /// The body for the selected tab.
+  ///
+  /// Every surface is built from state the shell already holds, so switching
+  /// tabs never refetches and never loses the selected transaction. Only the
+  /// ledger keeps the feed rail — the other surfaces are not event streams and
+  /// the rail would just steal width.
+  Widget _tabBody() => switch (_tab) {
+        VaultTab.ledger => Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: 3,
+                child: LedgerTab(
+                  snapshot: _snap,
+                  treemap: _treemap,
+                  txns: _txns,
+                  selectedId: _selectedId,
+                  card: _card,
+                  onSelect: _select,
+                ),
+              ),
+              FeedRail(events: _feed, connected: _connected),
+            ],
+          ),
+        VaultTab.review => ReviewView(
+            api: _api,
+            // No close button in tab mode — the tab bar is the way out. Passing
+            // null keeps ReviewView usable standalone (tests) without it
+            // rendering a dead affordance here.
+            onClose: null,
+            // The badge must drop the moment a question is answered, not on the
+            // next poll — otherwise the count lies about work already done.
+            onChanged: _refresh,
+          ),
+        VaultTab.people => PeopleView(api: _api, onClose: null),
+        VaultTab.settings => SetupView(
+            api: _api,
+            onClose: null,
+            onOpenPeople: () => setState(() => _tab = VaultTab.people),
+          ),
+        VaultTab.charts => const ComingSoon(
+            title: 'Charts',
+            detail: 'Spending over time, category trends and counterparty '
+                'concentration. The data is already in the vault — this tab is '
+                'the view that has not been built yet.',
+          ),
+      };
 }
 
 class _TitleBar extends StatelessWidget {
