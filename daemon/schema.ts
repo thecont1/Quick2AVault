@@ -17,7 +17,24 @@ export type Kind = "person" | "organisation" | "account" | "instrument";
 export type Direction = "out" | "in" | "transfer";
 export type TxnStatus = "evidenced" | "awaiting_settlement" | "no_invoice" | "scheduled";
 
-export const SCHEMA_VERSION = 2;
+/** Which thing a field_claim is about (work order 03 §P2). */
+export type ClaimSubject = "document" | "transaction" | "entity";
+export type ClaimSource = "ai" | "user" | "rule" | "import";
+export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
+
+export const SCHEMA_VERSION = 3;
+
+/**
+ * Markdown retention policy. The ORIGINAL is truth; markdown is a
+ * regenerable READING SURFACE — architecturally a cache, not a record.
+ *
+ * The knob exists now so the decision has a home, but NOTHING evicts yet:
+ * deleting markdown before search and re-extraction are proven would strand
+ * both. Revisit only after semantic search is tested on a real vault
+ * (work order 03 §P5).
+ */
+export type MarkdownRetention = "keep_all" | "keep_recent" | "keep_none";
+export const DEFAULT_MARKDOWN_RETENTION: MarkdownRetention = "keep_all";
 
 const DDL = `
 PRAGMA journal_mode = WAL;
@@ -29,6 +46,16 @@ CREATE TABLE IF NOT EXISTS schema_meta (
 );
 
 -- ── Documents: evidence, not truth ─────────────────────────────────────────
+-- ARTIFACT DOCTRINE (work order 03 §1): the ORIGINAL is truth — immutable,
+-- always retained, always local. MARKDOWN is the reading surface: a
+-- deterministic, REGENERABLE transform of the original, and therefore a cache.
+-- extraction_json is the reading: a recomputable opinion.
+--
+-- The provenance columns exist so drift between those three is DETECTABLE.
+-- Without converter/converter_version we cannot tell whether a regenerated
+-- markdown differs because the document changed or because anydoc did; without
+-- markdown_hash we cannot tell whether an extraction still describes the text
+-- it was actually read from.
 CREATE TABLE IF NOT EXISTS documents (
   id                 TEXT PRIMARY KEY,
   sha256             TEXT NOT NULL UNIQUE,
@@ -44,7 +71,13 @@ CREATE TABLE IF NOT EXISTS documents (
   extraction_version INTEGER,
   received_at        TEXT NOT NULL,
   converted_at       TEXT,
-  analysed_at        TEXT
+  analysed_at        TEXT,
+  -- ── provenance (work order 03 §P0) ──
+  converter          TEXT,     -- 'anydoc' | 'vision-ocr' | 'plaintext'
+  converter_version  TEXT,     -- 'anydoc@0.1.6', 'vision-ocr@macOS26.5.2'
+  markdown_hash      TEXT,     -- SHA-256 of the markdown the extraction READ
+  extraction_model   TEXT,     -- e.g. 'claude-sonnet-5'
+  extracted_at       TEXT      -- distinct from analysed_at: when the OPINION was formed
 );
 CREATE INDEX IF NOT EXISTS idx_documents_sha ON documents(sha256);
 CREATE INDEX IF NOT EXISTS idx_documents_received ON documents(received_at);
@@ -140,17 +173,55 @@ CREATE TABLE IF NOT EXISTS transaction_documents (
 CREATE INDEX IF NOT EXISTS idx_txndocs_doc ON transaction_documents(document_id);
 
 -- ── Provenance: user > rule > ai ───────────────────────────────────────────
+-- SUBJECT-SCOPED (work order 03 §P2). A claim is about a DOCUMENT, a
+-- TRANSACTION, or an ENTITY.
+--
+-- Editing in the document-centric browser writes DOCUMENT-scope claims, and a
+-- resolver propagates them into every linked transaction. The alternative —
+-- resolving doc→txn at edit time and writing only transaction claims — fails
+-- for orphan documents (nothing to write to) and for future statements (one
+-- document, many transactions).
 CREATE TABLE IF NOT EXISTS field_claims (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  subject_type TEXT NOT NULL,
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('document','transaction','entity')),
   subject_id   TEXT NOT NULL,
   field        TEXT NOT NULL,
   value        TEXT,
   source       TEXT NOT NULL CHECK (source IN ('ai','user','rule','import')),
   confidence   REAL,
+  status       TEXT NOT NULL DEFAULT 'proposed'
+               CHECK (status IN ('proposed','confirmed','rejected','superseded')),
   created_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_claims_subject ON field_claims(subject_type, subject_id, field);
+CREATE INDEX IF NOT EXISTS idx_claims_live ON field_claims(subject_type, subject_id, field, status);
+
+-- Every user edit, appended. The ledger must be able to answer "who changed
+-- this, from what, and when" without replaying claims.
+CREATE TABLE IF NOT EXISTS review_audit (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  subject_type TEXT NOT NULL,
+  subject_id   TEXT NOT NULL,
+  field        TEXT NOT NULL,
+  action       TEXT NOT NULL,   -- edit | confirm | reject | resolve
+  old_value    TEXT,
+  new_value    TEXT,
+  source       TEXT NOT NULL DEFAULT 'user',
+  at           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_subject ON review_audit(subject_type, subject_id);
+
+-- ── Lexical search (work order 03 §P1) ─────────────────────────────────────
+-- FTS5 over the reading surface (markdown) and the reading (flattened key
+-- extraction fields). doc_id is UNINDEXED: it is a join key, not a search term
+-- — indexing it would let a hex id match a query.
+CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+  doc_id UNINDEXED,
+  filename,
+  markdown,
+  extraction_text,
+  tokenize = 'unicode61'
+);
 
 -- ── Durable job queue (replaces the in-memory queue) ───────────────────────
 CREATE TABLE IF NOT EXISTS jobs (
@@ -253,10 +324,98 @@ CREATE INDEX IF NOT EXISTS idx_training_open
 
 export function openDatabase(dbPath: string): DatabaseSync {
   const db = new DatabaseSync(dbPath);
+  // Migration runs BEFORE the DDL, not after.
+  //
+  // The DDL declares indexes over columns added in v3 (field_claims.status).
+  // `CREATE INDEX IF NOT EXISTS` does not skip a missing COLUMN — it fails
+  // with "no such column: status" — so on any pre-v3 vault the DDL cannot
+  // execute until the table has been reshaped. On a fresh database every
+  // migration step is a no-op (the tables do not exist yet) and the DDL does
+  // all the work, so one ordering serves both cases.
+  migrate(db);
   db.exec(DDL);
   const stmt = db.prepare("INSERT OR REPLACE INTO schema_meta(key,value) VALUES(?,?)");
   stmt.run("schema_version", String(SCHEMA_VERSION));
   return db;
+}
+
+/** Column names of an existing table. Empty when the table does not exist. */
+function columnsOf(db: DatabaseSync, table: string): Set<string> {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    return new Set(rows.map((r) => r.name));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * In-place migration for vaults created before this schema version.
+ *
+ * `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so every
+ * column added after v2 must be applied here or a real vault silently keeps
+ * the old shape and every new write fails at runtime rather than at deploy.
+ *
+ * Idempotent by construction: each step checks the live shape first.
+ */
+export function migrate(db: DatabaseSync): void {
+  // ── v2 → v3: document provenance columns ──
+  const docCols = columnsOf(db, "documents");
+  const addDocCol = (name: string, decl: string) => {
+    if (docCols.size && !docCols.has(name)) {
+      db.exec(`ALTER TABLE documents ADD COLUMN ${name} ${decl}`);
+    }
+  };
+  addDocCol("converter", "TEXT");
+  addDocCol("converter_version", "TEXT");
+  addDocCol("markdown_hash", "TEXT");
+  addDocCol("extraction_model", "TEXT");
+  addDocCol("extracted_at", "TEXT");
+
+  // ── v2 → v3: field_claims gains `status` and CHECK constraints ──
+  //
+  // SQLite cannot ALTER a CHECK constraint onto an existing column, so this is
+  // the documented rebuild-table pattern: create the new shape, copy, swap.
+  // Existing rows were all transaction-scope by construction (ledger.ts and
+  // the /v1/link routes were the only writers), and they are treated as
+  // 'confirmed' only when they came from the user — an AI claim that was never
+  // reviewed must stay 'proposed' or the resolver would refuse to overwrite it.
+  const claimCols = columnsOf(db, "field_claims");
+  if (claimCols.size && !claimCols.has("status")) {
+    db.exec("BEGIN");
+    try {
+      db.exec(`
+        CREATE TABLE field_claims_new (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          subject_type TEXT NOT NULL CHECK (subject_type IN ('document','transaction','entity')),
+          subject_id   TEXT NOT NULL,
+          field        TEXT NOT NULL,
+          value        TEXT,
+          source       TEXT NOT NULL CHECK (source IN ('ai','user','rule','import')),
+          confidence   REAL,
+          status       TEXT NOT NULL DEFAULT 'proposed'
+                       CHECK (status IN ('proposed','confirmed','rejected','superseded')),
+          created_at   TEXT NOT NULL
+        );
+        INSERT INTO field_claims_new (id, subject_type, subject_id, field, value, source, confidence, status, created_at)
+          SELECT id,
+                 CASE WHEN subject_type IN ('document','transaction','entity')
+                      THEN subject_type ELSE 'transaction' END,
+                 subject_id, field, value, source, confidence,
+                 CASE WHEN source = 'user' THEN 'confirmed' ELSE 'proposed' END,
+                 created_at
+            FROM field_claims;
+        DROP TABLE field_claims;
+        ALTER TABLE field_claims_new RENAME TO field_claims;
+        CREATE INDEX IF NOT EXISTS idx_claims_subject ON field_claims(subject_type, subject_id, field);
+        CREATE INDEX IF NOT EXISTS idx_claims_live ON field_claims(subject_type, subject_id, field, status);
+      `);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  }
 }
 
 /**

@@ -450,8 +450,10 @@ export function recordTransaction(
   ).run(id, documentId, evidenceRole(x), 1.0, "ai", now);
 
   // ── provenance ────────────────────────────────────────────────────────────
+  // AI claims enter as 'proposed'. They are the model's opinion until a human
+  // confirms them, and the resolver treats them accordingly.
   const claim = db.prepare(
-    "INSERT INTO field_claims (subject_type, subject_id, field, value, source, confidence, created_at) VALUES ('transaction',?,?,?,'ai',?,?)",
+    "INSERT INTO field_claims (subject_type, subject_id, field, value, source, confidence, status, created_at) VALUES ('transaction',?,?,?,'ai',?,'proposed',?)",
   );
   claim.run(id, "amount_minor", String(x.amount_minor), x.confidence, now);
   claim.run(id, "occurred_at", occurred, x.confidence, now);

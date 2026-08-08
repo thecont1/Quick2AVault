@@ -45,7 +45,11 @@ function freshVault() {
     logger,
     clock: systemClock,
     paths: createPaths(root),
-    converter: { async toMarkdown() { return "# stub"; } },
+    converter: {
+      async toMarkdown() {
+        return { markdown: "# stub", converter: "stub", converterVersion: "smoke@1" };
+      },
+    },
     bus: createEventBus(logger),
   };
   const db = openDatabase(":memory:");

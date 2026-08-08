@@ -6,10 +6,11 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+import { createRequire } from "node:module";
 
 import { toMarkdownBytes } from "@firecrawl/anydoc";
 
-import type { Clock, Converter, DomainEvent, EventBus, Logger, Paths, Ports } from "./ports.js";
+import type { Clock, Conversion, Converter, DomainEvent, EventBus, Logger, Paths, Ports } from "./ports.js";
 
 // ── Logger ───────────────────────────────────────────────────────────────────
 const LEVEL_ORDER = { debug: 10, info: 20, warn: 30, error: 40 } as const;
@@ -65,20 +66,51 @@ const EXT_TO_FORMAT: Record<string, string> = {
 const PLAINTEXT_EXT = new Set([".txt", ".md", ".eml", ".html", ".htm", ".json"]);
 const IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"]);
 
+/**
+ * anydoc's version, read from the installed package rather than hardcoded.
+ * A hardcoded string is worse than none: it would claim a version the vault
+ * is not actually running the moment the dependency is bumped.
+ */
+const ANYDOC_VERSION: string = (() => {
+  try {
+    // ESM: no bare `require`. createRequire gives module resolution relative
+    // to this file, which is how the installed package.json is located.
+    const resolve = createRequire(import.meta.url).resolve;
+    const pkg = resolve("@firecrawl/anydoc/package.json");
+    return String(JSON.parse(fs.readFileSync(pkg, "utf-8")).version ?? "unknown");
+  } catch {
+    return "unknown";
+  }
+})();
+
 export function createAnydocConverter(logger: Logger): Converter {
   return {
-    async toMarkdown(filePath: string, ext: string): Promise<string | null> {
+    async toMarkdown(filePath: string, ext: string): Promise<Conversion | null> {
       const e = ext.toLowerCase();
       try {
         if (PLAINTEXT_EXT.has(e)) {
           const raw = await fsp.readFile(filePath, "utf-8");
-          return e === ".eml" ? emlToMarkdown(raw) : raw.trim();
+          return {
+            markdown: e === ".eml" ? emlToMarkdown(raw) : raw.trim(),
+            converter: "plaintext",
+            // The .eml path is our own MIME reader, versioned with the app;
+            // everything else is a straight read, which cannot drift.
+            converterVersion: e === ".eml" ? "eml-reader@1" : "passthrough@1",
+          };
         }
         if (IMAGE_EXT.has(e)) {
           // macOS Vision OCR: native, no dependency, no network. Receipts and
           // wallet screenshots are image-only, so without this they enter the
           // vault as empty documents and can never become transactions.
-          return await ocrImage(filePath, logger);
+          //
+          // The OS version is part of the converter identity: Vision's model
+          // ships with macOS, so the same image OCRs differently across
+          // upgrades and that drift must be attributable.
+          return {
+            markdown: await ocrImage(filePath, logger),
+            converter: "vision-ocr",
+            converterVersion: `vision-ocr@macOS${os.release()}`,
+          };
         }
         const fmt = EXT_TO_FORMAT[e];
         if (!fmt) {
@@ -87,7 +119,11 @@ export function createAnydocConverter(logger: Logger): Converter {
         }
         const buf = await fsp.readFile(filePath);
         const out = await toMarkdownBytes(buf, fmt as never);
-        return typeof out === "string" ? out.trim() : String(out ?? "").trim();
+        return {
+          markdown: typeof out === "string" ? out.trim() : String(out ?? "").trim(),
+          converter: "anydoc",
+          converterVersion: `anydoc@${ANYDOC_VERSION}`,
+        };
       } catch (err) {
         logger.error("converter failed", { filePath, ext: e, err: (err as Error)?.message });
         return null;

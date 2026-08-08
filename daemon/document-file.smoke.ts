@@ -52,7 +52,11 @@ const ports: Ports = {
   logger,
   clock: systemClock,
   paths: createPaths(vault),
-  converter: { async toMarkdown() { return ""; } },
+  converter: {
+    async toMarkdown() {
+      return { markdown: "", converter: "stub", converterVersion: "smoke@1" };
+    },
+  },
   bus: createEventBus(logger),
 };
 

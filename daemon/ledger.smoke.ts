@@ -18,7 +18,11 @@ const ports: Ports = {
   logger,
   clock: systemClock,
   paths: createPaths("/tmp/q2v-smoke-vault"),
-  converter: { async toMarkdown() { return ""; } },
+  converter: {
+    async toMarkdown() {
+      return { markdown: "", converter: "stub", converterVersion: "smoke@1" };
+    },
+  },
   bus: createEventBus(logger),
 };
 

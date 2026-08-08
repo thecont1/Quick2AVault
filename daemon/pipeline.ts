@@ -13,6 +13,7 @@ import { EXTRACTION_VERSION } from "./extraction-contract.js";
 import { recordTransaction } from "./ledger.js";
 import { findMatches, linkEvidence, AUTO_LINK, REVIEW_FLOOR } from "./matcher.js";
 import { ask } from "./learning.js";
+import { flattenExtraction, hashText, indexDocument } from "./search.js";
 
 export interface IntakeResult {
   status: "added" | "duplicate" | "failed";
@@ -229,8 +230,8 @@ export function enqueue(db: DatabaseSync, ports: Ports, documentId: string, phas
 }
 
 /**
- * P1 — conversion. anydoc/plaintext -> canonical markdown v1.
- * AI never rewrites this text; it is the audit trail for every later claim.
+ * P1 — conversion. anydoc/plaintext/Vision-OCR -> canonical markdown v1.
+ * AI never rewrites this text; it is the reading surface for every later claim.
  */
 export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: number, documentId: string): Promise<void> {
   const doc = db
@@ -240,8 +241,9 @@ export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: numbe
     | undefined;
   if (!doc) throw new Error(`document ${documentId} not found`);
 
-  const md = await ports.converter.toMarkdown(doc.raw_path, doc.ext ?? "");
-  if (md === null) throw new Error(`conversion returned null for ${doc.ext}`);
+  const conv = await ports.converter.toMarkdown(doc.raw_path, doc.ext ?? "");
+  if (conv === null) throw new Error(`conversion returned null for ${doc.ext}`);
+  const md = conv.markdown;
 
   const mdDir = ports.paths.markdownDir(dateKey(ports.clock.now()));
   // Mirror the original filename so Markdown/ is browsable alongside Raw/.
@@ -250,14 +252,129 @@ export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: numbe
   await fs.writeFile(mdPath, md, "utf-8");
 
   const now = ports.clock.isoNow();
-  db.prepare("UPDATE documents SET markdown_path=?, markdown_chars=?, converted_at=? WHERE id=?")
-    .run(mdPath, md.length, now, documentId);
+  db.prepare(
+    `UPDATE documents
+        SET markdown_path=?, markdown_chars=?, converted_at=?,
+            converter=?, converter_version=?, markdown_hash=?
+      WHERE id=?`,
+  ).run(mdPath, md.length, now, conv.converter, conv.converterVersion, hashText(md), documentId);
+
+  // Search must see the document as soon as it is readable — an index that
+  // only fills at analysis time leaves every un-analysed document unfindable.
+  indexDocument(db, documentId, md);
 
   ports.bus.publish({ type: "MarkdownReady", document_id: documentId, markdown_path: mdPath, chars: md.length, at: now });
 
   // P2 is queued but only runs when an AI provider is configured; the worker
   // marks it done-with-note otherwise, so the pipeline never wedges.
   enqueue(db, ports, documentId, "analyse");
+}
+
+/**
+ * Regenerate a document's markdown from the ORIGINAL, in place.
+ *
+ * First-class because the doctrine makes markdown a cache: anything allowed to
+ * treat it as disposable (retention policy, re-extraction, a corrupted file)
+ * needs one supported way to rebuild it. Reuses the same converter path as P1
+ * so a regenerated document is byte-identical to a freshly ingested one when
+ * nothing has changed — which is exactly what makes DRIFT detectable.
+ *
+ * Returns what changed, so a caller can decide whether re-extraction is
+ * warranted rather than re-running Claude on identical text.
+ */
+export async function regenerateMarkdown(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+): Promise<{
+  document_id: string;
+  markdown_path: string;
+  chars: number;
+  converter: string;
+  converter_version: string;
+  markdown_hash: string;
+  previous_hash: string | null;
+  changed: boolean;
+  converter_changed: boolean;
+}> {
+  const doc = db
+    .prepare(
+      `SELECT id, raw_path, ext, original_filename, markdown_path, markdown_hash, converter_version
+         FROM documents WHERE id=?`,
+    )
+    .get(documentId) as
+    | {
+        id: string;
+        raw_path: string;
+        ext: string | null;
+        original_filename: string;
+        markdown_path: string | null;
+        markdown_hash: string | null;
+        converter_version: string | null;
+      }
+    | undefined;
+  if (!doc) throw new Error(`document ${documentId} not found`);
+
+  const conv = await ports.converter.toMarkdown(doc.raw_path, doc.ext ?? "");
+  if (conv === null) throw new Error(`conversion returned null for ${doc.ext}`);
+  const md = conv.markdown;
+  const hash = hashText(md);
+
+  // Overwrite in place when a markdown file already exists: the path is
+  // referenced by documents.markdown_path and re-filing logic, and minting a
+  // new " (2)" file on every regeneration would litter the vault.
+  let mdPath = doc.markdown_path;
+  if (!mdPath) {
+    const dir = ports.paths.markdownDir(dateKey(ports.clock.now()));
+    const stem = path.basename(doc.original_filename, path.extname(doc.original_filename));
+    mdPath = await uniquePath(dir, `${stem}.md`);
+  } else {
+    await fs.mkdir(path.dirname(mdPath), { recursive: true });
+  }
+  await fs.writeFile(mdPath, md, "utf-8");
+
+  const now = ports.clock.isoNow();
+  db.prepare(
+    `UPDATE documents
+        SET markdown_path=?, markdown_chars=?, converted_at=?,
+            converter=?, converter_version=?, markdown_hash=?
+      WHERE id=?`,
+  ).run(mdPath, md.length, now, conv.converter, conv.converterVersion, hash, documentId);
+
+  indexDocument(db, documentId, md);
+
+  const changed = doc.markdown_hash !== null && doc.markdown_hash !== hash;
+  const converterChanged =
+    doc.converter_version !== null && doc.converter_version !== conv.converterVersion;
+  if (changed) {
+    ports.logger.warn("markdown regeneration DRIFTED from the text extraction read", {
+      document_id: documentId,
+      previous_hash: doc.markdown_hash?.slice(0, 12),
+      new_hash: hash.slice(0, 12),
+      previous_converter: doc.converter_version,
+      converter: conv.converterVersion,
+    });
+  }
+
+  ports.bus.publish({
+    type: "MarkdownReady",
+    document_id: documentId,
+    markdown_path: mdPath,
+    chars: md.length,
+    at: now,
+  });
+
+  return {
+    document_id: documentId,
+    markdown_path: mdPath,
+    chars: md.length,
+    converter: conv.converter,
+    converter_version: conv.converterVersion,
+    markdown_hash: hash,
+    previous_hash: doc.markdown_hash,
+    changed,
+    converter_changed: converterChanged,
+  };
 }
 
 /**
@@ -319,6 +436,92 @@ async function refileByEconomicDate(
 }
 
 /**
+ * One-shot provenance backfill for documents ingested before §P0.
+ *
+ * markdown_hash is recomputed from the markdown ON DISK. For an already
+ * analysed document that is an ASSERTION, not a measurement: we did not
+ * observe what the model read, we are declaring the current file to be it.
+ * That is the only honest baseline available, and it is what makes future
+ * drift detectable — but it means a pre-P0 document whose markdown was
+ * already stale will be recorded as if it were current. Only pre-P0 rows are
+ * touched, so this never overwrites a hash that WAS measured.
+ *
+ * converter/converter_version are inferred from the extension, matching the
+ * dispatch in createAnydocConverter. The inferred version is suffixed
+ * `~backfill` so a reader can tell a reconstructed identity from an observed
+ * one rather than trusting it as evidence.
+ */
+export async function backfillProvenance(
+  db: DatabaseSync,
+  ports: Ports,
+): Promise<{ scanned: number; hashed: number; converter_tagged: number; markdown_missing: number }> {
+  const rows = db
+    .prepare(
+      `SELECT id, ext, markdown_path, markdown_hash, converter, extraction_json, analysed_at
+         FROM documents
+        WHERE markdown_hash IS NULL OR converter IS NULL`,
+    )
+    .all() as Array<{
+    id: string;
+    ext: string | null;
+    markdown_path: string | null;
+    markdown_hash: string | null;
+    converter: string | null;
+    extraction_json: string | null;
+    analysed_at: string | null;
+  }>;
+
+  let hashed = 0;
+  let tagged = 0;
+  let missing = 0;
+
+  for (const r of rows) {
+    if (r.markdown_hash === null && r.markdown_path) {
+      try {
+        const md = await fs.readFile(r.markdown_path, "utf-8");
+        db.prepare("UPDATE documents SET markdown_hash=?, markdown_chars=? WHERE id=?")
+          .run(hashText(md), md.length, r.id);
+        hashed++;
+      } catch {
+        missing++;
+        ports.logger.warn("provenance backfill: markdown missing", {
+          document_id: r.id,
+          expected_at: r.markdown_path,
+        });
+      }
+    }
+
+    if (r.converter === null) {
+      const { converter, version } = inferConverter(r.ext);
+      db.prepare("UPDATE documents SET converter=?, converter_version=? WHERE id=?")
+        .run(converter, `${version}~backfill`, r.id);
+      tagged++;
+    }
+  }
+
+  ports.logger.info("provenance backfilled", {
+    scanned: rows.length,
+    hashed,
+    converter_tagged: tagged,
+    markdown_missing: missing,
+  });
+  return { scanned: rows.length, hashed, converter_tagged: tagged, markdown_missing: missing };
+}
+
+/** Mirrors createAnydocConverter's dispatch. Backfill only — never a claim of fact. */
+function inferConverter(ext: string | null): { converter: string; version: string } {
+  const e = (ext ?? "").toLowerCase();
+  if ([".txt", ".md", ".html", ".htm", ".json"].includes(e)) {
+    return { converter: "plaintext", version: "passthrough@1" };
+  }
+  if (e === ".eml") return { converter: "plaintext", version: "eml-reader@1" };
+  if ([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif"].includes(e)) {
+    return { converter: "vision-ocr", version: "vision-ocr@unknown" };
+  }
+  return { converter: "anydoc", version: "anydoc@unknown" };
+}
+
+/**
  * P2 — analysis. Claude reads canonical markdown v1 and returns extraction
  * JSON. Then: match against existing transactions (many documents, one rupee)
  * or record a new one.
@@ -360,8 +563,28 @@ export async function runAnalyseJob(
     return;
   }
 
-  db.prepare("UPDATE documents SET extraction_json=?, extraction_version=?, doc_type=?, analysed_at=? WHERE id=?")
-    .run(JSON.stringify(x), EXTRACTION_VERSION, x.doc_type, now, documentId);
+  // markdown_hash is recorded against the text the model ACTUALLY read, not
+  // whatever is on disk later. That is the whole point: if regeneration
+  // produces a different hash, this extraction is provably stale.
+  db.prepare(
+    `UPDATE documents
+        SET extraction_json=?, extraction_version=?, doc_type=?, analysed_at=?,
+            extraction_model=?, extracted_at=?, markdown_hash=?
+      WHERE id=?`,
+  ).run(
+    JSON.stringify(x),
+    EXTRACTION_VERSION,
+    x.doc_type,
+    now,
+    ai.model,
+    now,
+    hashText(markdown),
+    documentId,
+  );
+
+  // Second index pass: the reading now exists, so the six questions become
+  // searchable alongside the document text.
+  indexDocument(db, documentId, markdown, flattenExtraction(x));
 
   ports.bus.publish({
     type: "AnalysisComplete",
