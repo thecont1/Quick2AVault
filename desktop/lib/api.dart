@@ -397,6 +397,30 @@ class VaultApi {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Begin Gmail authorisation. Returns the consent URL — the daemon also
+  /// opens it, but a URL the user can click is the reliable path.
+  Future<({String? authUrl, String? error, String? detail})> gmailConnect() async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/gmail/connect'),
+      headers: _headers,
+    );
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    return (
+      authUrl: j['auth_url'] as String?,
+      error: j['error'] as String?,
+      detail: j['detail'] as String?,
+    );
+  }
+
+  Future<Map<String, dynamic>> gmailSync() async {
+    final res = await _client.post(Uri.parse('$baseUrl/v1/gmail/sync'), headers: _headers);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  Future<void> gmailDisconnect() async {
+    await _client.post(Uri.parse('$baseUrl/v1/gmail/disconnect'), headers: _headers);
+  }
+
   /// Learning state: open questions and whether the engine is on.
   Future<({bool enabled, int budget, List<Map<String, dynamic>> questions})> learning() async {
     final j = await _get('/v1/learning', (x) => x);

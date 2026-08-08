@@ -129,10 +129,13 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(18, 14, 10, 6),
+        // Top padding clears the macOS traffic-light buttons, which float
+        // over the frameless popup's top-left corner.
+        padding: const EdgeInsets.fromLTRB(18, 34, 10, 6),
         child: Row(children: [
           const Text('Your Money',
               style: TextStyle(
+                  fontFamily: displayFont,
                   fontSize: 22,
                   fontWeight: FontWeight.w800,
                   letterSpacing: -0.5,
@@ -239,7 +242,11 @@ class _MoneyCard extends StatelessWidget {
               children: [
                 Text(label,
                     style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w700, color: ink)),
+                        fontFamily: displayFont,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.2,
+                        color: ink)),
                 const SizedBox(height: 2),
                 Text(
                   '$documents document${documents == 1 ? '' : 's'} processed',

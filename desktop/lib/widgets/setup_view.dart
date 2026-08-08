@@ -207,6 +207,12 @@ class _SetupViewState extends State<SetupView> {
                       controller: _gmail,
                       settings: (_settings?['gmail'] ?? const {}) as Map<String, dynamic>,
                     ),
+                    const SizedBox(height: 11),
+                    _GmailActions(
+                      api: widget.api,
+                      settings: (_settings?['gmail'] ?? const {}) as Map<String, dynamic>,
+                      onChanged: _load,
+                    ),
 
                     const SizedBox(height: 28),
                     const _SectionTitle('Vault'),
@@ -363,6 +369,87 @@ class _GmailField extends StatelessWidget {
   }
 }
 
+/// Connect / Sync / Disconnect. Consent opens in the user's browser; the
+/// URL is also shown so a headless or remote setup still works.
+class _GmailActions extends StatefulWidget {
+  final VaultApi api;
+  final Map<String, dynamic> settings;
+  final VoidCallback onChanged;
+  const _GmailActions({required this.api, required this.settings, required this.onChanged});
+
+  @override
+  State<_GmailActions> createState() => _GmailActionsState();
+}
+
+class _GmailActionsState extends State<_GmailActions> {
+  String? _message;
+  bool _busy = false;
+
+  Future<void> _connect() async {
+    setState(() { _busy = true; _message = null; });
+    try {
+      final r = await widget.api.gmailConnect();
+      setState(() => _message = r.authUrl != null
+          ? 'Consent opened in your browser. Complete it, then press Sync.'
+          : (r.detail ?? r.error ?? 'Could not start authorisation.'));
+    } catch (e) {
+      setState(() => _message = '$e');
+    } finally {
+      if (mounted) { setState(() => _busy = false); widget.onChanged(); }
+    }
+  }
+
+  Future<void> _sync() async {
+    setState(() { _busy = true; _message = null; });
+    try {
+      final r = await widget.api.gmailSync();
+      setState(() => _message = r['error'] != null
+          ? r['error'] as String
+          : 'Imported ${r['documentCount'] ?? 0} document(s) from ${r['emailCount'] ?? 0} email(s).');
+    } catch (e) {
+      setState(() => _message = '$e');
+    } finally {
+      if (mounted) { setState(() => _busy = false); widget.onChanged(); }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canConnect = widget.settings['can_connect'] == true;
+    final connected = widget.settings['connected'] == true;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        if (!connected)
+          _Ghost(label: _busy ? 'Working…' : 'Connect Gmail', onTap: canConnect && !_busy ? _connect : null),
+        if (connected) ...[
+          _Ghost(label: _busy ? 'Syncing…' : 'Sync now', onTap: _busy ? null : _sync),
+          const SizedBox(width: 8),
+          _Ghost(label: 'Disconnect', onTap: _busy ? null : () async {
+            await widget.api.gmailDisconnect();
+            widget.onChanged();
+          }),
+        ],
+      ]),
+      if (!canConnect)
+        const Padding(
+          padding: EdgeInsets.only(top: 8),
+          child: Text(
+            'This daemon has no Google OAuth client. Set Q2AV_GOOGLE_CLIENT_ID and '
+            'Q2AV_GOOGLE_CLIENT_SECRET and restart it.',
+            style: TextStyle(fontSize: 11, color: VaultColors.warn),
+          ),
+        ),
+      if (_message != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: SelectableText(_message!,
+              style: const TextStyle(fontSize: 11, color: VaultColors.secondary)),
+        ),
+    ]);
+  }
+}
+
 class _StatusRow extends StatelessWidget {
   final Map<String, dynamic> ai;
   const _StatusRow({required this.ai});
@@ -440,13 +527,19 @@ class _Primary extends StatelessWidget {
 
 class _Ghost extends StatelessWidget {
   final String label;
-  final VoidCallback onTap;
+  /// Null disables the button — it dims and stops responding, which is how a
+  /// busy state should read rather than staying clickable and doing nothing.
+  final VoidCallback? onTap;
   const _Ghost({required this.label, required this.onTap});
   @override
-  Widget build(BuildContext context) => MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: GestureDetector(
-          onTap: onTap,
+  Widget build(BuildContext context) {
+    final enabled = onTap != null;
+    return MouseRegion(
+      cursor: enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Opacity(
+          opacity: enabled ? 1 : 0.45,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
             decoration: vaultPill(),
@@ -454,5 +547,7 @@ class _Ghost extends StatelessWidget {
                 style: const TextStyle(fontSize: 11.5, color: VaultColors.secondary)),
           ),
         ),
-      );
+      ),
+    );
+  }
 }

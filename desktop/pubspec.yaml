@@ -67,6 +67,20 @@ flutter:
     - assets/tray_icon_Template.png
     - assets/logo.png
 
+  # Unbounded (OFL) — display face for the app title and the three money
+  # card headings. Licence ships in assets/fonts/OFL.txt.
+  fonts:
+    - family: Unbounded
+      fonts:
+        - asset: assets/fonts/Unbounded-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Unbounded-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Unbounded-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Unbounded-ExtraBold.ttf
+          weight: 800
+
   # To add assets to your application, add an assets section, like this:
   # assets:
   #   - images/a_dot_burr.jpeg

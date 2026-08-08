@@ -90,6 +90,11 @@ final vaultTheme = ThemeData(
   useMaterial3: true,
 );
 
+/// Unbounded — the display face for the app title and the three money card
+/// headings. Everything else stays on the system UI font, which is far more
+/// legible at small sizes.
+const String displayFont = 'Unbounded';
+
 /// Money must never reflow as digits change — tabular figures only.
 const moneyStyle = TextStyle(
   fontFamily: '.AppleSystemUIFont',

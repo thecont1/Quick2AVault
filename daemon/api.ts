@@ -14,6 +14,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Ports } from "./ports.js";
 import { ingestFile } from "./pipeline.js";
 import { listPacks, loadPack, fyKeyFor, fyRange, type JurisdictionPack } from "./jurisdiction.js";
+import { deriveGmailAddress } from "./gmail/gmail-model.js";
+import type { GmailOAuth } from "./gmail/oauth.js";
 import {
   isLearningEnabled,
   questionBudget,
@@ -30,12 +32,15 @@ export interface ApiOptions {
   /** Surfaced read-only on the Setup page so the user can see what's active. */
   ai?: { available: boolean; model: string };
   dropDir?: string;
+  /** Gmail dropbox, present only when Google OAuth credentials are set. */
+  gmail?: { oauth: GmailOAuth; sync: () => Promise<unknown> };
 }
 
 export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   const startedAt = Date.now();
   const ai = opts.ai ?? { available: false, model: "(none)" };
   const dropDir = opts.dropDir ?? "";
+  const gmail = opts.gmail;
 
   /**
    * Active jurisdiction pack. Re-read per request so switching packs from the
@@ -256,6 +261,8 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const envKey = process.env.ANTHROPIC_API_KEY ?? "";
         const storedKey = kv["ai.api_key"] ?? "";
         const effective = storedKey || envKey;
+        // Ask the token store, not a flag — the tokens are the truth.
+        const gmailConnected = gmail ? !!(await gmail.oauth.getTokens()) : false;
         return send(res, 200, {
           ai: {
             base_url: kv["ai.base_url"] ?? "",
@@ -273,13 +280,22 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           },
           gmail: {
             local_part: kv["gmail.local_part"] ?? "",
-            address: kv["gmail.local_part"] ? `${kv["gmail.local_part"]}@gmail.com` : "",
-            connected: kv["gmail.connected"] === "true",
-            // The OAuth flow itself is not yet ported into the daemon; the
-            // address is stored so setup is complete and connect is one step.
-            status: kv["gmail.local_part"]
-              ? (kv["gmail.connected"] === "true" ? "connected" : "not_connected")
-              : "not_configured",
+            address: kv["gmail.local_part"]
+              ? deriveGmailAddress(kv["gmail.local_part"])
+              : "",
+            // Truth comes from the token store, not a settings flag: a flag
+            // can say "connected" while the tokens are gone.
+            connected: gmailConnected,
+            status: !kv["gmail.local_part"]
+              ? "not_configured"
+              : !gmail
+                ? "unavailable"
+                : gmailConnected
+                  ? "connected"
+                  : "not_connected",
+            /** False when the daemon has no Google OAuth credentials. */
+            can_connect: !!gmail,
+            last_history_id: kv["gmail.history_id"] ?? null,
             scopes: ["gmail.readonly"],
             note: "Read-only. Never sends, deletes, labels, or marks as read.",
           },
@@ -434,6 +450,50 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             .prepare("SELECT alias, source, created_at FROM entity_aliases WHERE entity_id=? ORDER BY id")
             .all(id),
         });
+      }
+
+      // ── gmail dropbox ────────────────────────────────────────────────────
+      // Connect: returns the consent URL immediately rather than holding the
+      // request open for the whole flow. The browser is opened too.
+      if (p === "/v1/gmail/connect" && req.method === "POST") {
+        if (!gmail) {
+          return send(res, 501, {
+            error: "Gmail is not configured on this daemon",
+            detail:
+              "Set Q2AV_GOOGLE_CLIENT_ID and Q2AV_GOOGLE_CLIENT_SECRET, then restart. " +
+              "Create an OAuth 'Desktop app' client at console.cloud.google.com with the " +
+              "Gmail API enabled and the gmail.readonly scope.",
+          });
+        }
+        const localPart = (
+          db.prepare("SELECT value FROM app_settings WHERE key='gmail.local_part'").get() as
+            | { value?: string } | undefined
+        )?.value;
+        if (!localPart) return send(res, 400, { error: "Save a Gmail address in Setup first" });
+
+        const handle = await gmail.oauth.authorize(deriveGmailAddress(localPart));
+        // Fire-and-forget: the result lands in the token store, and the client
+        // learns about it from /v1/settings.
+        handle.completed
+          .then(() => ports.logger.info("gmail: authorisation completed"))
+          .catch((e: unknown) => ports.logger.warn("gmail: authorisation failed", { error: String(e) }));
+        return send(res, 200, { auth_url: handle.authUrl, mailbox: deriveGmailAddress(localPart) });
+      }
+
+      if (p === "/v1/gmail/sync" && req.method === "POST") {
+        if (!gmail) return send(res, 501, { error: "Gmail is not configured on this daemon" });
+        try {
+          return send(res, 200, await gmail.sync());
+        } catch (e) {
+          return send(res, 409, { error: String(e instanceof Error ? e.message : e) });
+        }
+      }
+
+      if (p === "/v1/gmail/disconnect" && req.method === "POST") {
+        if (!gmail) return send(res, 501, { error: "Gmail is not configured on this daemon" });
+        await gmail.oauth.disconnect();
+        db.prepare("DELETE FROM app_settings WHERE key='gmail.history_id'").run();
+        return send(res, 200, { disconnected: true });
       }
 
       // ── learning (plan §5) ───────────────────────────────────────────────

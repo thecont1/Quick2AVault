@@ -13,7 +13,12 @@ import * as crypto from "node:crypto";
 import { createPorts } from "./adapters.js";
 import { openDatabase } from "./schema.js";
 import { JobWorker, ingestFile } from "./pipeline.js";
+import type { DatabaseSync } from "node:sqlite";
+import type { Logger } from "./ports.js";
 import { createApi } from "./api.js";
+import { GmailOAuth } from "./gmail/oauth.js";
+import { createTokenStore } from "./gmail/token-store.js";
+import { syncGmail } from "./gmail/sync.js";
 import { createAnthropicProvider } from "./ai-provider.js";
 
 const VERSION = "2.0.0-daemon";
@@ -38,6 +43,64 @@ const PORT = Number(process.env.Q2AV_PORT ?? 4477);
 const VAULT = process.env.Q2AV_VAULT ?? undefined;
 const DROP = process.env.Q2AV_DROP ?? undefined;
 const TOKEN = process.env.Q2AV_TOKEN ?? crypto.randomBytes(16).toString("hex");
+
+/**
+ * Google OAuth client credentials, in the same precedence order the Glaze app
+ * used, so an existing setup keeps working:
+ *   1. app_settings (set from the UI)
+ *   2. gmail-oauth.json in the vault root — the file Google Cloud downloads
+ *   3. environment
+ *
+ * The file must be the "Desktop app" (installed) client type: a web client
+ * cannot use a loopback redirect.
+ */
+function loadGoogleCredentials(
+  db: DatabaseSync,
+  vaultRoot: string,
+  logger: Logger,
+): { clientId: string; clientSecret: string; source: string } | null {
+  const kv = (k: string) =>
+    (db.prepare("SELECT value FROM app_settings WHERE key=?").get(k) as { value?: string } | undefined)
+      ?.value?.trim() || "";
+
+  const fromDbId = kv("gmail.client_id");
+  const fromDbSecret = kv("gmail.client_secret");
+  if (fromDbId && fromDbSecret) {
+    return { clientId: fromDbId, clientSecret: fromDbSecret, source: "settings" };
+  }
+
+  for (const name of ["gmail-oauth.json", "client_secret.json"]) {
+    const file = path.join(vaultRoot, name);
+    if (!fs.existsSync(file)) continue;
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, "utf-8")) as Record<string, never>;
+      const c = (raw.installed ?? raw.web ?? raw) as { client_id?: string; client_secret?: string };
+      if (raw.web && !raw.installed) {
+        logger.warn("gmail: OAuth client is a 'web' type; loopback needs a 'Desktop app' client", {
+          file,
+        });
+      }
+      if (c.client_id && c.client_secret) {
+        return { clientId: c.client_id.trim(), clientSecret: c.client_secret.trim(), source: name };
+      }
+    } catch (e) {
+      logger.warn("gmail: could not read OAuth client file", { file, error: String(e) });
+    }
+  }
+
+  const envId =
+    process.env.Q2AV_GOOGLE_CLIENT_ID ??
+    process.env.QUICK2AVAULT_GMAIL_CLIENT_ID ??
+    process.env.GOOGLE_OAUTH_CLIENT_ID;
+  const envSecret =
+    process.env.Q2AV_GOOGLE_CLIENT_SECRET ??
+    process.env.QUICK2AVAULT_GMAIL_CLIENT_SECRET ??
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  if (envId && envSecret) {
+    return { clientId: envId.trim(), clientSecret: envSecret.trim(), source: "environment" };
+  }
+  return null;
+}
 
 async function main() {
   const ports = createPorts({ vaultRoot: VAULT, logLevel: (process.env.Q2AV_LOG as never) ?? "info" });
@@ -67,12 +130,34 @@ async function main() {
 
   const dropDir = DROP ?? path.join(ports.paths.vaultRoot(), "Drop");
 
+  // ── gmail dropbox ─────────────────────────────────────────────────────────
+  // Optional: without Google OAuth credentials the daemon runs exactly as
+  // before and the endpoints answer 501 with instructions, rather than the
+  // feature silently pretending to work.
+  const creds = loadGoogleCredentials(db, ports.paths.vaultRoot(), ports.logger);
+  let gmail: { oauth: GmailOAuth; sync: () => Promise<unknown> } | undefined;
+  if (creds) {
+    const store = await createTokenStore(ports.paths.vaultRoot());
+    const oauth = new GmailOAuth(creds.clientId, creds.clientSecret, "gmail", store, ports.logger);
+    gmail = { oauth, sync: () => syncGmail(db, ports, oauth) };
+    ports.logger.info("gmail dropbox ready", {
+      credentials: creds.source,
+      client_id: `${creds.clientId.slice(0, 12)}…`,
+      token_store: store.backend,
+    });
+  } else {
+    ports.logger.info("gmail dropbox not configured", {
+      hint: "drop the Google 'Desktop app' client JSON at <vault>/gmail-oauth.json, or set Q2AV_GOOGLE_CLIENT_ID/SECRET",
+    });
+  }
+
   const api = createApi(db, ports, {
     port: PORT,
     token: TOKEN,
     version: VERSION,
     ai: { available: ai.available, model: ai.model },
     dropDir,
+    gmail,
   });
   await api.listen();
   ports.logger.info(`Core API listening`, { url: `http://127.0.0.1:${PORT}` });
