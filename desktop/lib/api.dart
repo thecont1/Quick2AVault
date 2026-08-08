@@ -510,6 +510,23 @@ class VaultDoc {
   /// produced nothing, so the toggle would open an empty pane.
   bool get hasMarkdown => markdownChars > 0;
 
+  /// Formats Flutter can decode and therefore magnify.
+  ///
+  /// Deliberately excludes PDF: Flutter cannot rasterise one without a plugin,
+  /// so a PDF is a markdown-only document.
+  static const imageExtensions = {
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic',
+  };
+
+  /// True when this document can be shown as a magnifiable image.
+  ///
+  /// Single source of truth, on the model rather than in a widget: BOTH the
+  /// default-view choice and the pane that renders it need this answer, and two
+  /// independent copies of the extension list would eventually disagree — which
+  /// shows up as a document defaulting to a view it cannot render.
+  bool get isImage =>
+      imageExtensions.contains((ext ?? '').toLowerCase().replaceFirst('.', ''));
+
   factory VaultDoc.fromJson(Map<String, dynamic> j) => VaultDoc(
         id: j['id'] as String,
         filename: (j['original_filename'] ?? '(unnamed)') as String,

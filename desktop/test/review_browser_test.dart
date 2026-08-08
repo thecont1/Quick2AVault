@@ -142,16 +142,93 @@ void main() {
     expect(api.markdownCalls, 0);
   });
 
-  testWidgets('a PDF says it has no inline preview instead of showing a broken one',
+  testWidgets('an image document defaults to the magnifiable image view',
       (tester) async {
-    // Flutter cannot rasterise PDFs without a plugin. Being explicit beats an
-    // empty grey box with a zoom cursor that magnifies nothing.
-    final api = _FakeApi(docs: [_doc('d1', 'statement.pdf', ext: '.pdf')]);
+    final api = _FakeApi(
+      docs: [_doc('d1', 'receipt.png')],
+      markdown: '# Receipt',
+    );
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('No inline preview for .pdf'), findsOneWidget);
-    expect(find.textContaining('Switch to Markdown'), findsOneWidget);
+    // Image default = the document itself, and markdown is NOT pre-fetched.
+    expect(find.text('Document'), findsOneWidget);
+    expect(find.text('Markdown'), findsOneWidget);
+    expect(api.markdownCalls, 0);
+  });
+
+  testWidgets('a non-image document opens straight into markdown', (tester) async {
+    // A PDF has only one view. It must land there rather than on an image pane
+    // Flutter cannot render, and the text must be fetched without a click.
+    final api = _FakeApi(
+      docs: [_doc('d1', 'statement.pdf', ext: '.pdf')],
+      markdown: '# Statement\n\nClosing balance: 41,000',
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+
+    expect(api.markdownCalls, 1);
+    expect(find.textContaining('Closing balance: 41,000'), findsOneWidget);
+  });
+
+  testWidgets('a non-image document offers no view toggle at all',
+      (tester) async {
+    // Not a disabled half — no choice. A two-option control with one dead
+    // option invites clicks that cannot do anything.
+    final api = _FakeApi(
+      docs: [_doc('d1', 'statement.pdf', ext: '.pdf')],
+      markdown: '# Statement',
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Document'), findsNothing);
+    expect(find.text('Markdown only'), findsOneWidget);
+  });
+
+  testWidgets('switching from an image to a PDF flips the view automatically',
+      (tester) async {
+    // The regression this guards: _showMarkdown left over from the previous
+    // selection. Land on an image, then select a PDF — it must not stay on the
+    // image pane, and vice versa.
+    final api = _FakeApi(
+      docs: [
+        _doc('d1', 'receipt.png'),
+        _doc('d2', 'statement.pdf', ext: '.pdf'),
+      ],
+      markdown: '# Statement',
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+
+    // Starts on the image, with a full toggle.
+    expect(find.text('Document'), findsOneWidget);
+
+    await tester.tap(find.text('statement.pdf'));
+    await tester.pumpAndSettle();
+    expect(find.text('Markdown only'), findsOneWidget);
+    expect(find.text('Document'), findsNothing);
+
+    // ...and back again.
+    await tester.tap(find.text('receipt.png').first);
+    await tester.pumpAndSettle();
+    expect(find.text('Document'), findsOneWidget);
+    expect(find.text('Markdown only'), findsNothing);
+  });
+
+  testWidgets('a PDF that is the FIRST document still opens on markdown',
+      (tester) async {
+    // The auto-selected document is never clicked, so it bypasses _select().
+    // Both paths must apply the same rule.
+    final api = _FakeApi(
+      docs: [_doc('d1', 'first.pdf', ext: '.pdf')],
+      markdown: '# First',
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+
+    expect(api.markdownCalls, 1);
+    expect(find.text('Markdown only'), findsOneWidget);
   });
 
   testWidgets('an unanalysed document is visibly distinguished', (tester) async {

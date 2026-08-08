@@ -70,7 +70,15 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
         _error = null;
         // Select the newest by default so the pane is never empty on open.
         _selected ??= docs.isEmpty ? null : docs.first;
+        // Same rule as _select(): a non-image document has only a markdown
+        // view. Without this the FIRST document (auto-selected, never clicked)
+        // would open on the image pane regardless of its format.
+        _showMarkdown = _selected != null && !_selected!.isImage;
       });
+      final sel = _selected;
+      if (sel != null && !sel.isImage && _markdown == null) {
+        _loadMarkdown(sel);
+      }
     } on VaultAuthException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -108,8 +116,12 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
     setState(() {
       _selected = doc;
       _markdown = null;
-      _showMarkdown = false;
+      // Image documents default to the magnifiable image; everything else has
+      // only a markdown view, so land there rather than on a pane that cannot
+      // render and a toggle the user must discover.
+      _showMarkdown = !doc.isImage;
     });
+    if (!doc.isImage) _loadMarkdown(doc);
   }
 
   /// Filtered list. Matches filename, doc type and source so a search for
@@ -386,6 +398,10 @@ class _Detail extends StatelessWidget {
                 ),
                 _Toggle(
                   showMarkdown: showMarkdown,
+                  // A non-image document has exactly one view, so there is
+                  // nothing to toggle between — the control is omitted rather
+                  // than shown with a permanently-dead half.
+                  isImage: doc.isImage,
                   markdownAvailable: doc.hasMarkdown,
                   onToggle: onToggle,
                 ),
@@ -407,34 +423,49 @@ class _Detail extends StatelessWidget {
 
 class _Toggle extends StatelessWidget {
   final bool showMarkdown;
+  final bool isImage;
   final bool markdownAvailable;
   final ValueChanged<bool> onToggle;
 
   const _Toggle({
     required this.showMarkdown,
+    required this.isImage,
     required this.markdownAvailable,
     required this.onToggle,
   });
 
   @override
-  Widget build(BuildContext context) => Row(
-        children: [
-          _Seg(
-            label: 'Document',
-            selected: !showMarkdown,
-            onTap: () => onToggle(false),
-          ),
-          _Seg(
-            label: 'Markdown',
-            // Disabled rather than hidden when there is no text: the toggle
-            // vanishing as you move between documents is more confusing than a
-            // greyed control that explains itself.
-            selected: showMarkdown,
-            enabled: markdownAvailable,
-            onTap: markdownAvailable ? () => onToggle(true) : null,
-          ),
-        ],
+  Widget build(BuildContext context) {
+    // Non-image: markdown is the only view. Label it so the pane is not
+    // unexplained, but offer no choice — a two-option control with one dead
+    // option invites clicks that cannot do anything.
+    if (!isImage) {
+      return const Padding(
+        padding: EdgeInsets.only(left: 6),
+        child: Text('Markdown only',
+            style: TextStyle(fontSize: 11, color: VaultColors.faint)),
       );
+    }
+
+    return Row(
+      children: [
+        _Seg(
+          label: 'Document',
+          selected: !showMarkdown,
+          onTap: () => onToggle(false),
+        ),
+        _Seg(
+          label: 'Markdown',
+          // Disabled rather than hidden when there is no text: the toggle
+          // vanishing as you move between documents is more confusing than a
+          // greyed control that explains itself.
+          selected: showMarkdown,
+          enabled: markdownAvailable,
+          onTap: markdownAvailable ? () => onToggle(true) : null,
+        ),
+      ],
+    );
+  }
 }
 
 class _Seg extends StatelessWidget {
@@ -490,40 +521,13 @@ class _DocumentPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ext = (doc.ext ?? '').toLowerCase().replaceFirst('.', '');
-    const imageExts = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'};
-
-    // Flutter cannot rasterise a PDF without a plugin. Rather than ship a
-    // broken preview, say so plainly and point at the Markdown view, which
-    // carries the same information as text.
-    if (!imageExts.contains(ext)) {
-      return Container(
-        decoration: BoxDecoration(
-          color: VaultColors.controlSubtle40,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: VaultColors.line),
-        ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.description_outlined,
-                  size: 40, color: VaultColors.lineBright),
-              const SizedBox(height: 10),
-              Text(
-                ext.isEmpty ? 'No preview' : 'No inline preview for .$ext',
-                style: const TextStyle(fontSize: 13, color: VaultColors.dim),
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                'Switch to Markdown to read the extracted text.',
-                style: TextStyle(fontSize: 11, color: VaultColors.faint),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
+    // Non-image documents never route here: _select() and _load() send them
+    // straight to markdown, and the toggle offers no way back. Assert rather
+    // than render a fallback, so a future caller that breaks that invariant
+    // fails loudly in tests instead of showing a silently-empty pane.
+    assert(doc.isImage,
+        'the image pane received ${doc.ext} — non-image documents are '
+        'markdown-only and must not reach here');
 
     return Container(
       decoration: BoxDecoration(
