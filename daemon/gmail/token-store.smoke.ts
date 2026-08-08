@@ -73,6 +73,26 @@ await check("removing twice is safe", async () => {
   await store.remove(TEST_PROVIDER);
 });
 
+// The stdin variant of `security -w` truncates at 128 chars, which stored a
+// broken token that read back as "no tokens" — a silent logout. A realistic
+// Google token JSON is ~180 bytes, so this asserts a long secret survives
+// EXACTLY, which is the property truncation breaks.
+await check("a long token survives byte-for-byte (128-char truncation guard)", async () => {
+  const longAccess = `ya29.${"A".repeat(180)}`;
+  const longRefresh = `1//0g${"B".repeat(90)}`;
+  await store.set(TEST_PROVIDER, {
+    accessToken: longAccess,
+    refreshToken: longRefresh,
+    expiresIn: 3599,
+    scope: "https://www.googleapis.com/auth/gmail.readonly",
+  });
+  const back = await store.get(TEST_PROVIDER);
+  assert.ok(back, "long token vanished — truncation regression");
+  assert.strictEqual(back.accessToken, longAccess, "access token was truncated");
+  assert.strictEqual(back.refreshToken, longRefresh, "refresh token was truncated");
+  assert.strictEqual(back.scope, "https://www.googleapis.com/auth/gmail.readonly");
+});
+
 await check("no token is written to the vault directory", async () => {
   // On macOS the keychain is used, so the fallback dir must stay empty.
   if (store.backend !== "macos-keychain") return;

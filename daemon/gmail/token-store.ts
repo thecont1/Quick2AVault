@@ -61,18 +61,41 @@ class KeychainStore implements TokenStore {
         "-w",
       ]);
       return deserialise(stdout.trim());
-    } catch {
-      return null; // not found is the normal path, not an error
+    } catch (err) {
+      // "item could not be found" is the normal empty case. Anything else is
+      // a real fault (locked keychain, denied access) and must not be
+      // reported as "no tokens" — that would silently log the user out and
+      // trigger a pointless re-auth.
+      const msg = (err as Error)?.message ?? "";
+      if (!/could not be found|SecKeychainSearchCopyNext/i.test(msg)) {
+        throw new Error(`keychain read failed for ${providerId}: ${msg}`);
+      }
+      return null;
     }
   }
 
   async set(providerId: string, tokens: StoredOAuthTokensInput): Promise<void> {
-    // -U updates in place if the item already exists.
+    const secret = serialise(tokens);
+
+    // KNOWN TRADE-OFF: the secret is passed in argv.
+    //
+    // `security add-generic-password -w` (no value) reads the password from
+    // stdin, which would keep it out of the process table — but it silently
+    // TRUNCATES AT 128 CHARACTERS. Our token JSON is ~180 bytes, so the
+    // stdin path stored a truncated string that parsed as invalid JSON and
+    // read back as "no tokens": a silent logout on every save. Verified by
+    // probe: written 180 bytes, read back exactly 128.
+    //
+    // A truncated credential is a worse failure than a briefly visible one,
+    // so argv it is, with the exposure documented rather than hidden. The
+    // window is milliseconds and the daemon is a local single-user process;
+    // the proper fix is a Security.framework helper (SecItemAdd) or keytar,
+    // tracked as follow-up work rather than bodged in here.
     await run("security", [
       "add-generic-password",
       "-s", SERVICE,
       "-a", providerId,
-      "-w", serialise(tokens),
+      "-w", secret,
       "-U",
     ]);
   }
