@@ -20,6 +20,14 @@ export type DocType =
   | "refund_note"
   | "contract_note"
   | "salary_slip"
+  // Work order 04 §Track A: the whole statement document, as opposed to
+  // "statement_line" above (one row lifted out of a larger document by an
+  // upstream job). A bank/card statement produces MANY staged rows via
+  // statement.lines below — doc_type on the DOCUMENT stays "bank_statement"
+  // or "card_statement" throughout; individual promoted transactions each
+  // carry their own evidence_role of "statement_line".
+  | "bank_statement"
+  | "card_statement"
   | "irrelevant"
   | "unknown";
 
@@ -87,6 +95,44 @@ export interface ExtractionResult {
   is_wallet_topup: boolean;
   confidence: number;
   notes: string | null;
+  /**
+   * Present only for doc_type IN ('bank_statement', 'card_statement').
+   *
+   * Deterministic-first (work order 04 §A.2): the daemon parses the
+   * markdown table itself (column mapping, row extraction, running-balance
+   * continuity) BEFORE any AI call. This field is what AI contributes when
+   * the layout is unfamiliar or a line needs classification — never the sole
+   * source of the line data. See daemon/statements.ts.
+   *
+   * The 21-security holdings truncation (max_tokens=2048 silently dropping
+   * the array) is the reason `lines` is chunked per response rather than
+   * requested as one array for a 100+ row statement: a single truncated
+   * response would ship this feature broken exactly the same way.
+   */
+  statement?: {
+    institution: string | null;
+    account_ref: string | null;
+    period_from: string | null;
+    period_to: string | null;
+    opening_balance_minor: number | null;
+    closing_balance_minor: number | null;
+    currency: string;
+    lines: StatementLineExtraction[];
+  } | null;
+}
+
+export interface StatementLineExtraction {
+  line_no: number;
+  occurred_at: string | null;
+  raw_descriptor: string;
+  amount_minor: number;
+  direction: "out" | "in";
+  balance_after_minor?: number | null;
+  currency?: string;
+  /** Present only when the line states an amount in a currency other than the statement's own. */
+  fx_original?: { amount_minor: number; currency: string } | null;
+  /** UTR/RRN/cheque/UPI ref — what lets this line cross AUTO_LINK against a matching invoice reference id. */
+  reference_id?: string | null;
 }
 
 /** JSON Schema handed to Claude as a tool definition for strict output. */
@@ -102,7 +148,8 @@ export const EXTRACTION_TOOL_SCHEMA = {
         enum: [
           "merchant_invoice", "card_confirmation", "bank_slip", "payment_receipt",
           "wallet_topup_confirmation", "statement_line", "refund_note",
-          "contract_note", "salary_slip", "irrelevant", "unknown",
+          "contract_note", "salary_slip", "bank_statement", "card_statement",
+          "irrelevant", "unknown",
         ],
       },
       occurred_at: { type: ["string", "null"], description: "Economic date, ISO yyyy-mm-dd. Source dates are DD-MM-YYYY." },
@@ -255,5 +302,15 @@ Rules that matter more than anything else:
 
 8. If the document is not financial, set doc_type="irrelevant" and leave
    monetary fields null.
+
+9. A BANK OR CARD STATEMENT (many transactions, one document) is
+   doc_type="bank_statement" or "card_statement" — never "statement_line".
+   These are handled by a SEPARATE deterministic table parser
+   (daemon/statements.ts), not by amount_minor/direction/parties on this
+   extraction. If you are asked to extract one, your job is narrower than
+   usual: confirm the column mapping (which column is the date, the
+   descriptor, debit/credit) when the deterministic parser could not
+   determine it with confidence — never invent transaction totals across
+   the whole statement.
 
 Report what the document says. Do not infer amounts that are not printed.`;

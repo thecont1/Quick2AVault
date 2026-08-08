@@ -22,7 +22,7 @@ export type ClaimSubject = "document" | "transaction" | "entity";
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -181,6 +181,52 @@ CREATE TABLE IF NOT EXISTS transaction_documents (
   PRIMARY KEY (transaction_id, document_id)
 );
 CREATE INDEX IF NOT EXISTS idx_txndocs_doc ON transaction_documents(document_id);
+
+-- ── Statement imports (work order 04 §Track A) ─────────────────────────────
+-- One statement document -> N staged lines -> promoted to transactions once
+-- reconciled. A staging table rather than writing straight to the ledger
+-- because a statement line needs the matcher's judgement first: it might
+-- SETTLE an existing invoice-only transaction, or it might be new money the
+-- vault never saw a receipt for (a genuine gap). Staging keeps the raw read
+-- available for that decision and for re-import idempotency, independent of
+-- whatever the line becomes.
+CREATE TABLE IF NOT EXISTS statement_lines (
+  id                 TEXT PRIMARY KEY,
+  document_id        TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  line_no            INTEGER NOT NULL,
+  occurred_at        TEXT,
+  raw_descriptor     TEXT NOT NULL,
+  amount_minor       INTEGER NOT NULL,
+  direction          TEXT NOT NULL CHECK (direction IN ('out','in')),
+  balance_after_minor INTEGER,
+  currency           TEXT NOT NULL DEFAULT 'INR',
+  -- Present only when the line states an amount in a currency other than the
+  -- statement's own — original amount/currency, kept alongside the converted
+  -- amount_minor so both the source figure and the INR figure are on record.
+  fx_original_json   TEXT,
+  -- UTR/RRN/cheque/UPI ref, when the statement prints one. Read by
+  -- reconcileStagedLine (statements.ts) as a STRONG_KEYS-equivalent
+  -- reference_id so a matching invoice reference crosses AUTO_LINK instead
+  -- of stalling in the review band on descriptor+amount+date alone.
+  reference_id       TEXT,
+  -- pending: staged, not yet reconciled. linked: attached as settlement
+  -- evidence to an existing transaction. created: promoted to its own new
+  -- transaction (the gap case — no invoice was ever on file). skipped:
+  -- re-import of a line already staged/promoted from an earlier statement.
+  status             TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending','linked','created','skipped')),
+  transaction_id     TEXT REFERENCES transactions(id),
+  created_at         TEXT NOT NULL,
+  -- One statement line is one economic event: overlapping statements from
+  -- adjacent months, or a re-drop of the same file, must never create it
+  -- twice. account_entity_id anchors the key to WHICH account, so identical
+  -- amounts on the same day across two different accounts don't collide.
+  account_entity_id  TEXT REFERENCES entities(id),
+  idempotency_key    TEXT NOT NULL,
+  UNIQUE (idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_stmt_lines_doc ON statement_lines(document_id);
+CREATE INDEX IF NOT EXISTS idx_stmt_lines_status ON statement_lines(status);
 
 -- ── Provenance: user > rule > ai ───────────────────────────────────────────
 -- SUBJECT-SCOPED (work order 03 §P2). A claim is about a DOCUMENT, a

@@ -60,6 +60,8 @@
   "document_hints": {
     "wallet_topup": ["チャージ", "CHARGE", "TOP-UP", "PayPay"],
     "contract_note": ["取引報告書", "CONTRACT NOTE", "TSE"],
-    "salary": ["給与明細", "PAYSLIP", "NET PAY"]
+    "salary": ["給与明細", "PAYSLIP", "NET PAY"],
+    "bank_statement": ["取引明細", "口座明細", "STATEMENT OF ACCOUNT", "残高"],
+    "card_statement": ["ご利用明細", "CREDIT CARD STATEMENT", "お支払い金額"]
   }
 }

@@ -64,6 +64,8 @@
   "document_hints": {
     "wallet_topup": ["ADD MONEY", "LOAD", "TOP-UP", "TOPUP", "WALLET"],
     "contract_note": ["CONTRACT NOTE", "TRADE CONFIRMATION", "NSE", "BSE", "ISIN"],
-    "salary": ["PAYSLIP", "SALARY SLIP", "EARNINGS", "NET PAY", "CTC"]
+    "salary": ["PAYSLIP", "SALARY SLIP", "EARNINGS", "NET PAY", "CTC"],
+    "bank_statement": ["STATEMENT OF ACCOUNT", "ACCOUNT STATEMENT", "OPENING BALANCE", "CLOSING BALANCE", "NARRATION"],
+    "card_statement": ["CREDIT CARD STATEMENT", "STATEMENT SUMMARY", "MINIMUM AMOUNT DUE", "TOTAL AMOUNT DUE", "PAYMENT DUE DATE"]
   }
 }
