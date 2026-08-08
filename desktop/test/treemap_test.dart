@@ -44,7 +44,11 @@ Future<Map<String, Rect>> _layout(
   );
   final out = <String, Rect>{};
   for (final n in nodes) {
-    final f = find.bySemanticsLabel(RegExp('^${n.label},'));
+    // Escape the label: RegExp metacharacters in real category names would
+    // otherwise silently fail to match, and the loop's `continue` would hide
+    // it as "node absent" rather than "test broken". "(none)" is a live label
+    // from buildTreemap's passthrough, and its parens are a capture group.
+    final f = find.bySemanticsLabel(RegExp('^${RegExp.escape(n.label)},'));
     if (f.evaluate().isEmpty) continue;
     out[n.id] = tester.getRect(f.first);
   }

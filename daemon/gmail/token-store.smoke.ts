@@ -78,6 +78,16 @@ await check("removing twice is safe", async () => {
 // Google token JSON is ~180 bytes, so this asserts a long secret survives
 // EXACTLY, which is the property truncation breaks.
 await check("a long token survives byte-for-byte (128-char truncation guard)", async () => {
+  // The truncation is a property of the macOS `security` CLI, so this must run
+  // against the Keychain backend to mean anything. createTokenStore falls back
+  // to file-0600 off macOS or when `security -h` fails, where the test would
+  // pass trivially and hide a regression on the platform that has the bug.
+  if (store.backend !== "macos-keychain") {
+    throw new Error(
+      `needs the keychain backend to be meaningful; got "${store.backend}". ` +
+        `Run on macOS with the security CLI available.`,
+    );
+  }
   const longAccess = `ya29.${"A".repeat(180)}`;
   const longRefresh = `1//0g${"B".repeat(90)}`;
   await store.set(TEST_PROVIDER, {
