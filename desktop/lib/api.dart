@@ -477,6 +477,52 @@ class LearningState {
       );
 }
 
+/// A document as the browser list needs it: enough to group, label and show
+/// pipeline state without fetching the file itself.
+class VaultDoc {
+  final String id;
+  final String filename;
+  final String? ext;
+  final int byteSize;
+  final String? docType;
+  final String? source;
+  final String receivedAt;
+  final String? analysedAt;
+  final int markdownChars;
+
+  const VaultDoc({
+    required this.id,
+    required this.filename,
+    required this.ext,
+    required this.byteSize,
+    required this.docType,
+    required this.source,
+    required this.receivedAt,
+    required this.analysedAt,
+    required this.markdownChars,
+  });
+
+  /// True once analysis has run. Drives the green/amber dot in the list — the
+  /// difference between "we have the bytes" and "we understand it".
+  bool get analysed => analysedAt != null;
+
+  /// Whether a markdown view is worth offering. Zero chars means conversion
+  /// produced nothing, so the toggle would open an empty pane.
+  bool get hasMarkdown => markdownChars > 0;
+
+  factory VaultDoc.fromJson(Map<String, dynamic> j) => VaultDoc(
+        id: j['id'] as String,
+        filename: (j['original_filename'] ?? '(unnamed)') as String,
+        ext: j['ext'] as String?,
+        byteSize: (j['byte_size'] as num?)?.toInt() ?? 0,
+        docType: j['doc_type'] as String?,
+        source: j['source'] as String?,
+        receivedAt: (j['received_at'] ?? '') as String,
+        analysedAt: j['analysed_at'] as String?,
+        markdownChars: (j['markdown_chars'] as num?)?.toInt() ?? 0,
+      );
+}
+
 class VaultApi {
   final String baseUrl;
   final String token;
@@ -486,6 +532,45 @@ class VaultApi {
       : _client = client ?? http.Client();
 
   Map<String, String> get _headers => {'authorization': 'Bearer $token'};
+
+  /// Headers for loading a document image via Image.network.
+  ///
+  /// Exposed because the file route requires Bearer auth — query-string tokens
+  /// are refused everywhere except /v1/events (they leak into logs, history and
+  /// Referer headers). Image.network takes explicit headers, so the preview can
+  /// authenticate without a URL token.
+  Map<String, String> get imageHeaders => _headers;
+
+  /// The document list for the Review browser.
+  Future<List<VaultDoc>> documents({int limit = 200}) => _get(
+        '/v1/documents?limit=$limit',
+        (j) => ((j['documents'] ?? const []) as List)
+            .map((e) => VaultDoc.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+
+  /// URL for a document's original bytes. Needs [imageHeaders] to fetch.
+  Uri documentFileUrl(String id) => Uri.parse('$baseUrl/v1/documents/$id/file');
+
+  /// The extracted text, for the Document/Markdown toggle.
+  ///
+  /// Returns null rather than throwing when conversion has not run (409): an
+  /// unconverted document is a normal state, not an error, and the caller shows
+  /// "not converted yet" instead of an error banner.
+  Future<String?> documentMarkdown(String id) async {
+    final res = await _client
+        .get(Uri.parse('$baseUrl/v1/documents/$id/markdown'), headers: _headers)
+        .timeout(const Duration(seconds: 10));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, '/v1/documents/$id/markdown');
+    }
+    if (res.statusCode == 409 || res.statusCode == 410) return null;
+    if (res.statusCode != 200) {
+      throw Exception('GET /v1/documents/$id/markdown -> ${res.statusCode}');
+    }
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    return j['markdown'] as String?;
+  }
 
   Future<T> _get<T>(String path, T Function(Map<String, dynamic>) parse) async {
     final res = await _client
