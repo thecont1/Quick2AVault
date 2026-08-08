@@ -381,6 +381,38 @@ class _VaultHomeState extends State<VaultHome> {
     } catch (_) {}
   }
 
+  /// Open a search result.
+  ///
+  /// A hit carries the transaction its document backs. An UNLINKED document
+  /// has none — selecting it would silently do nothing, so the user is told
+  /// why instead of being left staring at an unchanged screen.
+  Future<void> _openSearchHit(SearchHit hit) async {
+    final txnId = hit.transactionId;
+    if (txnId == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('${hit.filename} is not linked to a transaction yet'),
+      ));
+      return;
+    }
+    final existing = _txns.where((t) => t.id == txnId).firstOrNull;
+    if (existing != null) {
+      await _select(existing);
+      return;
+    }
+    // The transaction is outside the selected period. Fetching the evidence
+    // card directly still shows the proof rather than making the user hunt
+    // for the right month.
+    setState(() {
+      _selectedId = txnId;
+      _card = null;
+    });
+    try {
+      final card = await _api.evidenceCard(txnId);
+      if (mounted && _selectedId == txnId) setState(() => _card = card);
+    } catch (_) {}
+  }
+
   Future<void> _onDrop(List<String> paths) async {
     for (final p in paths) {
       await _api.ingest(p);
@@ -496,6 +528,9 @@ class _VaultHomeState extends State<VaultHome> {
                   selectedId: _selectedId,
                   card: _card,
                   onSelect: _select,
+                  api: _api,
+                  onSearchHit: _openSearchHit,
+                  onEdited: _refresh,
                 ),
               ),
               FeedRail(events: _feed, connected: _connected),

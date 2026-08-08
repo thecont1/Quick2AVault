@@ -2,18 +2,65 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../theme.dart';
+import 'editable_field.dart';
 
 /// The "prove it" surface. Every document backing one rupee, with the
 /// reference IDs that appear on MORE THAN ONE of them highlighted — those are
 /// the join keys the matcher used.
-class EvidencePanel extends StatelessWidget {
+///
+/// Since work order 03 §P3 this is also the EDITING surface: the transaction's
+/// own fields are correctable in place, each carrying a provenance badge
+/// showing whether the value came from the model or from you.
+class EvidencePanel extends StatefulWidget {
   final EvidenceCard card;
-  const EvidencePanel({super.key, required this.card});
+
+  /// Editing needs an API client. Omit it and the panel stays read-only, which
+  /// is what the tests and any preview surface want.
+  final VaultApi? api;
+
+  /// Called after a successful edit so the shell can refetch the ledger —
+  /// the resolver may have moved totals.
+  final VoidCallback? onEdited;
+
+  const EvidencePanel({super.key, required this.card, this.api, this.onEdited});
+
+  @override
+  State<EvidencePanel> createState() => _EvidencePanelState();
+}
+
+class _EvidencePanelState extends State<EvidencePanel> {
+  ClaimSet _claims = ClaimSet.empty;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadClaims();
+  }
+
+  @override
+  void didUpdateWidget(EvidencePanel old) {
+    super.didUpdateWidget(old);
+    if (old.card.transaction.id != widget.card.transaction.id) _loadClaims();
+  }
+
+  Future<void> _loadClaims() async {
+    final api = widget.api;
+    if (api == null) return;
+    try {
+      final c = await api.claims('transactions', widget.card.transaction.id);
+      if (mounted) setState(() => _claims = c);
+    } catch (_) {
+      // Provenance is an enhancement, not a precondition. A daemon too old to
+      // serve /claims still shows the evidence — it just cannot show badges.
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final card = widget.card;
     final shared = card.sharedRefValues;
     final t = card.transaction;
+    final api = widget.api;
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -67,7 +114,65 @@ class EvidencePanel extends StatelessWidget {
                 ]),
               ),
             )),
-        if (card.provenance.isNotEmpty) ...[
+
+        // ── correctable fields (work order 03 §P3) ───────────────────────────
+        // Read-only provenance text is kept as the fallback: without an API
+        // client there is nothing to write to, and showing dead edit affordances
+        // would be worse than showing none.
+        if (api != null) ...[
+          const SizedBox(height: 4),
+          const Divider(height: 1, color: VaultColors.line),
+          const SizedBox(height: 9),
+          const Text('Correct a field',
+              style: TextStyle(
+                  fontSize: 10.5,
+                  fontFamily: VaultType.mono,
+                  color: VaultColors.faint)),
+          const SizedBox(height: 4),
+          EditableField(
+            label: 'amount',
+            field: 'amount_minor',
+            subjectType: 'transactions',
+            subjectId: t.id,
+            api: api,
+            numeric: true,
+            value: t.amountMinor.toString(),
+            claim: _claims['amount_minor'],
+            editable: _claims.editableFields.contains('amount_minor'),
+            onSaved: (_) {
+              _loadClaims();
+              widget.onEdited?.call();
+            },
+          ),
+          EditableField(
+            label: 'occurred',
+            field: 'occurred_at',
+            subjectType: 'transactions',
+            subjectId: t.id,
+            api: api,
+            value: t.occurredAt,
+            claim: _claims['occurred_at'],
+            editable: _claims.editableFields.contains('occurred_at'),
+            onSaved: (_) {
+              _loadClaims();
+              widget.onEdited?.call();
+            },
+          ),
+          EditableField(
+            label: 'counterparty',
+            field: 'counterparty',
+            subjectType: 'transactions',
+            subjectId: t.id,
+            api: api,
+            value: t.counterparty,
+            claim: _claims['counterparty'],
+            editable: _claims.editableFields.contains('counterparty'),
+            onSaved: (_) {
+              _loadClaims();
+              widget.onEdited?.call();
+            },
+          ),
+        ] else if (card.provenance.isNotEmpty) ...[
           const SizedBox(height: 4),
           const Divider(height: 1, color: VaultColors.line),
           const SizedBox(height: 9),

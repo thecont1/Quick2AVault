@@ -4,6 +4,7 @@ import '../api.dart';
 import '../theme.dart';
 import 'evidence_panel.dart';
 import 'hero_row.dart';
+import 'search_box.dart';
 import 'treemap.dart';
 import 'txn_card.dart';
 
@@ -21,6 +22,16 @@ class LedgerTab extends StatelessWidget {
   final EvidenceCard? card;
   final void Function(Txn) onSelect;
 
+  /// Needed for search and inline editing. Optional so existing widget tests
+  /// can build the tab without a live daemon.
+  final VaultApi? api;
+
+  /// A search result was chosen — the shell selects that transaction.
+  final void Function(SearchHit)? onSearchHit;
+
+  /// An inline edit landed; totals may have moved, so the shell refetches.
+  final VoidCallback? onEdited;
+
   const LedgerTab({
     super.key,
     required this.snapshot,
@@ -29,6 +40,9 @@ class LedgerTab extends StatelessWidget {
     required this.selectedId,
     required this.card,
     required this.onSelect,
+    this.api,
+    this.onSearchHit,
+    this.onEdited,
   });
 
   @override
@@ -38,6 +52,10 @@ class LedgerTab extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (api case final a?) ...[
+            SearchBox(api: a, onOpen: (h) => onSearchHit?.call(h)),
+            const SizedBox(height: 16),
+          ],
           HeroRow(snapshot: snapshot, txns: txns),
           const SizedBox(height: 22),
           // Where the money went. Sits directly under the hero row because it
@@ -82,7 +100,11 @@ class LedgerTab extends StatelessWidget {
                       if (selectedId == t.id && card != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 8, left: 14),
-                          child: EvidencePanel(card: card!),
+                          child: EvidencePanel(
+                            card: card!,
+                            api: api,
+                            onEdited: onEdited,
+                          ),
                         ),
                     ],
                   ),

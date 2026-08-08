@@ -582,6 +582,229 @@ class PageInfo {
       );
 }
 
+/// A refusal from the claims resolver — NOT a transport error.
+///
+/// The daemon returns 409 with a machine-readable code when an edit is
+/// invalid rather than impossible: the field belongs to a different subject
+/// scope, or a confirmed claim outranks the write. Surfacing the code lets
+/// the UI say what actually happened instead of "something went wrong".
+class ClaimRefusedException implements Exception {
+  final String code;
+  final String message;
+  const ClaimRefusedException(this.code, this.message);
+
+  @override
+  String toString() => message;
+}
+
+/// One search result.
+class SearchHit {
+  final String documentId;
+  final String filename;
+  final String? docType;
+  final String? transactionId;
+  final int? amountMinor;
+  final String? occurredAt;
+
+  /// FTS5 snippet with matches wrapped in « » — the daemon picks the
+  /// delimiters so no HTML/markdown escaping is needed on the client.
+  final String snippet;
+  final double rank;
+
+  const SearchHit({
+    required this.documentId,
+    required this.filename,
+    required this.snippet,
+    required this.rank,
+    this.docType,
+    this.transactionId,
+    this.amountMinor,
+    this.occurredAt,
+  });
+
+  factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
+        documentId: j['document_id'] as String,
+        filename: (j['filename'] as String?) ?? '(unnamed)',
+        snippet: (j['snippet'] as String?) ?? '',
+        rank: (j['rank'] as num?)?.toDouble() ?? 0,
+        docType: j['doc_type'] as String?,
+        transactionId: j['transaction_id'] as String?,
+        amountMinor: (j['amount_minor'] as num?)?.toInt(),
+        occurredAt: j['occurred_at'] as String?,
+      );
+}
+
+/// The winning claim for one field, with its provenance.
+class FieldClaim {
+  final String? value;
+
+  /// user | rule | import | ai — drives the provenance badge.
+  final String source;
+  final String status;
+  final double? confidence;
+  final String? at;
+
+  const FieldClaim({
+    required this.source,
+    required this.status,
+    this.value,
+    this.confidence,
+    this.at,
+  });
+
+  bool get isUser => source == 'user';
+
+  factory FieldClaim.fromJson(Map<String, dynamic> j) => FieldClaim(
+        value: j['value'] as String?,
+        source: (j['source'] as String?) ?? 'ai',
+        status: (j['status'] as String?) ?? 'proposed',
+        confidence: (j['confidence'] as num?)?.toDouble(),
+        at: j['at'] as String?,
+      );
+}
+
+/// Every live claim on one subject, plus which fields may be edited.
+///
+/// [editableFields] comes from the daemon rather than being duplicated in the
+/// client: scope rules are enforced server-side, and a hardcoded client list
+/// would drift into offering edits the vault then refuses.
+class ClaimSet {
+  final String subjectType;
+  final String subjectId;
+  final List<String> editableFields;
+  final Map<String, FieldClaim> claims;
+
+  const ClaimSet({
+    required this.subjectType,
+    required this.subjectId,
+    required this.editableFields,
+    required this.claims,
+  });
+
+  static const empty =
+      ClaimSet(subjectType: '', subjectId: '', editableFields: [], claims: {});
+
+  FieldClaim? operator [](String field) => claims[field];
+
+  factory ClaimSet.fromJson(Map<String, dynamic> j) => ClaimSet(
+        subjectType: (j['subject_type'] as String?) ?? '',
+        subjectId: (j['subject_id'] as String?) ?? '',
+        editableFields:
+            ((j['editable_fields'] ?? const []) as List).cast<String>(),
+        claims: ((j['claims'] ?? const {}) as Map<String, dynamic>).map(
+          (k, v) =>
+              MapEntry(k, FieldClaim.fromJson(v as Map<String, dynamic>)),
+        ),
+      );
+}
+
+/// A transaction the resolver touched after an edit.
+class AffectedTransaction {
+  final String transactionId;
+  final List<String> changed;
+  final Map<String, String> reasons;
+
+  /// Documents that disagree with the canonical value. A populated list is
+  /// not an error — it is the settlement-beats-invoice rule being visible.
+  final List<ClaimMismatch> mismatches;
+
+  const AffectedTransaction({
+    required this.transactionId,
+    required this.changed,
+    required this.reasons,
+    required this.mismatches,
+  });
+
+  factory AffectedTransaction.fromJson(Map<String, dynamic> j) =>
+      AffectedTransaction(
+        transactionId: j['transaction_id'] as String,
+        changed: ((j['changed'] ?? const []) as List).cast<String>(),
+        reasons: ((j['reasons'] ?? const {}) as Map<String, dynamic>)
+            .map((k, v) => MapEntry(k, v.toString())),
+        mismatches: ((j['mismatches'] ?? const []) as List)
+            .map((e) => ClaimMismatch.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class ClaimMismatch {
+  final String field;
+  final String documentId;
+  final String documentValue;
+  final String canonical;
+
+  const ClaimMismatch({
+    required this.field,
+    required this.documentId,
+    required this.documentValue,
+    required this.canonical,
+  });
+
+  factory ClaimMismatch.fromJson(Map<String, dynamic> j) => ClaimMismatch(
+        field: j['field'] as String,
+        documentId: (j['document_id'] as String?) ?? '',
+        documentValue: (j['document_value'] ?? '').toString(),
+        canonical: (j['canonical'] ?? '').toString(),
+      );
+}
+
+class ClaimWriteResult {
+  final int claimId;
+  final String field;
+  final String? value;
+  final String? previous;
+  final List<AffectedTransaction> affected;
+
+  const ClaimWriteResult({
+    required this.claimId,
+    required this.field,
+    required this.affected,
+    this.value,
+    this.previous,
+  });
+
+  factory ClaimWriteResult.fromJson(Map<String, dynamic> j) =>
+      ClaimWriteResult(
+        claimId: (j['claim_id'] as num?)?.toInt() ?? 0,
+        field: (j['field'] as String?) ?? '',
+        value: j['value'] as String?,
+        previous: j['previous'] as String?,
+        affected: ((j['affected_transactions'] ?? const []) as List)
+            .map((e) => AffectedTransaction.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+class AuditEntry {
+  final int id;
+  final String field;
+  final String action;
+  final String? oldValue;
+  final String? newValue;
+  final String source;
+  final String at;
+
+  const AuditEntry({
+    required this.id,
+    required this.field,
+    required this.action,
+    required this.source,
+    required this.at,
+    this.oldValue,
+    this.newValue,
+  });
+
+  factory AuditEntry.fromJson(Map<String, dynamic> j) => AuditEntry(
+        id: (j['id'] as num?)?.toInt() ?? 0,
+        field: (j['field'] as String?) ?? '',
+        action: (j['action'] as String?) ?? 'edit',
+        oldValue: j['old_value'] as String?,
+        newValue: j['new_value'] as String?,
+        source: (j['source'] as String?) ?? 'user',
+        at: (j['at'] as String?) ?? '',
+      );
+}
+
 class VaultApi {
   final String baseUrl;
   final String token;
@@ -912,6 +1135,69 @@ class VaultApi {
     );
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
+
+  /// ── search + claims (work order 03 §P1/§P2) ───────────────────────────────
+
+  /// Lexical search over filename, markdown and flattened extraction fields.
+  Future<List<SearchHit>> search(String query, {int limit = 25}) {
+    final q = Uri.encodeQueryComponent(query);
+    return _get(
+      '/v1/search?q=$q&limit=$limit',
+      (j) => ((j['results'] ?? const []) as List)
+          .map((e) => SearchHit.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  /// Per-field provenance for the evidence card: who claimed what, and how.
+  Future<ClaimSet> claims(String subjectType, String subjectId) => _get(
+        '/v1/$subjectType/$subjectId/claims',
+        ClaimSet.fromJson,
+      );
+
+  /// Write a user claim and re-resolve. [subjectType] is 'documents',
+  /// 'transactions' or 'entities'.
+  ///
+  /// A 409 is a REFUSAL, not a transport failure: the field is out of scope
+  /// for this subject, or a confirmed claim outranks the write. It carries a
+  /// machine-readable code the UI shows verbatim rather than a generic error.
+  Future<ClaimWriteResult> writeClaim({
+    required String subjectType,
+    required String subjectId,
+    required String field,
+    required Object? value,
+  }) async {
+    final path = '/v1/$subjectType/$subjectId/claims';
+    final res = await _client
+        .patch(
+          Uri.parse('$baseUrl$path'),
+          headers: {..._headers, 'content-type': 'application/json'},
+          body: jsonEncode({'field': field, 'value': value}),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode == 409) {
+      throw ClaimRefusedException(
+        j['error'] as String? ?? 'refused',
+        j['message'] as String? ?? 'the vault refused this edit',
+      );
+    }
+    if (res.statusCode != 200) {
+      throw Exception('PATCH $path -> ${res.statusCode}');
+    }
+    return ClaimWriteResult.fromJson(j);
+  }
+
+  /// Append-only edit history for one subject.
+  Future<List<AuditEntry>> audit(String subjectId, {int limit = 50}) => _get(
+        '/v1/audit?subject_id=${Uri.encodeQueryComponent(subjectId)}&limit=$limit',
+        (j) => ((j['audit'] ?? const []) as List)
+            .map((e) => AuditEntry.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
   /// Push a file into P0 intake. Used by drag-and-drop.
   Future<Map<String, dynamic>> ingest(String path) async {
