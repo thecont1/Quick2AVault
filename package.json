@@ -13,6 +13,10 @@
     "lint": "eslint daemon --ext .ts",
     "type-check": "tsc --noEmit -p daemon/tsconfig.json",
     "format": "oxfmt daemon",
+    "start": "./start.sh",
+    "start:full": "./start.sh --full",
+    "stop": "./start.sh --stop",
+    "status": "./start.sh --status",
     "app": "cd desktop && flutter run -d macos",
     "app:build": "cd desktop && flutter build macos --release",
     "app:test": "cd desktop && flutter test"

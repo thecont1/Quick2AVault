@@ -194,12 +194,32 @@ The app **never overwrites** a user-confirmed field with AI output. Authority is
 - **Financial-period aware.** Documents are classified into financial years from day one. The app reasons in accounting periods, not just raw dates.
 - **Accounting-aware, not a bookkeeping engine.** Accounting treatment hints are advisory suggestions with evidence, never GAAP-compliant bookings.
 
+## Running it
+
+```bash
+./start.sh           # daemon + app, one command
+./start.sh --full    # open the full window instead of the menubar popup
+./start.sh --stop    # stop both
+./start.sh --status  # what is running, plus a health probe
+```
+
+`npm start`, `npm stop` and `npm run status` are aliases for the same thing.
+
+The first run mints a random auth token into `.q2av-token` (gitignored, mode
+`600`) and reuses it thereafter. This matters because the daemon generates a
+token per boot while the Flutter client bakes one in at *build* time — without
+a persisted token, every daemon restart would need an app rebuild.
+
+The app is rebuilt automatically when the Dart sources change, when the token
+changes, or when you switch between popup and full window. Otherwise startup is
+instant. Logs land in `.logs/`.
+
 ## Development
 
 ```bash
 npm install
 
-npm run daemon       # start the daemon (prints its auth token on boot)
+npm run daemon       # daemon alone, in the foreground (prints its token)
 npm run daemon:dev   # same, with watch-reload
 
 npm test             # every daemon/*.smoke.ts
@@ -207,7 +227,7 @@ npm run type-check
 npm run lint
 npm run format
 
-npm run app          # Flutter client (macOS)
+npm run app          # Flutter client via flutter run (hot reload)
 npm run app:test
 npm run app:build
 ```

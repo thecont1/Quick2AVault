@@ -51,3 +51,8 @@ renderer/
 glaze.ts
 glaze.config.ts
 *-window.html
+
+# local daemon auth token (start.sh) and run logs
+.q2av-token
+.logs/
+.build-mode

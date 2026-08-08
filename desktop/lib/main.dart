@@ -116,7 +116,11 @@ class _VaultHomeState extends State<VaultHome> {
     // NOTE: no default token. A build without --dart-define=Q2AV_TOKEN gets an
     // empty string and fails auth loudly, rather than shipping a guessable
     // shared secret that would let any local process read the ledger.
-    const base = String.fromEnvironment('Q2AV_URL', defaultValue: 'http://127.0.0.1:4479');
+    // 4477 is the daemon's default port (daemon/main.ts). These two defaults
+    // MUST agree: a release build bakes this in, so a mismatch produces an app
+    // that connects to nothing and looks like an empty vault rather than a
+    // configuration error.
+    const base = String.fromEnvironment('Q2AV_URL', defaultValue: 'http://127.0.0.1:4477');
     const token = String.fromEnvironment('Q2AV_TOKEN');
     _api = VaultApi(baseUrl: base, token: token);
     // Errors MUST be surfaced. This was fire-and-forget, so any throw inside
