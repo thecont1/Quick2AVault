@@ -73,10 +73,10 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
         // Same rule as _select(): a non-image document has only a markdown
         // view. Without this the FIRST document (auto-selected, never clicked)
         // would open on the image pane regardless of its format.
-        _showMarkdown = _selected != null && !_selected!.isImage;
+        _showMarkdown = _selected != null && !_selected!.hasPageImage;
       });
       final sel = _selected;
-      if (sel != null && !sel.isImage && _markdown == null) {
+      if (sel != null && !sel.hasPageImage && _markdown == null) {
         _loadMarkdown(sel);
       }
     } on VaultAuthException catch (e) {
@@ -119,9 +119,9 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
       // Image documents default to the magnifiable image; everything else has
       // only a markdown view, so land there rather than on a pane that cannot
       // render and a toggle the user must discover.
-      _showMarkdown = !doc.isImage;
+      _showMarkdown = !doc.hasPageImage;
     });
-    if (!doc.isImage) _loadMarkdown(doc);
+    if (!doc.hasPageImage) _loadMarkdown(doc);
   }
 
   /// Filtered list. Matches filename, doc type and source so a search for
@@ -401,7 +401,7 @@ class _Detail extends StatelessWidget {
                   // A non-image document has exactly one view, so there is
                   // nothing to toggle between — the control is omitted rather
                   // than shown with a permanently-dead half.
-                  isImage: doc.isImage,
+                  hasPageImage: doc.hasPageImage,
                   markdownAvailable: doc.hasMarkdown,
                   onToggle: onToggle,
                 ),
@@ -423,13 +423,13 @@ class _Detail extends StatelessWidget {
 
 class _Toggle extends StatelessWidget {
   final bool showMarkdown;
-  final bool isImage;
+  final bool hasPageImage;
   final bool markdownAvailable;
   final ValueChanged<bool> onToggle;
 
   const _Toggle({
     required this.showMarkdown,
-    required this.isImage,
+    required this.hasPageImage,
     required this.markdownAvailable,
     required this.onToggle,
   });
@@ -439,7 +439,7 @@ class _Toggle extends StatelessWidget {
     // Non-image: markdown is the only view. Label it so the pane is not
     // unexplained, but offer no choice — a two-option control with one dead
     // option invites clicks that cannot do anything.
-    if (!isImage) {
+    if (!hasPageImage) {
       return const Padding(
         padding: EdgeInsets.only(left: 6),
         child: Text('Markdown only',
@@ -525,7 +525,7 @@ class _DocumentPane extends StatelessWidget {
     // straight to markdown, and the toggle offers no way back. Assert rather
     // than render a fallback, so a future caller that breaks that invariant
     // fails loudly in tests instead of showing a silently-empty pane.
-    assert(doc.isImage,
+    assert(doc.hasPageImage,
         'the image pane received ${doc.ext} — non-image documents are '
         'markdown-only and must not reach here');
 
@@ -537,10 +537,12 @@ class _DocumentPane extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: MagnifiedDocument(
-        // Bearer auth, not a query token: query-string credentials are refused
-        // on every route except the SSE stream.
+        // The PAGE endpoint, not the raw file: the daemon rasterises PDFs
+        // server-side, so a 67-PDF vault gets the magnifier too. Bearer auth,
+        // not a query token — query-string credentials are refused on every
+        // route except the SSE stream.
         image: NetworkImage(
-          api.documentFileUrl(doc.id).toString(),
+          api.documentPageUrl(doc.id).toString(),
           headers: api.imageHeaders,
         ),
         fallback: const Center(

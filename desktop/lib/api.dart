@@ -510,22 +510,24 @@ class VaultDoc {
   /// produced nothing, so the toggle would open an empty pane.
   bool get hasMarkdown => markdownChars > 0;
 
-  /// Formats Flutter can decode and therefore magnify.
+  /// Formats the daemon can serve as a magnifiable page image.
   ///
-  /// Deliberately excludes PDF: Flutter cannot rasterise one without a plugin,
-  /// so a PDF is a markdown-only document.
-  static const imageExtensions = {
-    'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic',
+  /// Includes PDF: the daemon rasterises those server-side (/page), so from the
+  /// client's point of view a PDF is just an image. Excludes .eml — an email
+  /// body has no page to render, and its attachments are ingested as their own
+  /// documents.
+  static const pageableExtensions = {
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'pdf',
   };
 
-  /// True when this document can be shown as a magnifiable image.
+  /// True when this document can be shown as a magnifiable page image.
   ///
   /// Single source of truth, on the model rather than in a widget: BOTH the
   /// default-view choice and the pane that renders it need this answer, and two
   /// independent copies of the extension list would eventually disagree — which
   /// shows up as a document defaulting to a view it cannot render.
-  bool get isImage =>
-      imageExtensions.contains((ext ?? '').toLowerCase().replaceFirst('.', ''));
+  bool get hasPageImage => pageableExtensions
+      .contains((ext ?? '').toLowerCase().replaceFirst('.', ''));
 
   factory VaultDoc.fromJson(Map<String, dynamic> j) => VaultDoc(
         id: j['id'] as String,
@@ -568,6 +570,14 @@ class VaultApi {
 
   /// URL for a document's original bytes. Needs [imageHeaders] to fetch.
   Uri documentFileUrl(String id) => Uri.parse('$baseUrl/v1/documents/$id/file');
+
+  /// URL for a magnifiable PAGE IMAGE — the preview source.
+  ///
+  /// Prefer this over [documentFileUrl] for display: the daemon rasterises PDFs
+  /// server-side and caches the result, so the client needs no PDF plugin and
+  /// treats every previewable document identically.
+  Uri documentPageUrl(String id, {int page = 1, int width = 1600}) =>
+      Uri.parse('$baseUrl/v1/documents/$id/page?n=$page&w=$width');
 
   /// The extracted text, for the Document/Markdown toggle.
   ///

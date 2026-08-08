@@ -157,12 +157,31 @@ void main() {
     expect(api.markdownCalls, 0);
   });
 
-  testWidgets('a non-image document opens straight into markdown', (tester) async {
-    // A PDF has only one view. It must land there rather than on an image pane
-    // Flutter cannot render, and the text must be fetched without a click.
+  testWidgets('a PDF is magnifiable, because the daemon rasterises it',
+      (tester) async {
+    // PDFs used to be markdown-only (Flutter cannot rasterise one). The daemon
+    // now renders pages server-side, so a PDF behaves exactly like an image —
+    // which matters because a real vault is 93% PDF.
     final api = _FakeApi(
       docs: [_doc('d1', 'statement.pdf', ext: '.pdf')],
-      markdown: '# Statement\n\nClosing balance: 41,000',
+      markdown: '# Statement',
+    );
+    await tester.pumpWidget(_host(api));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Document'), findsOneWidget);
+    expect(find.text('Markdown'), findsOneWidget);
+    // Not pre-fetched: the document view is the default.
+    expect(api.markdownCalls, 0);
+  });
+
+  testWidgets('an email with no attachment opens straight into markdown',
+      (tester) async {
+    // An email body has no page to render — its attachments are ingested as
+    // their own documents. Markdown is the only view.
+    final api = _FakeApi(
+      docs: [_doc('d1', 'alert.eml', ext: '.eml')],
+      markdown: '# Alert\n\nClosing balance: 41,000',
     );
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
@@ -171,13 +190,13 @@ void main() {
     expect(find.textContaining('Closing balance: 41,000'), findsOneWidget);
   });
 
-  testWidgets('a non-image document offers no view toggle at all',
+  testWidgets('a document with no page image offers no view toggle at all',
       (tester) async {
     // Not a disabled half — no choice. A two-option control with one dead
     // option invites clicks that cannot do anything.
     final api = _FakeApi(
-      docs: [_doc('d1', 'statement.pdf', ext: '.pdf')],
-      markdown: '# Statement',
+      docs: [_doc('d1', 'alert.eml', ext: '.eml')],
+      markdown: '# Alert',
     );
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
@@ -186,17 +205,17 @@ void main() {
     expect(find.text('Markdown only'), findsOneWidget);
   });
 
-  testWidgets('switching from an image to a PDF flips the view automatically',
+  testWidgets('switching between a pageable and a text-only document flips the view',
       (tester) async {
     // The regression this guards: _showMarkdown left over from the previous
-    // selection. Land on an image, then select a PDF — it must not stay on the
-    // image pane, and vice versa.
+    // selection. Land on an image, then select an email — it must not stay on
+    // the image pane, and vice versa.
     final api = _FakeApi(
       docs: [
         _doc('d1', 'receipt.png'),
-        _doc('d2', 'statement.pdf', ext: '.pdf'),
+        _doc('d2', 'alert.eml', ext: '.eml'),
       ],
-      markdown: '# Statement',
+      markdown: '# Alert',
     );
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
@@ -204,7 +223,7 @@ void main() {
     // Starts on the image, with a full toggle.
     expect(find.text('Document'), findsOneWidget);
 
-    await tester.tap(find.text('statement.pdf'));
+    await tester.tap(find.text('alert.eml'));
     await tester.pumpAndSettle();
     expect(find.text('Markdown only'), findsOneWidget);
     expect(find.text('Document'), findsNothing);
@@ -216,12 +235,12 @@ void main() {
     expect(find.text('Markdown only'), findsNothing);
   });
 
-  testWidgets('a PDF that is the FIRST document still opens on markdown',
+  testWidgets('a text-only document that is FIRST still opens on markdown',
       (tester) async {
     // The auto-selected document is never clicked, so it bypasses _select().
     // Both paths must apply the same rule.
     final api = _FakeApi(
-      docs: [_doc('d1', 'first.pdf', ext: '.pdf')],
+      docs: [_doc('d1', 'first.eml', ext: '.eml')],
       markdown: '# First',
     );
     await tester.pumpWidget(_host(api));

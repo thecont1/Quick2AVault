@@ -16,6 +16,7 @@ import { ingestFile } from "./pipeline.js";
 import { listPacks, loadPack, fyKeyFor, fyRange, type JurisdictionPack } from "./jurisdiction.js";
 import { buildTreemap } from "./categories/spend-categories.js";
 import { deriveGmailAddress } from "./gmail/gmail-model.js";
+import { pageCapability, renderPage } from "./rasterise.js";
 import type { GmailOAuth } from "./gmail/oauth.js";
 import {
   isLearningEnabled,
@@ -941,6 +942,107 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
 
         default: {
+          // getDocumentPage — /v1/documents/<id>/page?n=1&w=1600
+          //
+          // A magnifiable page image. Images are served as-is; PDFs are
+          // rasterised and cached. This is what makes the Review magnifier
+          // usable on a real vault: 93% of documents here are PDFs, so an
+          // image-only preview would reach almost nothing.
+          const pageMatch = p.match(/^\/v1\/documents\/([^/]+)\/page$/);
+          if (pageMatch) {
+            const doc = db
+              .prepare("SELECT id, ext, raw_path, sha256 FROM documents WHERE id = ?")
+              .get(pageMatch[1]) as Record<string, unknown> | undefined;
+            if (!doc) {
+              return send(res, 404, { error: "document_not_found", document_id: pageMatch[1] });
+            }
+
+            const resolved = path.resolve(String(doc.raw_path ?? ""));
+            const vaultRoot = path.resolve(opts.vaultDir);
+            if (!resolved.startsWith(vaultRoot + path.sep)) {
+              return send(res, 403, { error: "outside_vault" });
+            }
+
+            const cap = await pageCapability(doc.ext as string, resolved);
+            if (cap.kind === "none") {
+              // Not an error: an email with no attachment genuinely has no page.
+              // 409 lets the client show "markdown only" rather than a failure.
+              return send(res, 409, {
+                error: "no_page_image",
+                reason: cap.reason,
+                document_id: doc.id,
+              });
+            }
+
+            // Native images need no rendering — hand off to the file route's
+            // logic by reading the original bytes directly.
+            if (cap.kind === "native") {
+              try {
+                const bytes = await fsp.readFile(resolved);
+                res.writeHead(200, {
+                  "content-type": `image/${normaliseImageExt(String(doc.ext))}`,
+                  "content-length": String(bytes.byteLength),
+                  "x-content-type-options": "nosniff",
+                  "cache-control": "private, max-age=300",
+                  "x-page-count": "1",
+                });
+                return res.end(bytes);
+              } catch {
+                return send(res, 410, { error: "file_missing", expected_at: resolved });
+              }
+            }
+
+            const wanted = Number(url.searchParams.get("n") ?? 1);
+            const width = Math.min(
+              4096,
+              Math.max(256, Number(url.searchParams.get("w") ?? 1600)),
+            );
+            if (!Number.isInteger(wanted) || wanted < 1 || wanted > cap.pages) {
+              return send(res, 400, {
+                error: "page_out_of_range",
+                requested: wanted,
+                pages: cap.pages,
+              });
+            }
+            // sips cannot select a page. Refusing is the honest answer — serving
+            // page 1 for a request for page 3 would misattribute evidence.
+            if (wanted !== 1 && !cap.pagerAvailable) {
+              return send(res, 501, {
+                error: "pager_unavailable",
+                hint: "install poppler (pdftoppm) to render pages beyond the first",
+                pages: cap.pages,
+              });
+            }
+
+            try {
+              const out = await renderPage({
+                rawPath: resolved,
+                ext: doc.ext as string,
+                page: wanted,
+                width,
+                cacheDir: path.join(vaultRoot, ".cache", "pages"),
+                sha256: String(doc.sha256 ?? doc.id),
+              });
+              const bytes = await fsp.readFile(out.file);
+              res.writeHead(200, {
+                "content-type": "image/png",
+                "content-length": String(bytes.byteLength),
+                "x-content-type-options": "nosniff",
+                "cache-control": "private, max-age=300",
+                // Lets the viewer render a pager without a second request.
+                "x-page-count": String(cap.pages),
+                "x-page-number": String(wanted),
+                "x-render-via": out.via,
+              });
+              return res.end(bytes);
+            } catch (e) {
+              return send(res, 500, {
+                error: "render_failed",
+                detail: (e as Error).message,
+              });
+            }
+          }
+
           // getDocumentFile — /v1/documents/<id>/file
           //
           // Serves the original bytes so a client can render a preview (and a
@@ -985,19 +1087,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               });
             }
 
-            const ext = String(doc.ext ?? "").toLowerCase().replace(/^\./, "");
-            const types: Record<string, string> = {
-              pdf: "application/pdf",
-              png: "image/png",
-              jpg: "image/jpeg",
-              jpeg: "image/jpeg",
-              gif: "image/gif",
-              webp: "image/webp",
-              heic: "image/heic",
-              txt: "text/plain; charset=utf-8",
-            };
+            const ext = normaliseImageExt(String(doc.ext ?? ""));
             res.writeHead(200, {
-              "content-type": types[ext] ?? "application/octet-stream",
+              "content-type": MIME_BY_EXT[ext] ?? "application/octet-stream",
               "content-length": String(bytes.byteLength),
               // Never render an untrusted document inline as HTML.
               "x-content-type-options": "nosniff",
@@ -1113,6 +1205,29 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       }),
     close: () => new Promise<void>((r) => server.close(() => r())),
   };
+}
+
+/**
+ * Content types for served documents, in ONE place.
+ *
+ * Both /file and /page need this mapping; two copies drifted apart is how a
+ * PNG ends up labelled application/octet-stream and silently fails to render.
+ */
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  heic: "image/heic",
+  txt: "text/plain; charset=utf-8",
+};
+
+/** '.PNG' -> 'png'. Bare extension, lowercased, no leading dot. */
+function normaliseImageExt(ext: string): string {
+  return ext.toLowerCase().replace(/^\./, "");
 }
 
 /** Tolerant JSON parse for stored extraction blobs — never throws. */
