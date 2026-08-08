@@ -10,10 +10,11 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Ports } from "./ports.js";
 import type { AiProvider } from "./ai-provider.js";
 import { EXTRACTION_VERSION } from "./extraction-contract.js";
-import { recordTransaction } from "./ledger.js";
+import { recordTransaction, resolveEntity } from "./ledger.js";
 import { findMatches, linkEvidence, AUTO_LINK, REVIEW_FLOOR } from "./matcher.js";
 import { ask } from "./learning.js";
 import { flattenExtraction, hashText, indexDocument } from "./search.js";
+import { parseStatementMarkdown, stageStatementLines, reconcileStatement } from "./statements.js";
 
 export interface IntakeResult {
   status: "added" | "duplicate" | "failed";
@@ -592,6 +593,46 @@ export async function runAnalyseJob(
     extraction_version: EXTRACTION_VERSION,
     at: now,
   });
+
+  // ── statement path (work order 04 §Track A) ──────────────────────────────
+  // A bank/card statement has amount_minor=null on the DOCUMENT-level
+  // extraction — there is no single transaction amount for a document
+  // containing dozens of them — so it must branch out here, before the
+  // "no money movement" check below would otherwise discard it entirely.
+  if (x.doc_type === "bank_statement" || x.doc_type === "card_statement") {
+    const acctParty = x.parties.find((p) => p.kind === "account");
+    const acctName =
+      acctParty?.name ?? x.source_of_funds_text ?? `Unidentified ${x.doc_type === "card_statement" ? "card" : "account"}`;
+    const accountEntityId = resolveEntity(db, ports, acctName, "account", {
+      subtype: acctParty?.subtype ?? (x.doc_type === "card_statement" ? "credit_card" : "bank"),
+    });
+
+    const parsed = parseStatementMarkdown(markdown, x.currency || "INR");
+    if (!parsed.column_mapping_confident) {
+      ports.logger.warn("statement: column mapping not confident, needs review", {
+        document_id: documentId,
+        unmapped_columns: parsed.unmapped_columns,
+      });
+      // Nothing staged automatically — an unfamiliar layout must be visible,
+      // not silently mis-parsed. The document stays analysed but with no
+      // staged lines; a future AI-assisted mapping pass or manual review
+      // handles it. (statements-ai.ts, not yet built.)
+      return;
+    }
+
+    const staged = stageStatementLines(db, ports, documentId, parsed, accountEntityId);
+    const totals = reconcileStatement(db, ports, documentId);
+    ports.logger.info("statement imported", {
+      document_id: documentId,
+      doc_type: x.doc_type,
+      staged: staged.staged,
+      already_present: staged.already_present,
+      linked: totals.linked,
+      created: totals.created,
+      review: totals.review,
+    });
+    return;
+  }
 
   if (x.doc_type === "irrelevant" || x.amount_minor === null) {
     ports.logger.info("analyse: no money movement", { document_id: documentId, doc_type: x.doc_type });
