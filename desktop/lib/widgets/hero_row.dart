@@ -24,7 +24,13 @@ class HeroRow extends StatelessWidget {
               child: _Hero(
                 label: 'Spending',
                 value: rupees(snapshot.spendingMinor),
-                note: 'this financial year',
+                // The period the daemon actually resolved, never a hardcoded
+                // string. This said "this financial year" while showing a
+                // month's figures, which makes the number look wrong when it
+                // is the label that is lying.
+                note: snapshot.period.label.isEmpty
+                    ? 'all time'
+                    : snapshot.period.label.toLowerCase(),
               ),
             ),
             const VerticalDivider(width: 1, color: VaultColors.line),

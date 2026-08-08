@@ -376,6 +376,107 @@ class VaultAuthException implements Exception {
   String toString() => 'GET $path -> $statusCode (bad or missing API token)';
 }
 
+/// One open question from the curiosity engine, plus everything needed to
+/// answer it as a durable rule rather than a one-off correction.
+class LearningQuestion {
+  final int id;
+  final String question;
+  /// Why this was asked: 'unseen_entity', 'ambiguous_category', etc. Decides
+  /// which rule kind an answer becomes.
+  final String trigger;
+  final Map<String, dynamic> context;
+  final List<String> options;
+  final DateTime? createdAt;
+
+  const LearningQuestion({
+    required this.id,
+    required this.question,
+    required this.trigger,
+    this.context = const {},
+    this.options = const [],
+    this.createdAt,
+  });
+
+  /// The raw bank descriptor this question is about, when there is one.
+  String? get descriptor => context['descriptor'] as String?;
+
+  /// The resolved entity name the descriptor might be an alias of.
+  String? get entityName => context['entity_name'] as String?;
+
+  /// The document that triggered the question, for showing the evidence.
+  String? get documentId => context['document_id'] as String?;
+
+  factory LearningQuestion.fromJson(Map<String, dynamic> j) => LearningQuestion(
+        id: (j['id'] ?? 0) as int,
+        question: (j['question'] ?? '') as String,
+        trigger: (j['trigger'] ?? '') as String,
+        context: (j['context'] as Map<String, dynamic>?) ?? const {},
+        options: ((j['options'] ?? const []) as List).cast<String>(),
+        createdAt: j['created_at'] == null
+            ? null
+            : DateTime.tryParse(j['created_at'] as String),
+      );
+}
+
+/// A rule the vault has learned from an answer.
+class LearnedRule {
+  final int id;
+  final String kind;
+  final String matchKey;
+  final String value;
+  final int timesApplied;
+
+  const LearnedRule({
+    required this.id,
+    required this.kind,
+    required this.matchKey,
+    required this.value,
+    required this.timesApplied,
+  });
+
+  factory LearnedRule.fromJson(Map<String, dynamic> j) => LearnedRule(
+        id: (j['id'] ?? 0) as int,
+        kind: (j['kind'] ?? '') as String,
+        matchKey: (j['match_key'] ?? '') as String,
+        value: (j['value'] ?? '') as String,
+        timesApplied: (j['times_applied'] ?? 0) as int,
+      );
+}
+
+/// The whole learning surface in one shape.
+class LearningState {
+  final bool enabled;
+  final int budget;
+  final List<LearningQuestion> questions;
+  final List<LearnedRule> rules;
+  /// How many questions have ever been answered — the vault's training count.
+  final int answered;
+
+  const LearningState({
+    required this.enabled,
+    required this.budget,
+    required this.questions,
+    required this.rules,
+    required this.answered,
+  });
+
+  static const empty = LearningState(
+    enabled: true, budget: 0, questions: [], rules: [], answered: 0,
+  );
+
+  factory LearningState.fromJson(Map<String, dynamic> j) => LearningState(
+        enabled: (j['enabled'] ?? true) as bool,
+        budget: (j['budget'] ?? 0) as int,
+        questions: ((j['questions'] ?? const []) as List)
+            .map((e) => LearningQuestion.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        rules: ((j['rules'] ?? const []) as List)
+            .map((e) => LearnedRule.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        answered: (j['answered'] ?? 0) as int,
+      );
+}
+
 class VaultApi {
   final String baseUrl;
   final String token;
@@ -527,6 +628,9 @@ class VaultApi {
   }
 
   /// Learning state: open questions and whether the engine is on.
+  ///
+  /// Kept returning a record for existing callers; use [learningState] for the
+  /// typed shape the review screen needs.
   Future<({bool enabled, int budget, List<Map<String, dynamic>> questions})> learning() async {
     final j = await _get('/v1/learning', (x) => x);
     return (
@@ -534,6 +638,63 @@ class VaultApi {
       budget: (j['budget'] ?? 0) as int,
       questions: ((j['questions'] ?? const []) as List).cast<Map<String, dynamic>>(),
     );
+  }
+
+  /// The full learning surface: open questions, learned rules, training count.
+  Future<LearningState> learningState() =>
+      _get('/v1/learning', LearningState.fromJson);
+
+  /// Answer a question. Passing a rule makes the answer DURABLE — the whole
+  /// point of Learning Mode is that one correction teaches the vault forever
+  /// instead of fixing a single row.
+  ///
+  /// Returns the created rule's id when a rule was made. The daemon responds
+  /// `{answered: true, rule_id: N}` — verified against the live endpoint, not
+  /// assumed — and omits rule_id when the answer created no rule.
+  Future<({bool answered, int? ruleId})> answerLearning(
+    int reviewId,
+    String answer, {
+    String? ruleKind,
+    String? matchKey,
+    String? matchKind,
+    String? value,
+  }) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/learning/answer'),
+      headers: {..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'review_id': reviewId,
+        'answer': answer,
+        if (ruleKind != null) 'rule_kind': ruleKind,
+        if (matchKey != null) 'match_key': matchKey,
+        if (matchKind != null) 'match_kind': matchKind,
+        if (value != null) 'value': value,
+      }),
+    );
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, '/v1/learning/answer');
+    }
+    if (res.statusCode != 200) {
+      throw Exception('POST /v1/learning/answer -> ${res.statusCode}: ${res.body}');
+    }
+    final j = jsonDecode(res.body) as Map<String, dynamic>;
+    return (answered: j['answered'] == true, ruleId: j['rule_id'] as int?);
+  }
+
+  /// Skip a question without creating a rule. Deliberately distinct from
+  /// answering: a dismissal must not teach the vault anything.
+  Future<void> dismissLearning(int reviewId) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/learning/dismiss'),
+      headers: {..._headers, 'Content-Type': 'application/json'},
+      body: jsonEncode({'review_id': reviewId}),
+    );
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, '/v1/learning/dismiss');
+    }
+    if (res.statusCode != 200) {
+      throw Exception('POST /v1/learning/dismiss -> ${res.statusCode}');
+    }
   }
 
   Future<void> toggleLearning(bool enabled) async {

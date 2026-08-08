@@ -26,6 +26,7 @@ import 'widgets/setup_view.dart';
 import 'widgets/period_bar.dart';
 import 'widgets/treemap.dart';
 import 'widgets/people_view.dart';
+import 'widgets/review_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -81,6 +82,9 @@ class _VaultHomeState extends State<VaultHome> {
   /// Setup pane overrides whichever surface is showing.
   bool _setup = false;
   bool _people = false;
+  /// Document Review (Learning Mode). Its own view — it used to share the
+  /// _setup flag, so the review button opened Settings.
+  bool _review = false;
   bool _learningOn = true;
   int _reviewCount = 0;
 
@@ -273,6 +277,19 @@ class _VaultHomeState extends State<VaultHome> {
       );
     }
 
+    if (_review) {
+      return Scaffold(
+        backgroundColor: VaultColors.bg,
+        body: ReviewView(
+          api: _api,
+          onClose: () => setState(() => _review = false),
+          // The badge must drop the moment a question is answered, not on the
+          // next poll — otherwise the count lies about work already done.
+          onChanged: _refresh,
+        ),
+      );
+    }
+
     if (_setup) {
       return Scaffold(
         backgroundColor: VaultColors.bg,
@@ -315,7 +332,7 @@ class _VaultHomeState extends State<VaultHome> {
             onOpenFull: () => _menubar?.openFullWindow(),
             onQuit: () => exit(0),
             onSetup: () => setState(() => _setup = true),
-            onReview: () => setState(() => _setup = true),
+            onReview: () => setState(() => _review = true),
             onRefresh: _refresh,
             onToggleLearning: _toggleLearning,
             learningOn: _learningOn,
