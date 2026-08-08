@@ -13,6 +13,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Ports } from "./ports.js";
 import { fyKey, normaliseName, type Kind } from "./schema.js";
 import type { ExtractionResult, ExtractedParty } from "./extraction-contract.js";
+import { resolvePerson } from "./identity.js";
 
 const newId = (p: string) => `${p}_${crypto.randomBytes(8).toString("hex")}`;
 
@@ -314,10 +315,17 @@ export function recordTransaction(
   for (const party of x.parties.filter((pp) => pp.kind === "person")) {
     if (!party.name?.trim()) continue;
     try {
-      const personId = resolveEntity(db, ports, party.name, "person", {
-        subtype: party.subtype,
-        identifiers: party.identifiers,
-      });
+      // Work order 04 §Track D: full identity resolution (typed identifiers,
+      // fuzzy-band questions, co-occurrence learning), not just the
+      // kind-scoped name matching resolveEntity does for every other kind.
+      const { id: personId } = resolvePerson(
+        db,
+        ports,
+        party.name,
+        party.identifiers,
+        documentId,
+        party.subtype,
+      );
 
       // Promote the first ever person to member/owner status.
       const members = db

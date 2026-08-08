@@ -22,7 +22,7 @@ export type ClaimSubject = "document" | "transaction" | "entity";
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -106,6 +106,16 @@ CREATE TABLE IF NOT EXISTS entity_aliases (
   kind       TEXT NOT NULL,
   alias      TEXT NOT NULL,
   normalised TEXT NOT NULL,
+  -- Work order 04 §D.1: matching semantics differ by type. name_variant
+  -- matches on normalised-exact or token-sort; email/phone match EXACT and
+  -- are high-confidence (an email is decisive, a name spelling is not);
+  -- handle is a future-facing bucket (UPI handles, usernames) with the same
+  -- exact-match rule as email/phone. Defaulting existing rows to
+  -- 'name_variant' is correct: every alias written before this column
+  -- existed came from name-matching code paths (token-sort, containment,
+  -- user-merge), never from an identifier.
+  alias_type TEXT NOT NULL DEFAULT 'name_variant'
+             CHECK (alias_type IN ('name_variant','email','phone','handle')),
   source     TEXT,
   created_at TEXT NOT NULL
 );
@@ -409,6 +419,44 @@ export function migrate(db: DatabaseSync): void {
         ALTER TABLE field_claims_new RENAME TO field_claims;
         CREATE INDEX IF NOT EXISTS idx_claims_subject ON field_claims(subject_type, subject_id, field);
         CREATE INDEX IF NOT EXISTS idx_claims_live ON field_claims(subject_type, subject_id, field, status);
+      `);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  // ── v3 → v4: entity_aliases gains `alias_type` (work order 04 §D.1) ──
+  //
+  // Same rebuild pattern as field_claims above: SQLite's ALTER TABLE ADD
+  // COLUMN does not reliably enforce a CHECK constraint added after the
+  // fact, so the column is declared on a fresh table and rows are copied in.
+  // Every existing row predates typed aliases and came from a name-matching
+  // code path (token-sort, containment, user-merge) — never an identifier —
+  // so 'name_variant' is the correct backfill, not a guess.
+  const aliasCols = columnsOf(db, "entity_aliases");
+  if (aliasCols.size && !aliasCols.has("alias_type")) {
+    db.exec("BEGIN");
+    try {
+      db.exec(`
+        CREATE TABLE entity_aliases_new (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          kind       TEXT NOT NULL,
+          alias      TEXT NOT NULL,
+          normalised TEXT NOT NULL,
+          alias_type TEXT NOT NULL DEFAULT 'name_variant'
+                     CHECK (alias_type IN ('name_variant','email','phone','handle')),
+          source     TEXT,
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO entity_aliases_new (id, entity_id, kind, alias, normalised, alias_type, source, created_at)
+          SELECT id, entity_id, kind, alias, normalised, 'name_variant', source, created_at
+            FROM entity_aliases;
+        DROP TABLE entity_aliases;
+        ALTER TABLE entity_aliases_new RENAME TO entity_aliases;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_kind_norm ON entity_aliases(kind, normalised);
       `);
       db.exec("COMMIT");
     } catch (e) {

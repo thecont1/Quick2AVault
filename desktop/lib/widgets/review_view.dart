@@ -77,7 +77,7 @@ class _ReviewViewState extends State<ReviewView> {
   ///
   /// Returning null means "no rule" — the answer is then a one-off and the UI
   /// says so rather than implying the vault learned something it did not.
-  ({String kind, String matchKey, String value})? _ruleFor(
+  ({String kind, String matchKey, String? matchKind, String value})? _ruleFor(
     LearningQuestion q,
     String answer,
   ) {
@@ -91,18 +91,61 @@ class _ReviewViewState extends State<ReviewView> {
         final d = q.descriptor;
         final e = q.entityName;
         if (d == null || e == null) return null;
-        return (kind: 'entity_alias', matchKey: d, value: e);
+        return (kind: 'entity_alias', matchKey: d, matchKind: null, value: e);
       case 'ambiguous_category':
         final d = q.descriptor ?? q.entityName;
         if (d == null) return null;
-        return (kind: 'doctype_to_category', matchKey: d, value: answer);
+        return (kind: 'doctype_to_category', matchKey: d, matchKind: null, value: answer);
       case 'load_vs_spend':
         final d = q.descriptor ?? q.entityName;
         if (d == null) return null;
-        return (kind: 'load_vs_spend', matchKey: d, value: answer);
+        return (kind: 'load_vs_spend', matchKey: d, matchKind: null, value: answer);
+
+      // Work order 04 §Track D: person identity questions. All three write
+      // an 'entity_alias' rule so the SAME pair is never asked twice — the
+      // exact mechanism the rest of the curiosity engine already relies on.
+      case 'person_identity_fuzzy':
+        // "Yes, same as X" / "No, a different person" both teach something:
+        // yes merges the alias in, no is remembered so the identical
+        // low-confidence pair does not keep resurfacing.
+        final candidate = q.context['candidate_entity_id'] as String?;
+        final existing = q.context['existing_entity_id'] as String?;
+        if (candidate == null || existing == null) return null;
+        // Reuse the SAME matchKey the resolver used when it asked (the
+        // candidate's own normalised name) so the taught rule is found by
+        // the identical lookup next time, not a slightly different key.
+        return (
+          kind: 'entity_alias',
+          matchKey: matchKeyFor(q),
+          matchKind: 'person_fuzzy',
+          value: affirmative ? existing : 'SEPARATE',
+        );
+      case 'identifier_cooccurrence':
+        final idNorm = q.context['identifier_match_key'] as String?;
+        final entity = q.context['entity_id'] as String?;
+        if (idNorm == null || entity == null) return null;
+        return (kind: 'entity_alias', matchKey: idNorm, matchKind: 'person_identifier', value: entity);
+      case 'shared_identifier_conflict':
+        // The resolver already attached this document to a name match and
+        // did not silently merge anything; the answer here only informs a
+        // human review, it does not currently drive an automatic rule.
+        return null;
+
       default:
         return null;
     }
+  }
+
+  /// person_identity_fuzzy rules are keyed on the CANDIDATE's normalised
+  /// name (what identity.ts calls `norm`), not on entityName/descriptor —
+  /// those getters answer a different question for the other trigger kinds.
+  String matchKeyFor(LearningQuestion q) {
+    final raw = q.question;
+    // The question text is `Is "X" the same person as Y?" — X is exactly the
+    // normalised-eligible name the resolver keyed the rule on. Extracting it
+    // from context is more robust than re-parsing the sentence, so prefer
+    // context when present.
+    return (q.context['fuzzy_match_key'] as String?) ?? raw;
   }
 
   Future<void> _answer(LearningQuestion q, String answer) async {
@@ -115,6 +158,7 @@ class _ReviewViewState extends State<ReviewView> {
         answer,
         ruleKind: rule?.kind,
         matchKey: rule?.matchKey,
+        matchKind: rule?.matchKind,
         value: rule?.value,
       );
       if (!mounted) return;
@@ -243,7 +287,7 @@ class _QuestionCard extends StatelessWidget {
   final LearningQuestion question;
   final bool busy;
   final String? learned;
-  final ({String kind, String matchKey, String value})? Function(String) rulePreview;
+  final ({String kind, String matchKey, String? matchKind, String value})? Function(String) rulePreview;
   final void Function(String) onAnswer;
   final VoidCallback onSkip;
 
@@ -375,7 +419,7 @@ class _Comparison extends StatelessWidget {
 /// have to guess whether "Yes" means "just this once" or "forever".
 class _AnswerButton extends StatelessWidget {
   final String label;
-  final ({String kind, String matchKey, String value})? rule;
+  final ({String kind, String matchKey, String? matchKind, String value})? rule;
   final bool busy;
   final VoidCallback onPressed;
 
