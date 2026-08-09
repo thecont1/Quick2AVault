@@ -135,8 +135,13 @@ class Person {
   final String displayName;
   final String? relationship;
   final bool isMember;
+  final bool isOwner;
   final String status;
   final int documentCount;
+  final int transactionCount;
+  final int unresolvedAliasCount;
+  final int aliasCount;
+  final String? lastSeenAt;
   final List<String> roles;
 
   const Person({
@@ -144,8 +149,13 @@ class Person {
     required this.displayName,
     this.relationship,
     this.isMember = false,
+    this.isOwner = false,
     this.status = 'candidate',
     this.documentCount = 0,
+    this.transactionCount = 0,
+    this.unresolvedAliasCount = 0,
+    this.aliasCount = 0,
+    this.lastSeenAt,
     this.roles = const [],
   });
 
@@ -156,8 +166,13 @@ class Person {
         displayName: (j['display_name'] ?? '') as String,
         relationship: j['subtype'] as String?,
         isMember: (j['is_member'] ?? 0) == 1,
+        isOwner: (j['is_owner'] ?? 0) == 1,
         status: (j['status'] ?? 'candidate') as String,
         documentCount: (j['document_count'] ?? 0) as int,
+        transactionCount: (j['transaction_count'] ?? 0) as int,
+        unresolvedAliasCount: (j['unresolved_alias_count'] ?? 0) as int,
+        aliasCount: (j['alias_count'] ?? 0) as int,
+        lastSeenAt: j['last_seen_at'] as String?,
         roles: ((j['roles'] ?? const []) as List).cast<String>(),
       );
 }
@@ -273,11 +288,23 @@ class Txn {
   final String id;
   final String direction;
   final int amountMinor;
+  /// ISO 4217 source currency, or null when the document stated none
+  /// (work order 05 §A.2). Null is a REVIEW state — render it as
+  /// "currency uncertain", never as a silent rupee figure.
+  final String? currency;
+  final int? homeAmountMinor;
+  final double? fxRate;
+  final String? fxDate;
   final String occurredAt;
   final String fyKey;
   final String? counterparty;
   final String? rail;
   final String status;
+
+  /// How THIS document was linked to the transaction — ai | rule | user |
+  /// import (work order 05 §Track C). Only present on rows returned inside a
+  /// document detail payload.
+  final String? linkedBy;
   final List<Leg> legs;
   final List<Evidence> evidence;
 
@@ -287,9 +314,14 @@ class Txn {
     required this.amountMinor,
     required this.occurredAt,
     required this.fyKey,
+    this.currency,
+    this.homeAmountMinor,
+    this.fxRate,
+    this.fxDate,
     this.counterparty,
     this.rail,
     this.status = 'evidenced',
+    this.linkedBy,
     this.legs = const [],
     this.evidence = const [],
   });
@@ -298,11 +330,18 @@ class Txn {
         id: (j['id'] ?? '') as String,
         direction: (j['direction'] ?? 'out') as String,
         amountMinor: (j['amount_minor'] ?? 0) as int,
+        currency: (j['currency'] as String?)?.isNotEmpty == true
+            ? (j['currency'] as String)
+            : null,
+        homeAmountMinor: (j['home_amount_minor'] as num?)?.toInt(),
+        fxRate: (j['fx_rate'] as num?)?.toDouble(),
+        fxDate: j['fx_date'] as String?,
         occurredAt: (j['occurred_at'] ?? '') as String,
         fyKey: (j['fy_key'] ?? '') as String,
         counterparty: j['counterparty_name'] as String?,
         rail: j['payment_rail'] as String?,
         status: (j['status'] ?? 'evidenced') as String,
+        linkedBy: j['linked_by'] as String?,
         legs: ((j['legs'] ?? const []) as List)
             .map((e) => Leg.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -313,6 +352,15 @@ class Txn {
 
   bool get isTransfer => direction == 'transfer';
   bool get multiEvidence => evidence.length > 1;
+
+  /// Source evidence, always with its currency: "USD 597.85", "₹643.72".
+  String get sourceAmount => money(amountMinor, currency);
+
+  /// The converted home value, when one exists — a SEPARATE labelled figure,
+  /// never a replacement for the source amount. The daemon's aggregates are
+  /// INR-denominated today; when multi-jurisdiction lands this takes the
+  /// pack's currency from the payload instead.
+  String? get homeAmount => homeAmountMinor == null ? null : money(homeAmountMinor!, 'INR');
 }
 
 class EvidenceCard {
@@ -582,6 +630,147 @@ class PageInfo {
       );
 }
 
+/// One alias row, typed and with provenance (work order 05 §B.2).
+class PersonAlias {
+  final int id;
+  final String alias;
+  final String aliasType; // name_variant | email | phone | handle
+  final String? source; // ai | rule | user | import | auto-*
+  final String status; // proposed | confirmed | rejected
+  final String createdAt;
+  final String? lastSeenAt;
+  final int supportingDocuments;
+
+  const PersonAlias({
+    required this.id,
+    required this.alias,
+    required this.aliasType,
+    this.source,
+    required this.status,
+    required this.createdAt,
+    this.lastSeenAt,
+    this.supportingDocuments = 0,
+  });
+
+  bool get rejected => status == 'rejected';
+  bool get proposed => status == 'proposed';
+
+  factory PersonAlias.fromJson(Map<String, dynamic> j) => PersonAlias(
+        id: (j['id'] as num).toInt(),
+        alias: (j['alias'] ?? '') as String,
+        aliasType: (j['alias_type'] ?? 'name_variant') as String,
+        source: j['source'] as String?,
+        status: (j['status'] ?? 'confirmed') as String,
+        createdAt: (j['created_at'] ?? '') as String,
+        lastSeenAt: j['last_seen_at'] as String?,
+        supportingDocuments: (j['supporting_documents'] ?? 0) as int,
+      );
+}
+
+/// The People-tab drill-down for one person (work order 05 §B.6).
+class PersonDetail {
+  final Person person;
+  final List<PersonAlias> aliases;
+  final List<Map<String, dynamic>> documents;
+  final List<Txn> transactions;
+  final List<Map<String, dynamic>> questions;
+
+  const PersonDetail({
+    required this.person,
+    required this.aliases,
+    required this.documents,
+    required this.transactions,
+    required this.questions,
+  });
+
+  factory PersonDetail.fromJson(Map<String, dynamic> j) => PersonDetail(
+        person: Person.fromJson(j['person'] as Map<String, dynamic>),
+        aliases: ((j['aliases'] ?? const []) as List)
+            .map((e) => PersonAlias.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        documents: ((j['documents'] ?? const []) as List).cast<Map<String, dynamic>>(),
+        transactions: ((j['transactions'] ?? const []) as List)
+            .map((e) => Txn.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        questions: ((j['questions'] ?? const []) as List).cast<Map<String, dynamic>>(),
+      );
+}
+
+/// One effective field value on the evidence summary: the winning value and
+/// who said so (ai | rule | user | import), or null when nothing claims it.
+class EffectiveValue {
+  final String value;
+  final String source;
+  final String status;
+  const EffectiveValue({required this.value, required this.source, required this.status});
+
+  factory EffectiveValue.fromJson(Map<String, dynamic> j) => EffectiveValue(
+        value: (j['value'] ?? '') as String,
+        source: (j['source'] ?? 'ai') as String,
+        status: (j['status'] ?? 'proposed') as String,
+      );
+}
+
+/// The document evidence summary (work order 05 §A.3).
+class DocumentDetail {
+  final Map<String, dynamic> document;
+  final Map<String, dynamic>? extraction;
+  final Map<String, EffectiveValue> effective;
+  final Map<String, Map<String, dynamic>> claims;
+  final Map<String, dynamic> referenceIds;
+  final int? subtotalMinor;
+  final int? taxMinor;
+  final List<Map<String, dynamic>> lineItems;
+  final List<Map<String, dynamic>> parties;
+  final List<Txn> transactions;
+  final Set<String> editableFields;
+
+  const DocumentDetail({
+    required this.document,
+    this.extraction,
+    required this.effective,
+    this.claims = const {},
+    required this.referenceIds,
+    this.subtotalMinor,
+    this.taxMinor,
+    required this.lineItems,
+    required this.parties,
+    required this.transactions,
+    required this.editableFields,
+  });
+
+  EffectiveValue? operator [](String field) => effective[field];
+
+  factory DocumentDetail.fromJson(Map<String, dynamic> j) {
+    final eff = <String, EffectiveValue>{};
+    final raw = (j['effective'] ?? const {}) as Map<String, dynamic>;
+    for (final e in raw.entries) {
+      if (e.value is Map<String, dynamic>) {
+        eff[e.key] = EffectiveValue.fromJson(e.value as Map<String, dynamic>);
+      }
+    }
+    return DocumentDetail(
+      document: (j['document'] ?? const {}) as Map<String, dynamic>,
+      extraction: j['extraction'] as Map<String, dynamic>?,
+      effective: eff,
+      claims: ((j['claims'] ?? const {}) as Map<String, dynamic>).map(
+        (k, v) => MapEntry(k, (v as Map).cast<String, dynamic>()),
+      ),
+      referenceIds: (raw['reference_ids'] ?? const {}) as Map<String, dynamic>,
+      subtotalMinor: (raw['subtotal_minor'] as num?)?.toInt(),
+      taxMinor: (raw['tax_minor'] as num?)?.toInt(),
+      lineItems: ((raw['line_items'] ?? const []) as List)
+          .whereType<Map<String, dynamic>>()
+          .toList(),
+      parties: ((j['parties'] ?? const []) as List).cast<Map<String, dynamic>>(),
+      transactions: ((j['transactions'] ?? const []) as List)
+          .map((e) => Txn.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      editableFields: ((j['editable_fields'] ?? const []) as List).cast<String>().toSet(),
+    );
+  }
+}
+
 /// Raised when a rename would collide with an existing person. That is a
 /// merge decision, not a rename, so the UI must ask rather than guess.
 class PersonConflict implements Exception {
@@ -773,6 +962,7 @@ class SearchHit {
   final String? docType;
   final String? transactionId;
   final int? amountMinor;
+  final String? currency;
   final String? occurredAt;
 
   /// FTS5 snippet with matches wrapped in « » — the daemon picks the
@@ -788,6 +978,7 @@ class SearchHit {
     this.docType,
     this.transactionId,
     this.amountMinor,
+    this.currency,
     this.occurredAt,
   });
 
@@ -799,6 +990,9 @@ class SearchHit {
         docType: j['doc_type'] as String?,
         transactionId: j['transaction_id'] as String?,
         amountMinor: (j['amount_minor'] as num?)?.toInt(),
+        currency: (j['currency'] as String?)?.isNotEmpty == true
+            ? j['currency'] as String
+            : null,
         occurredAt: j['occurred_at'] as String?,
       );
 }
@@ -1152,8 +1346,85 @@ class VaultApi {
         .toList();
     return (
       people: list,
-      owner: list.where((p) => p.isMember).firstOrNull,
+      owner: list.where((p) => p.isOwner).firstOrNull,
     );
+  }
+
+  /// One person in full: aliases with provenance, documents, transactions,
+  /// open identity questions (work order 05 §B.6 drill-down).
+  Future<PersonDetail> personDetail(String id) async {
+    final res = await _client.get(
+      Uri.parse('$baseUrl/v1/people/$id'),
+      headers: _headers,
+    );
+    if (res.statusCode == 404) throw Exception('no such person');
+    if (res.statusCode != 200) {
+      throw Exception('person fetch failed: ${res.statusCode} ${res.body}');
+    }
+    return PersonDetail.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+  }
+
+  /// Add an alias to a person. The daemon classifies the type from the
+  /// string, so an email can never be stored as a name variant. Throws
+  /// [PersonConflict] when the value is already bound to another person.
+  Future<void> addPersonAlias(String personId, String alias, {String? aliasType}) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/people/$personId/aliases'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({
+        'alias': alias,
+        if (aliasType != null) 'alias_type': aliasType,
+      }),
+    );
+    if (res.statusCode == 409) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      throw PersonConflict(
+        (j['message'] as String?) ?? 'Already on file for another person.',
+        existingId: j['bound_to'] as String?,
+      );
+    }
+    if (res.statusCode != 200) {
+      throw Exception('add alias failed: ${res.statusCode} ${res.body}');
+    }
+  }
+
+  /// Reject an alias. The row is kept (status=rejected) so the same string
+  /// is never re-proposed — rejection is durable, not deletion.
+  Future<void> rejectPersonAlias(String personId, int aliasId) async {
+    final res = await _client.delete(
+      Uri.parse('$baseUrl/v1/people/$personId/aliases/$aliasId'),
+      headers: _headers,
+    );
+    if (res.statusCode != 200) {
+      throw Exception('reject alias failed: ${res.statusCode} ${res.body}');
+    }
+  }
+
+  /// Merge two people (never cross-kind — the daemon enforces it).
+  Future<void> mergePeople({required String fromId, required String intoId}) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/people/merge'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({'from_id': fromId, 'into_id': intoId}),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('merge failed: ${res.statusCode} ${res.body}');
+    }
+  }
+
+  /// The Document Review evidence summary (work order 05 §A.3): raw
+  /// extraction, winning claims with provenance, resolved parties, and the
+  /// linked transactions — all with source amounts AND source currencies.
+  Future<DocumentDetail> documentDetail(String id) async {
+    final res = await _client.get(
+      Uri.parse('$baseUrl/v1/documents/$id/detail'),
+      headers: _headers,
+    );
+    if (res.statusCode == 404) throw Exception('document not found: $id');
+    if (res.statusCode != 200) {
+      throw Exception('document detail failed: ${res.statusCode} ${res.body}');
+    }
+    return DocumentDetail.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   /// Declare a person, or update an existing one.
@@ -1521,6 +1792,59 @@ String rupeesWhole(int minor) {
   final full = rupees(minor);
   final dot = full.lastIndexOf('.');
   return dot > 0 ? full.substring(0, dot) : full;
+}
+
+/// Minor units per major unit by currency. Anything unlisted uses 100 — the
+/// common case (USD, EUR, GBP, INR, ...). Zero-decimal currencies would
+/// render a nonsense ".00" otherwise.
+const _zeroDecimalCurrencies = {'JPY', 'KRW', 'VND', 'IDR', 'HUF'};
+
+/// Currency-aware money formatting (work order 05 §A.2).
+///
+/// The currency is a REQUIRED argument — call sites that drop it fail to
+/// compile, which is acceptance test §A.4.7 by construction: the formatter
+/// cannot silently fall back to INR.
+///
+///   money(59785, 'USD')  -> "USD 597.85"
+///   money(64372, 'INR')  -> "₹643.72"   (lakh/crore grouping)
+///   money(59785, null)   -> "597.85 (currency uncertain)"
+String money(int minor, String? currency) {
+  final code = currency?.trim().toUpperCase();
+  if (code == null || code.isEmpty) {
+    final neg = minor < 0;
+    final whole = (minor.abs() ~/ 100).toString();
+    final frac = (minor.abs() % 100).toString().padLeft(2, '0');
+    return '${neg ? '-' : ''}$whole.$frac (currency uncertain)';
+  }
+  if (code == 'INR') return rupees(minor);
+
+  final unit = _zeroDecimalCurrencies.contains(code) ? 1 : 100;
+  final neg = minor < 0;
+  final whole = (minor.abs() ~/ unit).toString();
+  // Thousands grouping — the lakh/crore scheme is INR-specific.
+  final grouped = whole.replaceAllMapped(
+    RegExp(r'\B(?=(\d{3})+(?!\d))'),
+    (m) => ',',
+  );
+  final body = unit == 1
+      ? grouped
+      : '$grouped.${(minor.abs() % unit).toString().padLeft(2, '0')}';
+  // Always the ISO code for non-home currencies: "$" is ambiguous across
+  // USD/SGD/AUD, and the amount must never be readable as rupees.
+  return '${neg ? '-' : ''}$code $body';
+}
+
+/// Source amount with its optional converted home value as a separate,
+/// labelled figure (work order 05 §A.2): "USD 597.85  ≈ INR 50,208.00".
+String sourceWithHome(
+  int amountMinor,
+  String? currency,
+  int? homeAmountMinor, {
+  String homeCurrency = 'INR',
+}) {
+  final source = money(amountMinor, currency);
+  if (homeAmountMinor == null) return source;
+  return '$source  ≈ ${money(homeAmountMinor, homeCurrency)}';
 }
 
 /// ₹1,23,456.78 — Indian lakh/crore grouping, not thousands.
