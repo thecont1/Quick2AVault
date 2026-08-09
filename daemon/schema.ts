@@ -370,7 +370,21 @@ CREATE TABLE IF NOT EXISTS intake_events (
                      CHECK (processing_state IN ('received','stable','hashed','triaged','archived','queued','processing','complete','failed')),
   signals_json       TEXT,
   triage_review      INTEGER NOT NULL DEFAULT 0,
-  updated_at         TEXT
+  updated_at         TEXT,
+  -- ── work order 07 §B3: stall detection ──
+  -- stage_started_at: when the current processing_state was entered.
+  -- heartbeat_at: last time the worker touched this row (a stalled process
+  --   must not be mistaken for successful analysis).
+  -- finished_at: when the row reached a terminal state (complete/failed).
+  -- last_error: the most recent error message for a failed or stalled item.
+  -- retry_count: how many times processing has been retried.
+  -- next_retry_at: when the next retry should be attempted (backoff).
+  stage_started_at   TEXT,
+  heartbeat_at       TEXT,
+  finished_at        TEXT,
+  last_error         TEXT,
+  retry_count        INTEGER NOT NULL DEFAULT 0,
+  next_retry_at      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_intake_created ON intake_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_intake_kind ON intake_events(kind);
@@ -861,6 +875,23 @@ export function migrate(db: DatabaseSync): void {
         ON transaction_documents(document_id, evidence_role)
     `);
   }
+
+  // ── v8 → v9: intake stall-detection columns (work order 07 §B3) ──────────
+  // Add the columns in place; intake_events is append-only history and a
+  // rebuild would risk losing rows. Each new column defaults safely so old
+  // rows remain readable.
+  const intakeColsV9 = columnsOf(db, "intake_events");
+  const addIntakeColV9 = (name: string, decl: string) => {
+    if (intakeColsV9.size && !intakeColsV9.has(name)) {
+      db.exec(`ALTER TABLE intake_events ADD COLUMN ${name} ${decl}`);
+    }
+  };
+  addIntakeColV9("stage_started_at", "TEXT");
+  addIntakeColV9("heartbeat_at", "TEXT");
+  addIntakeColV9("finished_at", "TEXT");
+  addIntakeColV9("last_error", "TEXT");
+  addIntakeColV9("retry_count", "INTEGER NOT NULL DEFAULT 0");
+  addIntakeColV9("next_retry_at", "TEXT");
 }
 
 /**

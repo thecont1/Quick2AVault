@@ -329,8 +329,79 @@ function recordIntakeReceived(
 }
 
 function setIntakeState(db: DatabaseSync, ports: Ports, id: number, state: string) {
-  db.prepare("UPDATE intake_events SET processing_state=?, updated_at=? WHERE id=?")
-    .run(state, ports.clock.isoNow(), id);
+  // Work order 07 §B3: track when the current stage was entered and update
+  // the heartbeat. A stalled process (heartbeat_at stale) must not be
+  // mistaken for successful analysis.
+  const now = ports.clock.isoNow();
+  const isTerminal = state === "complete" || state === "failed";
+  db.prepare(
+    `UPDATE intake_events
+        SET processing_state=?, updated_at=?, stage_started_at=?,
+            heartbeat_at=?,
+            finished_at=CASE WHEN ?=1 THEN ? ELSE finished_at END
+      WHERE id=?`,
+  ).run(state, now, now, now, isTerminal ? 1 : 0, isTerminal ? now : null, id);
+}
+
+/**
+ * Work order 07 §B3: update the heartbeat without changing state. Called by
+ * long-running stages (conversion, analysis) to prove the worker is alive.
+ */
+function heartbeatIntake(db: DatabaseSync, ports: Ports, id: number) {
+  db.prepare("UPDATE intake_events SET heartbeat_at=?, updated_at=? WHERE id=?")
+    .run(ports.clock.isoNow(), ports.clock.isoNow(), id);
+}
+
+/**
+ * Work order 07 §B3: mark an intake as failed with an error message.
+ */
+function setIntakeFailed(db: DatabaseSync, ports: Ports, id: number, error: string) {
+  const now = ports.clock.isoNow();
+  db.prepare(
+    `UPDATE intake_events
+        SET processing_state='failed', last_error=?, finished_at=?, updated_at=?, heartbeat_at=?
+      WHERE id=?`,
+  ).run(error, now, now, now, id);
+}
+
+/**
+ * Work order 07 §B1: update the aggregated intake state for a document's
+ * intake_event. Maps the job phase to a user-facing stage label. The
+ * `stageLabel` is stored in `detail` so the UI can show "converting",
+ * "analysing", etc. without inferring from individual JobStateChanged events.
+ */
+function updateIntakeForJob(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+  state: "processing" | "complete" | "failed",
+  stageLabel: string | null,
+) {
+  const now = ports.clock.isoNow();
+  const isTerminal = state === "complete" || state === "failed";
+  db.prepare(
+    `UPDATE intake_events
+        SET processing_state=?,
+            detail=COALESCE(?, detail),
+            stage_started_at=?,
+            heartbeat_at=?,
+            updated_at=?,
+            finished_at=CASE WHEN ?=1 THEN ? ELSE finished_at END
+      WHERE document_id=? AND kind='accepted'`,
+  ).run(state, stageLabel, now, now, now, isTerminal ? 1 : 0, isTerminal ? now : null, documentId);
+}
+
+/**
+ * Work order 07 §B3: mark an intake as failed by document_id (used when a
+ * job permanently fails).
+ */
+function setIntakeFailedByDoc(db: DatabaseSync, ports: Ports, documentId: string, error: string) {
+  const now = ports.clock.isoNow();
+  db.prepare(
+    `UPDATE intake_events
+        SET processing_state='failed', last_error=?, finished_at=?, updated_at=?, heartbeat_at=?
+      WHERE document_id=? AND kind='accepted'`,
+  ).run(error, now, now, now, documentId);
 }
 
 function updateIntakeHashed(
@@ -381,10 +452,15 @@ function finalizeIntakeRow(
     state?: string;
   },
 ) {
+  const now = ports.clock.isoNow();
+  const state = fields.state ?? "archived";
+  const isTerminal = state === "complete" || state === "failed";
   db.prepare(
     `UPDATE intake_events
         SET kind=?, sha256=?, document_id=?, matched_document_id=?, canonical_path=?,
-            detail=?, processing_state=?, updated_at=?
+            detail=?, processing_state=?, updated_at=?, stage_started_at=?,
+            heartbeat_at=?,
+            finished_at=CASE WHEN ?=1 THEN ? ELSE finished_at END
       WHERE id=?`,
   ).run(
     fields.kind,
@@ -393,8 +469,12 @@ function finalizeIntakeRow(
     fields.matchedDocumentId ?? null,
     fields.canonicalPath ?? null,
     fields.detail ?? null,
-    fields.state ?? "archived",
-    ports.clock.isoNow(),
+    state,
+    now,
+    now,
+    now,
+    isTerminal ? 1 : 0,
+    isTerminal ? now : null,
     id,
   );
 }
@@ -1473,8 +1553,12 @@ export class JobWorker {
 
       try {
         if (job.phase === "convert") {
+          // Work order 07 §B1: update the aggregated intake state to reflect
+          // the current stage, not just the raw job churn.
+          updateIntakeForJob(this.db, this.ports, job.document_id, "processing", "converting");
           await runConvertJob(this.db, this.ports, job.id, job.document_id);
         } else if (job.phase === "analyse") {
+          updateIntakeForJob(this.db, this.ports, job.document_id, "processing", "analysing");
           await runAnalyseJob(this.db, this.ports, this.ai, job.document_id);
           // Best-effort embedding (work order 04 §Track B). Non-blocking:
           // a failure here logs but does not fail the job — the document is
@@ -1486,6 +1570,11 @@ export class JobWorker {
         const fin = this.ports.clock.isoNow();
         this.db.prepare("UPDATE jobs SET state='done', finished_at=? WHERE id=?").run(fin, job.id);
         this.ports.bus.publish({ type: "JobStateChanged", job_id: job.id, phase: job.phase, state: "done", at: fin });
+        // Work order 07 §B1: mark the intake as complete after the final phase.
+        // The convert→analyse chain means the analyse job is the last one.
+        if (job.phase === "analyse") {
+          updateIntakeForJob(this.db, this.ports, job.document_id, "complete", null);
+        }
       } catch (err) {
         const msg = (err as Error)?.message ?? String(err);
         const state = attemptNo >= MAX_JOB_ATTEMPTS ? "failed" : "pending";
@@ -1495,6 +1584,11 @@ export class JobWorker {
           .prepare("UPDATE jobs SET state=?, last_error=?, finished_at=?, started_at=CASE WHEN ?='pending' THEN NULL ELSE started_at END WHERE id=?")
           .run(state, msg, this.ports.clock.isoNow(), state, job.id);
         this.ports.logger.error("job failed", { job: job.id, phase: job.phase, attempts: attemptNo, max: MAX_JOB_ATTEMPTS, err: msg });
+        // Work order 07 §B3: if the job is permanently failed, mark the intake
+        // as failed too so the UI shows a visible error, not indefinite pending.
+        if (state === "failed") {
+          setIntakeFailedByDoc(this.db, this.ports, job.document_id, msg);
+        }
       }
     } finally {
       this.busy = false;

@@ -1821,6 +1821,36 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               .all(Number(url.searchParams.get("limit") ?? 50)),
           });
 
+        // Work order 07 §B2 — aggregated user-facing intake status. Each row
+        // is one intake item with its current stage, terminal outcome, and
+        // actionable failure/retry information. The UI should not infer
+        // completion from individual JobStateChanged events.
+        case "/v1/intake/status": {
+          const rows = db
+            .prepare(
+              `SELECT id, filename, source, kind, processing_state,
+                      detail, last_error, retry_count, next_retry_at,
+                      stage_started_at, heartbeat_at, finished_at,
+                      created_at, updated_at, document_id, reason_code, reason
+                 FROM intake_events
+                 ORDER BY id DESC LIMIT ?`,
+            )
+            .all(Number(url.searchParams.get("limit") ?? 100)) as Record<string, unknown>[];
+          // Work order 07 §B3: stall detection. An item whose heartbeat is
+          // stale relative to the current time is marked as stalled.
+          const now = ports.clock.isoNow();
+          const STALL_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+          const enriched = rows.map((r) => {
+            const hb = r.heartbeat_at as string | null;
+            const stalled =
+              hb != null &&
+              r.processing_state === "processing" &&
+              Date.parse(now) - Date.parse(hb) > STALL_THRESHOLD_MS;
+            return { ...r, stalled };
+          });
+          return send(res, 200, { events: enriched });
+        }
+
         // Work order 06 §9 — irrelevant items only, for the Irrelevant view.
         case "/v1/irrelevant":
           return send(res, 200, {

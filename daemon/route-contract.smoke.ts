@@ -227,6 +227,10 @@ console.log("── Work order 07 §C2: route contract smoke test\n");
   const irr = await get("/v1/irrelevant?limit=50");
   check("GET /v1/irrelevant returns 200 (WO06 drift fix)", () => assert.strictEqual(irr.status, 200));
 }
+{
+  const st = await get("/v1/intake/status?limit=50");
+  check("GET /v1/intake/status returns 200 (WO07 §B2)", () => assert.strictEqual(st.status, 200));
+}
 
 // ── people / aliases ─────────────────────────────────────────────────────
 {

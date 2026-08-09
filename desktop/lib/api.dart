@@ -499,6 +499,14 @@ class IntakeEvent {
   final String processingState;
   final bool triageReview;
   final DateTime createdAt;
+  // Work order 07 §B3: stall detection fields.
+  final String? lastError;
+  final int retryCount;
+  final String? nextRetryAt;
+  final String? stageStartedAt;
+  final String? heartbeatAt;
+  final String? finishedAt;
+  final bool stalled;
 
   const IntakeEvent({
     required this.id,
@@ -516,11 +524,52 @@ class IntakeEvent {
     required this.processingState,
     required this.triageReview,
     required this.createdAt,
+    this.lastError,
+    this.retryCount = 0,
+    this.nextRetryAt,
+    this.stageStartedAt,
+    this.heartbeatAt,
+    this.finishedAt,
+    this.stalled = false,
   });
 
   /// Normalised disposition: 'added' (legacy) → 'accepted'.
   String get disposition =>
       kind == 'added' ? 'accepted' : kind;
+
+  /// Work order 07 §B2: a user-readable terminal outcome, not raw job churn.
+  /// Returns null if the item is not yet in a terminal state.
+  String? get terminalOutcome {
+    switch (processingState) {
+      case 'complete':
+        return 'Completed';
+      case 'failed':
+        return lastError != null ? 'Failed: $lastError' : 'Failed';
+      case 'triaged':
+        // Irrelevant/duplicate dispositions are terminal at triage.
+        if (kind == 'irrelevant') return 'Irrelevant';
+        if (kind == 'duplicate') return 'Duplicate';
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  /// Work order 07 §B2: the current stage as a user-readable label.
+  String get stageLabel {
+    switch (processingState) {
+      case 'received': return 'Received';
+      case 'stable': return 'Waiting for stability';
+      case 'hashed': return 'Hashed';
+      case 'triaged': return 'Triaging';
+      case 'archived': return 'Stored safely';
+      case 'queued': return 'Queued';
+      case 'processing': return detail ?? 'Processing';
+      case 'complete': return 'Completed';
+      case 'failed': return 'Failed';
+      default: return processingState;
+    }
+  }
 
   factory IntakeEvent.fromJson(Map<String, dynamic> j) {
     final raw = (j['created_at'] ?? '') as String;
@@ -546,6 +595,13 @@ class IntakeEvent {
       processingState: (j['processing_state'] ?? 'received') as String,
       triageReview: j['triage_review'] == 1 || j['triage_review'] == true,
       createdAt: createdAt,
+      lastError: j['last_error'] as String?,
+      retryCount: (j['retry_count'] as num?)?.toInt() ?? 0,
+      nextRetryAt: j['next_retry_at'] as String?,
+      stageStartedAt: j['stage_started_at'] as String?,
+      heartbeatAt: j['heartbeat_at'] as String?,
+      finishedAt: j['finished_at'] as String?,
+      stalled: j['stalled'] == true,
     );
   }
 }
@@ -1594,6 +1650,14 @@ class VaultApi {
   /// Work order 06 §9 — irrelevant items only, for the Irrelevant view.
   Future<List<IntakeEvent>> irrelevantItems({int limit = 200}) =>
       _get('/v1/irrelevant?limit=$limit', (j) => ((j['events'] ?? const []) as List)
+          .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
+          .toList());
+
+  /// Work order 07 §B2 — aggregated user-facing intake status. Each row is
+  /// one intake item with its current stage, terminal outcome, and actionable
+  /// failure/retry information. Replaces raw Live Intake event churn.
+  Future<List<IntakeEvent>> intakeStatus({int limit = 100}) =>
+      _get('/v1/intake/status?limit=$limit', (j) => ((j['events'] ?? const []) as List)
           .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
           .toList());
 
