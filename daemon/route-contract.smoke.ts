@@ -296,6 +296,16 @@ console.log("── Work order 07 §C2: route contract smoke test\n");
   check("POST /v1/settings returns 200", () => assert.strictEqual(r.status, 200));
 }
 {
+  // Work order 07 §D4: provider test endpoint. With no key configured, it
+  // should return 200 with a structured error, not a 500 or 404.
+  const r = await call("POST", "/v1/settings/provider-test", { which: "primary" });
+  check("POST /v1/settings/provider-test returns 200", () => assert.strictEqual(r.status, 200));
+  check("provider-test response has structured fields", () => {
+    assert.ok(r.json?.reachable !== undefined, "should have reachable field");
+    assert.ok(r.json?.error, "should have error field (no key configured)");
+  });
+}
+{
   const r = await call("POST", "/v1/learning/toggle", { enabled: false });
   check("POST /v1/learning/toggle returns 200", () => assert.strictEqual(r.status, 200));
 }

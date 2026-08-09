@@ -27,6 +27,11 @@ export interface AiConfig {
   baseUrl?: string;
   model?: string;
   maxTokens?: number;
+  // Work order 07 §D2: secondary (vision/fallback) model config.
+  secondaryApiKey?: string;
+  secondaryBaseUrl?: string;
+  secondaryModel?: string;
+  routingMode?: "auto" | "primary_only" | "vision_fallback";
 }
 
 /** No-op provider so P0/P1 keep working with no AI configured (plan §8). */
@@ -58,6 +63,10 @@ export interface MutableAiProvider extends AiProvider {
 
 export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiProvider {
   let inner = createAnthropicProvider(cfg, logger);
+  // Work order 07 §D1: secondary (vision/fallback) provider. Blank secondary
+  // is valid — the user may configure only a primary model.
+  let secondary = createSecondaryProvider(cfg, logger);
+  let routingMode = cfg.routingMode ?? "auto";
   return {
     get available() {
       return inner.available;
@@ -66,17 +75,45 @@ export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiP
       return inner.model;
     },
     extract(markdown, filename) {
+      // Work order 07 §D3: routing. In primary_only mode, always use primary.
+      // In auto/vision_fallback mode, use primary for ordinary text; the
+      // routing decision for vision/scanned input is made by the caller
+      // (runAnalyseJob), not here — this method is called for text extraction.
       return inner.extract(markdown, filename);
     },
     reconfigure(next: AiConfig) {
       inner = createAnthropicProvider(next, logger);
+      secondary = createSecondaryProvider(next, logger);
+      routingMode = next.routingMode ?? "auto";
       logger.info("ai provider reconfigured", {
         available: inner.available,
         model: inner.model,
+        secondary_available: secondary.available,
+        secondary_model: secondary.model,
+        routing_mode: routingMode,
       });
       return inner.available;
     },
   };
+}
+
+/**
+ * Work order 07 §D1: create the secondary (vision/fallback) provider. Returns
+ * a null provider when no secondary is configured — a blank secondary is valid.
+ */
+function createSecondaryProvider(cfg: AiConfig, logger: Logger): AiProvider {
+  const apiKey = cfg.secondaryApiKey ?? "";
+  if (!apiKey || !cfg.secondaryModel) {
+    return nullAiProvider;
+  }
+  return createAnthropicProvider(
+    {
+      apiKey,
+      baseUrl: cfg.secondaryBaseUrl || cfg.baseUrl,
+      model: cfg.secondaryModel,
+    },
+    logger,
+  );
 }
 
 export function createAnthropicProvider(cfg: AiConfig, logger: Logger): AiProvider {

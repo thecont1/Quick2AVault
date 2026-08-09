@@ -42,7 +42,7 @@ function testPorts(vault: string): Ports {
     logger,
     clock: systemClock,
     paths: createPaths(vault),
-    converter: { async toMarkdown() { return { markdown: "# Test\n\nAmount: 100", chars: 20 }; } },
+    converter: { async toMarkdown() { return { markdown: "# Test\n\nAmount: 100", chars: 20, converter: "test", converterVersion: "0" }; } },
     bus: createEventBus(logger),
   };
 }

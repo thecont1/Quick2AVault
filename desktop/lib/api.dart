@@ -1915,6 +1915,11 @@ class VaultApi {
     String? apiKey,
     String? jurisdiction,
     String? gmailLocalPart,
+    // Work order 07 §D2: secondary model fields.
+    String? secondaryBaseUrl,
+    String? secondaryModel,
+    String? secondaryApiKey,
+    String? routingMode,
   }) async {
     final res = await _client.post(
       Uri.parse('$baseUrl/v1/settings'),
@@ -1925,6 +1930,10 @@ class VaultApi {
         if (apiKey != null) 'api_key': apiKey,
         if (jurisdiction != null) 'jurisdiction': jurisdiction,
         if (gmailLocalPart != null) 'gmail_local_part': gmailLocalPart,
+        if (secondaryBaseUrl != null) 'secondary_base_url': secondaryBaseUrl,
+        if (secondaryModel != null) 'secondary_model': secondaryModel,
+        if (secondaryApiKey != null) 'secondary_api_key': secondaryApiKey,
+        if (routingMode != null) 'routing_mode': routingMode,
       }),
     );
     if (res.statusCode != 200) {
@@ -1935,6 +1944,21 @@ class VaultApi {
 
   /// Clear the stored API key.
   Future<Map<String, dynamic>> clearApiKey() => saveSettings(apiKey: '');
+
+  /// Work order 07 §D4 — test a configured AI provider. Never sends vault
+  /// content. Returns reachability, auth, model availability, structured
+  /// output, vision, latency, and last-tested time.
+  Future<Map<String, dynamic>> testProvider({String which = 'primary'}) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/settings/provider-test'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({'which': which}),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('provider test failed: ${res.statusCode} ${res.body}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
 
   /// ── search + claims (work order 03 §P1/§P2) ───────────────────────────────
 
