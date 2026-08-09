@@ -19,6 +19,7 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import 'editable_field.dart';
 import 'statement_card.dart';
 import '../theme.dart';
 import 'magnified_document.dart';
@@ -228,6 +229,7 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
                             _loadMarkdown(_selected!);
                           }
                         },
+                        onChanged: _load,
                       ),
               ),
             ],
@@ -387,6 +389,266 @@ class _DocList extends StatelessWidget {
   }
 }
 
+/// The evidence summary (work order 05 §A.3): what the vault read from this
+/// document — invoice number, dates, bill-to, person, and the amount WITH
+/// its source currency — each value carrying its provenance badge, and the
+/// person/amount/currency correctable in place (document-scope claims).
+///
+/// This is the card that makes a USD invoice display as USD 597.85: the
+/// amount rendered here is `effective.amount_minor` + `effective.currency`
+/// straight from the daemon, never a client-side assumption.
+class _EvidenceCard extends StatefulWidget {
+  final VaultApi api;
+  final VaultDoc doc;
+  final VoidCallback? onChanged;
+
+  const _EvidenceCard({super.key, required this.api, required this.doc, this.onChanged});
+
+  @override
+  State<_EvidenceCard> createState() => _EvidenceCardState();
+}
+
+class _EvidenceCardState extends State<_EvidenceCard> {
+  DocumentDetail? _detail;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(_EvidenceCard old) {
+    super.didUpdateWidget(old);
+    if (old.doc.id != widget.doc.id) {
+      _detail = null;
+      _failed = false;
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    try {
+      final d = await widget.api.documentDetail(widget.doc.id);
+      if (mounted && widget.doc.id == d.document['id']) {
+        setState(() => _detail = d);
+      }
+    } catch (_) {
+      // The summary is an enhancement over the document pane, not a
+      // precondition for it — a fetch failure costs the card, not the review.
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  FieldClaim? _claimOf(String field) {
+    final c = _detail?.claims[field];
+    if (c == null) return null;
+    return FieldClaim(
+      source: (c['source'] ?? 'ai') as String,
+      status: (c['status'] ?? 'proposed') as String,
+      value: c['value'] as String?,
+      confidence: (c['confidence'] as num?)?.toDouble(),
+      at: c['at'] as String?,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final d = _detail;
+    if (d == null) {
+      return _failed
+          ? const SizedBox.shrink()
+          : const Padding(
+              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+              child: LinearProgressIndicator(minHeight: 2),
+            );
+    }
+    if (d.extraction == null) return const SizedBox.shrink();
+
+    final currency = d['currency']?.value;
+    final amountMinor = int.tryParse(d['amount_minor']?.value ?? '');
+    final people = d.parties.where((p) => p['kind'] == 'person').toList();
+    final orgs = d.parties.where((p) => p['kind'] == 'organisation').toList();
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      decoration: BoxDecoration(
+        color: VaultColors.panel,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: VaultColors.line),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // The amount, never detached from its currency context (§A.3).
+        if (amountMinor != null)
+          Row(crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic, children: [
+            Text(
+              money(amountMinor, currency),
+              style: moneyStyle.copyWith(
+                fontSize: 17,
+                color: currency == null ? VaultColors.warn : VaultColors.ink,
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (currency == null)
+              const Text('currency uncertain — set it below',
+                  style: TextStyle(fontSize: 11, color: VaultColors.warn))
+            else
+              _ProvBadge(source: d['currency']!.source),
+            const Spacer(),
+            for (final t in d.transactions)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Text(
+                  '${t.direction} · ${t.sourceAmount} · linked by ${t.linkedBy ?? "ai"}',
+                  style: const TextStyle(
+                      fontSize: 10.5, fontFamily: VaultType.mono, color: VaultColors.faint),
+                ),
+              ),
+          ]),
+        if (amountMinor != null) const SizedBox(height: 8),
+
+        // Invoice identity row: number, dates, bill-to.
+        Wrap(spacing: 18, runSpacing: 4, children: [
+          if (d.referenceIds['invoice_no'] != null)
+            _Fact(label: 'invoice', value: '${d.referenceIds['invoice_no']}'),
+          if (d['document_date'] != null)
+            _Fact(label: 'date', value: d['document_date']!.value),
+          if (d['posted_at'] != null)
+            _Fact(label: 'due / settled', value: d['posted_at']!.value),
+          if (orgs.isNotEmpty)
+            _Fact(label: 'bill-to / counterparty', value: orgs.first['display_name'] as String),
+          for (final p in people)
+            _Fact(label: 'person (${p['role']})', value: p['display_name'] as String),
+        ]),
+
+        // Itemised bill, when the document prints one (§A.4.5).
+        if (d.lineItems.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          const Divider(height: 1, color: VaultColors.line),
+          const SizedBox(height: 6),
+          for (final li in d.lineItems)
+            Row(children: [
+              Expanded(
+                child: Text('${li['description']}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11.5, color: VaultColors.dim)),
+              ),
+              if (li['amount_minor'] != null)
+                Text(money((li['amount_minor'] as num).toInt(), currency),
+                    style: const TextStyle(
+                        fontSize: 11.5, fontFamily: VaultType.mono, color: VaultColors.dim)),
+            ]),
+          if (d.subtotalMinor != null || d.taxMinor != null) ...[
+            const SizedBox(height: 4),
+            Row(children: [
+              const Spacer(),
+              if (d.subtotalMinor != null)
+                Text('subtotal ${money(d.subtotalMinor!, currency)}   ',
+                    style: const TextStyle(fontSize: 10.5, color: VaultColors.faint)),
+              if (d.taxMinor != null)
+                Text('tax ${money(d.taxMinor!, currency)}',
+                    style: const TextStyle(fontSize: 10.5, color: VaultColors.faint)),
+            ]),
+          ],
+        ],
+
+        const SizedBox(height: 6),
+        const Divider(height: 1, color: VaultColors.line),
+        const SizedBox(height: 4),
+
+        // Correctable fields, document-scope (§Track C). Editing the person
+        // relinks THIS document and teaches the identity resolver; it never
+        // rewrites the original or its markdown.
+        EditableField(
+          label: 'person',
+          field: 'person',
+          subjectType: 'documents',
+          subjectId: widget.doc.id,
+          api: widget.api,
+          value: d['person']?.value ??
+              (people.isEmpty ? null : people.first['display_name'] as String),
+          claim: _claimOf('person'),
+          editable: d.editableFields.contains('person'),
+          onSaved: (_) {
+            _load();
+            widget.onChanged?.call();
+          },
+        ),
+        EditableField(
+          label: 'currency',
+          field: 'currency',
+          subjectType: 'documents',
+          subjectId: widget.doc.id,
+          api: widget.api,
+          value: currency,
+          claim: _claimOf('currency'),
+          editable: d.editableFields.contains('currency'),
+          onSaved: (_) {
+            _load();
+            widget.onChanged?.call();
+          },
+        ),
+        EditableField(
+          label: 'amount (minor)',
+          field: 'amount_minor',
+          subjectType: 'documents',
+          subjectId: widget.doc.id,
+          api: widget.api,
+          numeric: true,
+          value: d['amount_minor']?.value,
+          claim: _claimOf('amount_minor'),
+          editable: d.editableFields.contains('amount_minor'),
+          onSaved: (_) {
+            _load();
+            widget.onChanged?.call();
+          },
+        ),
+      ]),
+    );
+  }
+}
+
+/// One immutable fact in the summary strip: "invoice  INV/2026-27/03".
+class _Fact extends StatelessWidget {
+  final String label;
+  final String value;
+  const _Fact({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+        Text('$label  ',
+            style: const TextStyle(
+                fontSize: 10.5, fontFamily: VaultType.mono, color: VaultColors.faint)),
+        Text(value,
+            style: const TextStyle(fontSize: 11.5, color: VaultColors.ink)),
+      ]);
+}
+
+/// A tiny provenance chip — who said so: ai | rule | user | import.
+class _ProvBadge extends StatelessWidget {
+  final String source;
+  const _ProvBadge({required this.source});
+
+  @override
+  Widget build(BuildContext context) {
+    final (bg, fg) = switch (source) {
+      'user' => (const Color(0xFFEAF6EE), const Color(0xFF16663C)),
+      'rule' => (const Color(0xFFEAF2FD), const Color(0xFF1B4F8A)),
+      _ => (const Color(0xFFF7F7FA), VaultColors.faint),
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(3)),
+      child: Text(source,
+          style: TextStyle(fontSize: 9, fontFamily: VaultType.mono, color: fg, height: 1.3)),
+    );
+  }
+}
+
 class _Detail extends StatelessWidget {
   final VaultApi api;
   final VaultDoc doc;
@@ -398,6 +660,9 @@ class _Detail extends StatelessWidget {
   final ValueChanged<int> onPage;
   final ValueChanged<bool> onToggle;
 
+  /// Called after a claim edit so the shell can refetch ledger/people.
+  final VoidCallback? onChanged;
+
   const _Detail({
     required this.api,
     required this.doc,
@@ -408,6 +673,7 @@ class _Detail extends StatelessWidget {
     required this.page,
     required this.onPage,
     required this.onToggle,
+    this.onChanged,
   });
 
   @override
@@ -455,6 +721,16 @@ class _Detail extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
               child: StatementCard(api: api, documentId: doc.id),
             ),
+          // The evidence summary: what the vault read, with source currency
+          // and provenance (work order 05 §A.3). Keyed by document so
+          // switching documents or toggling Document/Markdown never shows a
+          // stale document's figures.
+          _EvidenceCard(
+            key: ValueKey('evidence-${doc.id}'),
+            api: api,
+            doc: doc,
+            onChanged: onChanged,
+          ),
           Expanded(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
