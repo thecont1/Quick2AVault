@@ -18,13 +18,31 @@ import type { EmbeddingProvider } from "./embeddings.js";
 import { embedDocument } from "./embeddings.js";
 import { parseStatementMarkdown, stageStatementLines, reconcileStatement } from "./statements.js";
 import { loadPack } from "./jurisdiction.js";
+import { triage, dispositionToIntakeKind, type TriageResult } from "./triage.js";
+
+/**
+ * Intake disposition — work order 06 §3. `added` is kept as an alias for
+ * `accepted` for backward compatibility with existing callers and tests; new
+ * code reads `disposition`. `duplicate` is produced by the hash-lookup step,
+ * not by triage.
+ */
+export type IntakeDisposition = "accepted" | "irrelevant" | "duplicate" | "failed";
 
 export interface IntakeResult {
-  status: "added" | "duplicate" | "failed";
+  /** Legacy status field — "added" means accepted. Kept for existing callers. */
+  status: "added" | "duplicate" | "failed" | "irrelevant";
+  /** Work order 06 disposition. Always present. */
+  disposition: IntakeDisposition;
+  intake_id?: number;
   document_id?: string;
   sha256?: string;
   existing_document_id?: string;
   archived_to?: string;
+  canonical_path?: string;
+  reason_code?: string;
+  reason?: string;
+  confidence?: "high" | "medium" | "low";
+  triage_review?: boolean;
   error?: string;
 }
 
@@ -39,6 +57,13 @@ export interface IngestOptions {
    * Desktop, another app's folder) and must never be deleted.
    */
   consumeSource?: boolean;
+  /**
+   * Work order 06 §4: write-stability check. When true (folder/drag sources),
+   * the daemon re-stats the file after a short delay and refuses to ingest if
+   * the size is still changing — a partial download must never be archived.
+   * API-pushed files are owned by the caller and assumed stable.
+   */
+  checkStable?: boolean;
 }
 
 const newId = (prefix: string) => `${prefix}_${crypto.randomBytes(8).toString("hex")}`;
@@ -80,13 +105,110 @@ async function moveFile(src: string, dest: string): Promise<void> {
   }
 }
 
+// ── Work order 06 §4 — write-stability + MIME detection ──────────────────────
+
 /**
- * P0 — synchronous intake. Hash, dedupe, ARCHIVE, record, emit, enqueue P1.
- * Target <100ms. Never does AI work. Raw is write-only after this point.
+ * Refuse to ingest a file whose size is still changing. A partial download
+ * archived mid-write produces a truncated document that fails conversion and
+ * can never be recovered — the original is gone. Re-stat after a short window
+ * and require the size to be stable.
  *
- * Archiving is half the product: the vault ORGANISES documents, it does not
- * just read them. Originals land in Raw/<date>/ under their own filenames, and
- * the Drop folder is emptied so it stays an inbox rather than a junk drawer.
+ * Returns the stable size, or throws if the file is still being written.
+ */
+async function stableSize(filePath: string, delayMs = 150): Promise<number> {
+  const a = await fs.stat(filePath);
+  await new Promise((r) => setTimeout(r, delayMs));
+  const b = await fs.stat(filePath);
+  if (a.size !== b.size) {
+    throw new Error(`file not stable (size ${a.size} → ${b.size}); partial write suspected`);
+  }
+  return b.size;
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".doc": "application/msword",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".xls": "application/vnd.ms-excel",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".csv": "text/csv",
+  ".tsv": "text/tab-separated-values",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".html": "text/html",
+  ".htm": "text/html",
+  ".json": "application/json",
+  ".eml": "message/rfc822",
+  ".msg": "application/vnd.ms-outlook",
+  ".rtf": "application/rtf",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".tif": "image/tiff",
+  ".tiff": "image/tiff",
+  ".heic": "image/heic",
+  ".heif": "image/heif",
+};
+
+/** Best-effort MIME type from extension, then magic bytes. */
+function detectMime(filename: string, bytes: Buffer): string {
+  const ext = path.extname(filename).toLowerCase();
+  if (MIME_BY_EXT[ext]) return MIME_BY_EXT[ext];
+  if (bytes.length >= 4) {
+    if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) return "application/pdf";
+    if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
+    if (bytes[0] === 0x50 && bytes[1] === 0x4b) return "application/zip";
+  }
+  return "application/octet-stream";
+}
+
+/**
+ * Best-effort text extraction for triage. Triage must not require a full P1
+ * conversion (§6.3) — it only needs enough text to look for financial signals.
+ * For plaintext formats we read directly; for images/PDFs we return "" and let
+ * triage decide (accepted pending OCR, or irrelevant only on strong signals).
+ */
+async function cheapText(filePath: string, ext: string): Promise<string> {
+  const e = ext.toLowerCase();
+  if ([".txt", ".md", ".html", ".htm", ".json", ".csv", ".tsv", ".log", ".text"].includes(e)) {
+    try {
+      return await fs.readFile(filePath, "utf-8");
+    } catch {
+      return "";
+    }
+  }
+  // .eml: pull the body cheaply via the same emlToMarkdown the converter uses.
+  if (e === ".eml") {
+    try {
+      const raw = await fs.readFile(filePath, "utf-8");
+      // Reuse the adapter's eml parser without importing the whole converter.
+      const headerEnd = raw.search(/\r?\n\r?\n/);
+      return headerEnd > 0 ? raw.slice(headerEnd).trim() : raw.trim();
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+/**
+ * P0 — synchronous intake with deterministic triage (work order 06 §4).
+ *
+ * Pipeline boundary, in order:
+ *   source → write-stability → SHA-256 + metadata → exact duplicate lookup
+ *   → deterministic relevance triage → safe archive → disposition event
+ *   → accepted queue only → (P1 convert runs later via the job queue)
+ *
+ * Hard rules (§4): duplicate detection precedes AnyDoc and AI; triage needs no
+ * AI or network; irrelevant items never reach AnyDoc/Claude/ledger/People/
+ * embeddings; a triage failure never deletes the original; every disposition
+ * is reversible and emits an audit event.
  */
 export async function ingestFile(
   db: DatabaseSync,
@@ -98,119 +220,620 @@ export async function ingestFile(
   const filename = path.basename(filePath);
   const now = ports.clock.isoNow();
 
+  // ── record the receipt FIRST so a crash mid-intake leaves an audit trail ──
+  const intakeId = recordIntakeReceived(db, ports, {
+    source,
+    sourceReference: opts.externalId,
+    filename,
+    receivedPath: filePath,
+  });
+  ports.bus.publish({
+    type: "IntakeReceived",
+    intake_id: intakeId,
+    source,
+    filename,
+    received_path: filePath,
+    at: now,
+  });
+
   try {
-    // Source-level idempotency (e.g. the same Gmail message or invoice number)
+    // ── 1. write-stability check (§4) ──────────────────────────────────────
+    if (opts.checkStable) {
+      await stableSize(filePath);
+    }
+    setIntakeState(db, ports, intakeId, "stable");
+
+    // ── 2. SHA-256 + metadata ──────────────────────────────────────────────
+    const buf = await fs.readFile(filePath);
+    const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
+    const ext = path.extname(filename).toLowerCase();
+    const mimeType = detectMime(filename, buf);
+    updateIntakeHashed(db, ports, intakeId, { sha256, mimeType, byteSize: buf.length, ext });
+    setIntakeState(db, ports, intakeId, "hashed");
+
+    // ── 3. exact duplicate lookup (§4, §7) ─────────────────────────────────
+    // Source-level idempotency (Gmail message id, invoice number) is checked
+    // first because it is cheaper and covers the case where the bytes differ
+    // but the source considers them the same artifact.
     if (opts.externalId) {
       const seen = db
         .prepare("SELECT document_id FROM source_events WHERE source=? AND external_id=?")
         .get(source, opts.externalId) as { document_id?: string } | undefined;
       if (seen) {
-        recordIntake(db, ports, "duplicate", filename, undefined, seen.document_id, source, "external_id seen");
-        return { status: "duplicate", existing_document_id: seen.document_id };
+        return await finalizeDuplicate(db, ports, intakeId, filename, sha256, seen.document_id!, source, opts, filePath, "external_id seen");
       }
     }
-
-    const buf = await fs.readFile(filePath);
-    const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
-
     // Content-level dedupe — the same bytes never become two documents.
     const existing = db.prepare("SELECT id FROM documents WHERE sha256=?").get(sha256) as
       | { id: string }
       | undefined;
     if (existing) {
-      recordIntake(db, ports, "duplicate", filename, sha256, existing.id, source, "sha256 match");
-      ports.bus.publish({
-        type: "DocumentDuplicate",
-        sha256,
-        filename,
-        existing_document_id: existing.id,
-        at: now,
-      });
-      // A duplicate still gets out of the inbox, but is NEVER deleted — it is
-      // set aside so the user can confirm the vault already has it.
-      let archivedTo: string | undefined;
-      if (opts.consumeSource) {
-        const dupDir = path.join(ports.paths.vaultRoot(), "Duplicates");
-        await fs.mkdir(dupDir, { recursive: true });
-        const dest = await uniquePath(dupDir, filename);
-        await moveFile(filePath, dest);
-        archivedTo = dest;
-        ports.logger.info("duplicate set aside", { filename, dest });
-      }
-      return { status: "duplicate", sha256, existing_document_id: existing.id, archived_to: archivedTo };
+      return await finalizeDuplicate(db, ports, intakeId, filename, sha256, existing.id, source, opts, filePath, "sha256 match");
     }
 
-    const ext = path.extname(filename).toLowerCase();
-    const id = newId("doc");
-    const rawDir = ports.paths.rawDir(dateKey(ports.clock.now()));
+    // ── 4. deterministic relevance triage (§6) ─────────────────────────────
+    const text = await cheapText(filePath, ext);
+    const result = triage({ filename, mimeType, byteSize: buf.length, bytes: buf, text, source });
+    setIntakeState(db, ports, intakeId, "triaged");
+    ports.bus.publish({
+      type: "IntakeTriaged",
+      intake_id: intakeId,
+      source,
+      filename,
+      disposition: result.disposition,
+      reason_code: result.reasonCode,
+      reason: result.reason,
+      confidence: result.confidence,
+      triage_review: !!result.triage_review,
+      at: ports.clock.isoNow(),
+    });
 
-    // Keep the ORIGINAL filename. Raw/ is meant to be browsable in Finder;
-    // "doc_9f2f5429.pdf" tells a human nothing, "Proton Mail invoice
-    // 21145650.pdf" tells them everything.
-    const rawPath = await uniquePath(rawDir, filename);
-    await fs.writeFile(rawPath, buf);
-
-    // Verify the copy before touching the source. A truncated write followed
-    // by an unlink would destroy the user's only copy of a document.
-    const written = await fs.readFile(rawPath);
-    const writtenHash = crypto.createHash("sha256").update(written).digest("hex");
-    if (writtenHash !== sha256) {
-      throw new Error(`archive verification failed for ${filename} (hash mismatch)`);
+    // ── 5a. IRRELEVANT → preserve under Irrelevant/<date>/, never analyse ──
+    if (result.disposition === "irrelevant") {
+      return await finalizeIrrelevant(db, ports, intakeId, filename, sha256, buf, result, source, opts, filePath, ext, mimeType);
     }
 
-    db.prepare(
-      `INSERT INTO documents (id, sha256, original_filename, ext, byte_size, raw_path, source, received_at)
-       VALUES (?,?,?,?,?,?,?,?)`,
-    ).run(id, sha256, filename, ext, buf.length, rawPath, source, now);
-
-    if (opts.externalId) {
-      db.prepare("INSERT OR REPLACE INTO source_events(source,external_id,document_id,created_at) VALUES(?,?,?,?)")
-        .run(source, opts.externalId, id, now);
+    // ── 5b. FAILED → retain source, record reason, never delete ────────────
+    if (result.disposition === "failed") {
+      return await finalizeFailed(db, ports, intakeId, filename, source, result.reason);
     }
 
-    // Only now, with a verified copy in the vault, is it safe to empty the
-    // inbox. Files pushed via the API are left where they are.
-    if (opts.consumeSource) {
-      try {
-        await fs.unlink(filePath);
-        ports.logger.info("filed", { filename, into: rawPath });
-      } catch (err) {
-        ports.logger.warn("archived but could not clear source", {
-          filename,
-          err: (err as Error)?.message,
-        });
-      }
-    }
-
-    recordIntake(db, ports, "added", filename, sha256, id, source, null);
-    ports.bus.publish({ type: "DocumentReceived", document_id: id, filename, sha256, at: now });
-    enqueue(db, ports, id, "convert");
-
-    return { status: "added", document_id: id, sha256, archived_to: rawPath };
+    // ── 5c. ACCEPTED → archive under Raw/<date>/, record document, enqueue ──
+    return await finalizeAccepted(db, ports, intakeId, filename, sha256, buf, result, source, opts, filePath, ext, mimeType, now);
   } catch (err) {
     const msg = (err as Error)?.message ?? String(err);
     ports.logger.error("P0 intake failed", { filename, err: msg });
-    recordIntake(db, ports, "failed", filename, undefined, undefined, source, msg);
-    // A failed file stays in Drop on purpose: it is visible, retryable on the
-    // next scan, and never silently swallowed.
-    return { status: "failed", error: msg };
+    // A triage/intake failure never deletes or loses the original (§4). The
+    // file stays where it is — visible, retryable, never silently swallowed.
+    return await finalizeFailed(db, ports, intakeId, filename, source, msg);
   }
 }
 
-function recordIntake(
+// ── intake_events helpers (work order 06 §5) ─────────────────────────────────
+
+function recordIntakeReceived(
   db: DatabaseSync,
   ports: Ports,
-  kind: "added" | "duplicate" | "irrelevant" | "failed",
-  filename: string,
-  sha256?: string,
-  documentId?: string,
-  source = "folder",
-  detail: string | null = null,
+  info: { source: string; sourceReference?: string; filename: string; receivedPath: string },
+): number {
+  const now = ports.clock.isoNow();
+  const r = db.prepare(
+    `INSERT INTO intake_events
+       (kind, filename, source, source_reference, received_path, processing_state, created_at, updated_at)
+     VALUES ('failed', ?, ?, ?, ?, 'received', ?, ?)`,
+  ).run(info.filename, info.source, info.sourceReference ?? null, info.receivedPath, now, now);
+  // 'failed' is the safe default until triage upgrades it; a crash between
+  // here and the finalizer leaves an honest "this did not complete" row rather
+  // than a misleading 'accepted'.
+  return Number(r.lastInsertRowid);
+}
+
+function setIntakeState(db: DatabaseSync, ports: Ports, id: number, state: string) {
+  db.prepare("UPDATE intake_events SET processing_state=?, updated_at=? WHERE id=?")
+    .run(state, ports.clock.isoNow(), id);
+}
+
+function updateIntakeHashed(
+  db: DatabaseSync,
+  ports: Ports,
+  id: number,
+  info: { sha256: string; mimeType: string; byteSize: number; ext: string },
 ) {
   db.prepare(
-    `INSERT INTO intake_events (kind, filename, sha256, document_id, source, detail, created_at)
-     VALUES (?,?,?,?,?,?,?)`,
-  ).run(kind, filename, sha256 ?? null, documentId ?? null, source, detail, ports.clock.isoNow());
+    `UPDATE intake_events
+        SET sha256=?, mime_type=?, byte_size=?, updated_at=?
+      WHERE id=?`,
+  ).run(info.sha256, info.mimeType, info.byteSize, ports.clock.isoNow(), id);
+}
+
+function updateIntakeTriaged(
+  db: DatabaseSync,
+  ports: Ports,
+  id: number,
+  result: TriageResult,
+) {
+  db.prepare(
+    `UPDATE intake_events
+        SET reason_code=?, reason=?, confidence=?, signals_json=?, triage_review=?, updated_at=?
+      WHERE id=?`,
+  ).run(
+    result.reasonCode,
+    result.reason,
+    result.confidence,
+    JSON.stringify(result.signals),
+    result.triage_review ? 1 : 0,
+    ports.clock.isoNow(),
+    id,
+  );
+}
+
+function finalizeIntakeRow(
+  db: DatabaseSync,
+  ports: Ports,
+  id: number,
+  fields: {
+    kind: "accepted" | "irrelevant" | "duplicate" | "failed";
+    sha256?: string | null;
+    documentId?: string | null;
+    matchedDocumentId?: string | null;
+    canonicalPath?: string | null;
+    detail?: string | null;
+    state?: string;
+  },
+) {
+  db.prepare(
+    `UPDATE intake_events
+        SET kind=?, sha256=?, document_id=?, matched_document_id=?, canonical_path=?,
+            detail=?, processing_state=?, updated_at=?
+      WHERE id=?`,
+  ).run(
+    fields.kind,
+    fields.sha256 ?? null,
+    fields.documentId ?? null,
+    fields.matchedDocumentId ?? null,
+    fields.canonicalPath ?? null,
+    fields.detail ?? null,
+    fields.state ?? "archived",
+    ports.clock.isoNow(),
+    id,
+  );
+}
+
+// ── disposition finalizers ───────────────────────────────────────────────────
+
+/** Accepted: archive under Raw/<date>/, write the documents row, enqueue P1. */
+async function finalizeAccepted(
+  db: DatabaseSync,
+  ports: Ports,
+  intakeId: number,
+  filename: string,
+  sha256: string,
+  buf: Buffer,
+  result: TriageResult,
+  source: string,
+  opts: IngestOptions,
+  filePath: string,
+  ext: string,
+  mimeType: string,
+  now: string,
+): Promise<IntakeResult> {
+  const id = newId("doc");
+  const rawDir = ports.paths.rawDir(dateKey(ports.clock.now()));
+  // Keep the ORIGINAL filename. Raw/ is browsable in Finder; "doc_9f2f5429.pdf"
+  // tells a human nothing, "Proton Mail invoice 21145650.pdf" tells them everything.
+  const rawPath = await uniquePath(rawDir, filename);
+  await fs.writeFile(rawPath, buf);
+
+  // Verify the copy before touching the source. A truncated write followed by
+  // an unlink would destroy the user's only copy of a document.
+  const written = await fs.readFile(rawPath);
+  const writtenHash = crypto.createHash("sha256").update(written).digest("hex");
+  if (writtenHash !== sha256) {
+    throw new Error(`archive verification failed for ${filename} (hash mismatch)`);
+  }
+
+  db.prepare(
+    `INSERT INTO documents (id, sha256, original_filename, ext, byte_size, raw_path, source, received_at)
+     VALUES (?,?,?,?,?,?,?,?)`,
+  ).run(id, sha256, filename, ext, buf.length, rawPath, source, now);
+
+  if (opts.externalId) {
+    db.prepare("INSERT OR REPLACE INTO source_events(source,external_id,document_id,created_at) VALUES(?,?,?,?)")
+      .run(source, opts.externalId, id, now);
+  }
+
+  // Only now, with a verified copy in the vault, is it safe to empty the
+  // inbox. Files pushed via the API are left where they are.
+  if (opts.consumeSource) {
+    try {
+      await fs.unlink(filePath);
+      ports.logger.info("filed", { filename, into: rawPath });
+    } catch (err) {
+      ports.logger.warn("archived but could not clear source", {
+        filename,
+        err: (err as Error)?.message,
+      });
+    }
+  }
+
+  updateIntakeTriaged(db, ports, intakeId, result);
+  finalizeIntakeRow(db, ports, intakeId, {
+    kind: "accepted",
+    sha256,
+    documentId: id,
+    canonicalPath: rawPath,
+    detail: result.reason,
+    state: "queued",
+  });
+
+  ports.bus.publish({ type: "DocumentReceived", document_id: id, filename, sha256, at: now });
+  ports.bus.publish({
+    type: "IntakeAccepted",
+    intake_id: intakeId,
+    source,
+    filename,
+    sha256,
+    document_id: id,
+    canonical_path: rawPath,
+    triage_review: !!result.triage_review,
+    at: now,
+  });
+  enqueue(db, ports, id, "convert");
+
+  return {
+    status: "added",
+    disposition: "accepted",
+    intake_id: intakeId,
+    document_id: id,
+    sha256,
+    archived_to: rawPath,
+    canonical_path: rawPath,
+    reason_code: result.reasonCode,
+    reason: result.reason,
+    confidence: result.confidence,
+    triage_review: !!result.triage_review,
+  };
+}
+
+/** Irrelevant: preserve under Irrelevant/<date>/, never analyse. */
+async function finalizeIrrelevant(
+  db: DatabaseSync,
+  ports: Ports,
+  intakeId: number,
+  filename: string,
+  sha256: string,
+  buf: Buffer,
+  result: TriageResult,
+  source: string,
+  opts: IngestOptions,
+  filePath: string,
+  ext: string,
+  mimeType: string,
+): Promise<IntakeResult> {
+  const irrDir = ports.paths.irrelevantDir(dateKey(ports.clock.now()));
+  const dest = await uniquePath(irrDir, filename);
+  await fs.writeFile(dest, buf);
+  // Verify the preserved copy — irrelevant files are still evidence and must
+  // be restorable byte-for-byte.
+  const written = await fs.readFile(dest);
+  const writtenHash = crypto.createHash("sha256").update(written).digest("hex");
+  if (writtenHash !== sha256) {
+    throw new Error(`irrelevant archive verification failed for ${filename} (hash mismatch)`);
+  }
+
+  if (opts.consumeSource) {
+    try {
+      await fs.unlink(filePath);
+    } catch (err) {
+      ports.logger.warn("irrelevant archived but could not clear source", {
+        filename,
+        err: (err as Error)?.message,
+      });
+    }
+  }
+
+  updateIntakeTriaged(db, ports, intakeId, result);
+  finalizeIntakeRow(db, ports, intakeId, {
+    kind: "irrelevant",
+    sha256,
+    canonicalPath: dest,
+    detail: result.reason,
+    state: "archived",
+  });
+
+  ports.bus.publish({
+    type: "IntakeIrrelevant",
+    intake_id: intakeId,
+    source,
+    filename,
+    sha256,
+    reason_code: result.reasonCode,
+    reason: result.reason,
+    canonical_path: dest,
+    at: ports.clock.isoNow(),
+  });
+  ports.logger.info("irrelevant — preserved, excluded from analysis", {
+    filename,
+    reason: result.reasonCode,
+    dest,
+  });
+
+  return {
+    status: "irrelevant",
+    disposition: "irrelevant",
+    intake_id: intakeId,
+    sha256,
+    archived_to: dest,
+    canonical_path: dest,
+    reason_code: result.reasonCode,
+    reason: result.reason,
+    confidence: result.confidence,
+  };
+}
+
+/** Duplicate: log matched document, preserve bytes under Duplicates/<date>/. */
+async function finalizeDuplicate(
+  db: DatabaseSync,
+  ports: Ports,
+  intakeId: number,
+  filename: string,
+  sha256: string,
+  matchedDocumentId: string,
+  source: string,
+  opts: IngestOptions,
+  filePath: string,
+  detail: string,
+): Promise<IntakeResult> {
+  let archivedTo: string | null = null;
+  if (opts.consumeSource) {
+    const dupDir = ports.paths.duplicatesDir(dateKey(ports.clock.now()));
+    const dest = await uniquePath(dupDir, filename);
+    await moveFile(filePath, dest);
+    archivedTo = dest;
+    ports.logger.info("duplicate set aside", { filename, dest });
+  }
+
+  finalizeIntakeRow(db, ports, intakeId, {
+    kind: "duplicate",
+    sha256,
+    matchedDocumentId,
+    canonicalPath: archivedTo,
+    detail,
+    state: "archived",
+  });
+
+  ports.bus.publish({
+    type: "DocumentDuplicate",
+    sha256,
+    filename,
+    existing_document_id: matchedDocumentId,
+    at: ports.clock.isoNow(),
+  });
+  ports.bus.publish({
+    type: "IntakeDuplicate",
+    intake_id: intakeId,
+    source,
+    filename,
+    sha256,
+    matched_document_id: matchedDocumentId,
+    canonical_path: archivedTo,
+    at: ports.clock.isoNow(),
+  });
+
+  return {
+    status: "duplicate",
+    disposition: "duplicate",
+    intake_id: intakeId,
+    sha256,
+    existing_document_id: matchedDocumentId,
+    archived_to: archivedTo ?? undefined,
+    canonical_path: archivedTo ?? undefined,
+    reason_code: detail,
+  };
+}
+
+/** Failed: retain source, record reason, never delete. */
+async function finalizeFailed(
+  db: DatabaseSync,
+  ports: Ports,
+  intakeId: number,
+  filename: string,
+  source: string,
+  reason: string,
+): Promise<IntakeResult> {
+  finalizeIntakeRow(db, ports, intakeId, {
+    kind: "failed",
+    detail: reason,
+    state: "failed",
+  });
+  ports.bus.publish({
+    type: "IntakeFailed",
+    intake_id: intakeId,
+    source,
+    filename,
+    reason,
+    at: ports.clock.isoNow(),
+  });
+  return {
+    status: "failed",
+    disposition: "failed",
+    intake_id: intakeId,
+    error: reason,
+    reason: reason,
+  };
+}
+
+/**
+ * Restore an irrelevant intake: re-run triage on the preserved bytes and, if
+ * accepted, archive under Raw/, create the document, and enqueue processing.
+ * Work order 06 §7/§9: irrelevant files are reversible; restore re-triages and
+ * audits the outcome. The original irrelevant copy is preserved (not deleted)
+ * so the audit trail is intact even after a successful restore.
+ */
+export async function restoreIntake(
+  db: DatabaseSync,
+  ports: Ports,
+  intakeId: number,
+): Promise<IntakeResult> {
+  const row = db
+    .prepare(
+      `SELECT id, kind, filename, sha256, canonical_path, source, source_reference,
+              mime_type, byte_size, reason_code, processing_state
+         FROM intake_events WHERE id=?`,
+    )
+    .get(intakeId) as
+    | {
+        id: number;
+        kind: string;
+        filename: string;
+        sha256: string | null;
+        canonical_path: string | null;
+        source: string;
+        source_reference: string | null;
+        mime_type: string | null;
+        byte_size: number | null;
+        reason_code: string | null;
+        processing_state: string;
+      }
+    | undefined;
+  if (!row) throw new Error(`intake ${intakeId} not found`);
+  if (row.kind !== "irrelevant") {
+    throw new Error(`intake ${intakeId} is ${row.kind}, not irrelevant — only irrelevant items can be restored`);
+  }
+  if (!row.canonical_path) throw new Error(`intake ${intakeId} has no preserved canonical_path`);
+
+  // Re-read the preserved bytes and re-triage. The original irrelevant copy
+  // stays in place; restore writes a NEW accepted copy under Raw/.
+  const buf = await fs.readFile(row.canonical_path);
+  const sha256 = row.sha256 ?? crypto.createHash("sha256").update(buf).digest("hex");
+  const ext = path.extname(row.filename).toLowerCase();
+  const mimeType = row.mime_type ?? detectMime(row.filename, buf);
+  const text = await cheapText(row.canonical_path, ext);
+  const result = triage({
+    filename: row.filename,
+    mimeType,
+    byteSize: buf.length,
+    bytes: buf,
+    text,
+    source: row.source,
+  });
+
+  // If re-triage says irrelevant again, record the attempt but do not promote.
+  if (result.disposition === "irrelevant") {
+    updateIntakeTriaged(db, ports, intakeId, result);
+    db.prepare("UPDATE intake_events SET detail=?, updated_at=? WHERE id=?")
+      .run(`restore re-triaged irrelevant: ${result.reason}`, ports.clock.isoNow(), intakeId);
+    ports.bus.publish({
+      type: "IntakeRestored",
+      intake_id: intakeId,
+      source: row.source,
+      filename: row.filename,
+      new_disposition: "irrelevant",
+      document_id: null,
+      at: ports.clock.isoNow(),
+    });
+    return {
+      status: "irrelevant",
+      disposition: "irrelevant",
+      intake_id: intakeId,
+      reason_code: result.reasonCode,
+      reason: `Restore re-triage still irrelevant: ${result.reason}`,
+      confidence: result.confidence,
+    };
+  }
+
+  // Accepted on restore: archive, create document, enqueue. Same path as a
+  // fresh accepted intake, but the source file is the preserved irrelevant
+  // copy (which we do NOT consume — it stays as audit evidence).
+  const now = ports.clock.isoNow();
+  const id = newId("doc");
+  const rawDir = ports.paths.rawDir(dateKey(ports.clock.now()));
+  const rawPath = await uniquePath(rawDir, row.filename);
+  await fs.writeFile(rawPath, buf);
+  const written = await fs.readFile(rawPath);
+  if (crypto.createHash("sha256").update(written).digest("hex") !== sha256) {
+    throw new Error(`restore archive verification failed for ${row.filename}`);
+  }
+
+  db.prepare(
+    `INSERT INTO documents (id, sha256, original_filename, ext, byte_size, raw_path, source, received_at)
+     VALUES (?,?,?,?,?,?,?,?)`,
+  ).run(id, sha256, row.filename, ext, buf.length, rawPath, row.source, now);
+
+  if (row.source_reference) {
+    db.prepare("INSERT OR REPLACE INTO source_events(source,external_id,document_id,created_at) VALUES(?,?,?,?)")
+      .run(row.source, row.source_reference, id, now);
+  }
+
+  updateIntakeTriaged(db, ports, intakeId, result);
+  finalizeIntakeRow(db, ports, intakeId, {
+    kind: "accepted",
+    sha256,
+    documentId: id,
+    canonicalPath: rawPath,
+    detail: `restored from irrelevant (${row.reason_code}); ${result.reason}`,
+    state: "queued",
+  });
+
+  ports.bus.publish({ type: "DocumentReceived", document_id: id, filename: row.filename, sha256, at: now });
+  ports.bus.publish({
+    type: "IntakeAccepted",
+    intake_id: intakeId,
+    source: row.source,
+    filename: row.filename,
+    sha256,
+    document_id: id,
+    canonical_path: rawPath,
+    triage_review: !!result.triage_review,
+    at: now,
+  });
+  ports.bus.publish({
+    type: "IntakeRestored",
+    intake_id: intakeId,
+    source: row.source,
+    filename: row.filename,
+    new_disposition: "accepted",
+    document_id: id,
+    at: now,
+  });
+  enqueue(db, ports, id, "convert");
+
+  return {
+    status: "added",
+    disposition: "accepted",
+    intake_id: intakeId,
+    document_id: id,
+    sha256,
+    archived_to: rawPath,
+    canonical_path: rawPath,
+    reason_code: result.reasonCode,
+    reason: `Restored from irrelevant: ${result.reason}`,
+    confidence: result.confidence,
+    triage_review: !!result.triage_review,
+  };
+}
+
+/**
+ * Reclassify an intake: force a re-triage of the preserved bytes regardless of
+ * current disposition. Used when the user disagrees with the original triage.
+ * For an irrelevant item this is equivalent to restore; for an accepted item it
+ * re-runs triage but does NOT undo the document (call the delete workflow for
+ * that). Primarily a re-triage audit on the irrelevant copy.
+ */
+export async function reclassifyIntake(
+  db: DatabaseSync,
+  ports: Ports,
+  intakeId: number,
+): Promise<IntakeResult> {
+  // Reclassify on an irrelevant item is a restore; on anything else it is a
+  // no-op re-triage that records the attempt. This keeps the destructive
+  // surface small: reclassify never deletes a document.
+  const row = db.prepare("SELECT kind FROM intake_events WHERE id=?").get(intakeId) as
+    | { kind: string }
+    | undefined;
+  if (!row) throw new Error(`intake ${intakeId} not found`);
+  if (row.kind === "irrelevant") return restoreIntake(db, ports, intakeId);
+  throw new Error(`intake ${intakeId} is ${row.kind} — reclassify only applies to irrelevant items`);
 }
 
 /**

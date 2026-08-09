@@ -12,7 +12,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
-import { ingestFile } from "./pipeline.js";
+import { ingestFile, restoreIntake, reclassifyIntake } from "./pipeline.js";
 import { listPacks, loadPack, fyKeyFor, fyRange, type JurisdictionPack } from "./jurisdiction.js";
 import { buildTreemap } from "./categories/spend-categories.js";
 import { deriveGmailAddress } from "./gmail/gmail-model.js";
@@ -280,6 +280,26 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           // copies it; it never deletes someone else's file.
         });
         return send(res, result.status === "failed" ? 500 : 200, result);
+      }
+
+      // ── work order 06 — intake restore / reclassify (§8) ──────────────────
+      // Restore re-runs triage on a preserved irrelevant file and, if accepted,
+      // promotes it into the normal processing queue. Reclassify is the same
+      // operation exposed under a different verb for UI clarity. Both are
+      // non-destructive: the original irrelevant copy is preserved as audit.
+      {
+        const m = /^\/v1\/intake\/(\d+)\/(restore|reclassify)$/.exec(p);
+        if (m && req.method === "POST") {
+          const id = Number(m[1]);
+          try {
+            const result = m[2] === "restore"
+              ? await restoreIntake(db, ports, id)
+              : await reclassifyIntake(db, ports, id);
+            return send(res, 200, result);
+          } catch (err) {
+            return send(res, 404, { error: (err as Error)?.message ?? "intake not found" });
+          }
+        }
       }
 
       // linkDocuments — attach a document to a transaction as evidence, or
@@ -1526,6 +1546,16 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, { kind, candidates: findNearDuplicates(db, kind) });
       }
 
+      // ── work order 06 — single intake event by id (§8) ────────────────────
+      {
+        const m = /^\/v1\/intake\/(\d+)$/.exec(p);
+        if (m && req.method === "GET") {
+          const row = db.prepare("SELECT * FROM intake_events WHERE id=?").get(Number(m[1]));
+          if (!row) return send(res, 404, { error: "intake not found" });
+          return send(res, 200, { event: row });
+        }
+      }
+
       // ── queries ──────────────────────────────────────────────────────────
       switch (p) {
         case "/v1/treemap": {
@@ -1747,10 +1777,32 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
 
         case "/v1/intake-feed":
+          // Kept for backward compatibility — the richer /v1/intake/recent is
+          // preferred. Same shape so existing clients keep working.
           return send(res, 200, {
             events: db
               .prepare("SELECT * FROM intake_events ORDER BY id DESC LIMIT ?")
               .all(Number(url.searchParams.get("limit") ?? 50)),
+          });
+
+        // Work order 06 §8 — recent intake with full disposition detail.
+        case "/v1/intake/recent":
+          return send(res, 200, {
+            events: db
+              .prepare("SELECT * FROM intake_events ORDER BY id DESC LIMIT ?")
+              .all(Number(url.searchParams.get("limit") ?? 50)),
+          });
+
+        // Work order 06 §9 — irrelevant items only, for the Irrelevant view.
+        case "/v1/irrelevant":
+          return send(res, 200, {
+            events: db
+              .prepare(
+                `SELECT * FROM intake_events
+                  WHERE kind='irrelevant'
+                  ORDER BY id DESC LIMIT ?`,
+              )
+              .all(Number(url.searchParams.get("limit") ?? 200)),
           });
 
         case "/v1/jobs":

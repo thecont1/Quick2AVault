@@ -68,10 +68,15 @@ const rawFiles = (root: string) => {
 
 console.log("\nArchive lifecycle\n");
 
+// Work order 06: triage now runs as part of intake. The stub content uses real
+// PDF magic bytes (%PDF-1.4) so triage accepts it as a document by type — the
+// archive lifecycle tests are about file safety, not triage classification.
+const PDF_STUB = "%PDF-1.4\n%archive-stub-content-for-lifecycle-test\n";
+
 await check("a processed file LEAVES Drop and keeps its name in Raw/", async () => {
   const { root, drop, ports, db } = freshVault();
   const src = path.join(drop, "Proton Mail invoice 21145650.pdf");
-  await fsp.writeFile(src, "PDF-CONTENT-A");
+  await fsp.writeFile(src, PDF_STUB);
 
   const r = await ingestFile(db, ports, src, { source: "folder", consumeSource: true });
   assert.strictEqual(r.status, "added");
@@ -81,7 +86,7 @@ await check("a processed file LEAVES Drop and keeps its name in Raw/", async () 
 
 await check("archived bytes are identical to the original", async () => {
   const { drop, ports, db } = freshVault();
-  const body = Buffer.from("PDF-CONTENT-EXACT-BYTES");
+  const body = Buffer.from("%PDF-1.4\n%exact-bytes-test\n");
   const src = path.join(drop, "statement.pdf");
   await fsp.writeFile(src, body);
 
@@ -94,7 +99,7 @@ await check("an API-pushed file is NEVER deleted from the caller's folder", asyn
   const { ports, db } = freshVault();
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), "q2v-downloads-"));
   const src = path.join(outside, "receipt.pdf");
-  await fsp.writeFile(src, "USER-OWNED-FILE");
+  await fsp.writeFile(src, PDF_STUB);
 
   const r = await ingestFile(db, ports, src, { source: "api" });
   assert.strictEqual(r.status, "added");
@@ -104,22 +109,26 @@ await check("an API-pushed file is NEVER deleted from the caller's folder", asyn
 await check("a duplicate is set aside, not deleted", async () => {
   const { root, drop, ports, db } = freshVault();
   const a = path.join(drop, "invoice.pdf");
-  await fsp.writeFile(a, "SAME-BYTES");
+  await fsp.writeFile(a, PDF_STUB);
   await ingestFile(db, ports, a, { source: "folder", consumeSource: true });
 
   const b = path.join(drop, "invoice-copy.pdf");
-  await fsp.writeFile(b, "SAME-BYTES");
+  await fsp.writeFile(b, PDF_STUB);
   const r = await ingestFile(db, ports, b, { source: "folder", consumeSource: true });
 
   assert.strictEqual(r.status, "duplicate");
   assert.ok(!fs.existsSync(b), "duplicate left cluttering Drop");
-  assert.ok(fs.existsSync(path.join(root, "Duplicates", "invoice-copy.pdf")),
-    "duplicate was destroyed instead of set aside");
+  // Work order 06 §7: duplicates are preserved under Duplicates/<date>/.
+  const dupBase = path.join(root, "Duplicates");
+  const dupDirs = fs.existsSync(dupBase) ? fs.readdirSync(dupBase) : [];
+  const found = dupDirs.some((d) =>
+    fs.existsSync(path.join(dupBase, d, "invoice-copy.pdf")));
+  assert.ok(found, "duplicate was destroyed instead of set aside");
 });
 
 await check("same filename, different content, never overwrites", async () => {
   const { root, drop, ports, db } = freshVault();
-  for (const body of ["FIRST-INVOICE", "SECOND-DIFFERENT-INVOICE"]) {
+  for (const body of ["%PDF-1.4\n%first-invoice\n", "%PDF-1.4\n%second-different-invoice\n"]) {
     const src = path.join(drop, "invoice.pdf");
     await fsp.writeFile(src, body);
     await ingestFile(db, ports, src, { source: "folder", consumeSource: true });
