@@ -42,11 +42,20 @@ class TxnCard extends StatelessWidget {
             Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
               _Tag(text: txn.direction.toUpperCase(), color: dirColor),
               const SizedBox(width: 11),
-              // Never wrap or ellipsize the amount — it is the point of the row.
-              Text(rupees(txn.amountMinor),
+              // Never wrap or ellipsize the amount — it is the point of the
+              // row. SOURCE currency, always: a USD invoice must never read
+              // as rupees (work order 05 §A.4.1).
+              Text(txn.sourceAmount,
                   maxLines: 1,
                   softWrap: false,
                   style: moneyStyle.copyWith(fontSize: 19, color: VaultColors.ink)),
+              // The converted home value is a separate, labelled figure —
+              // never a replacement for the source amount (§A.2).
+              if (txn.homeAmount != null) ...[
+                const SizedBox(width: 8),
+                Text('≈ ${txn.homeAmount}',
+                    style: const TextStyle(fontSize: 12, color: VaultColors.faint)),
+              ],
               if (txn.multiEvidence) ...[
                 const SizedBox(width: 10),
                 _OneRupeeBadge(count: txn.evidence.length),
@@ -84,7 +93,9 @@ class TxnCard extends StatelessWidget {
                       ),
                       SizedBox(
                         width: 96,
-                        child: Text(rupees(l.amountMinor),
+                        // Legs are denominated in the transaction's source
+                        // currency — they are the same money.
+                        child: Text(money(l.amountMinor, txn.currency),
                             style: moneyStyle.copyWith(
                                 fontSize: 11.5,
                                 fontWeight: FontWeight.w400,

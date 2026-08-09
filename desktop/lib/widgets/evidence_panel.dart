@@ -70,7 +70,10 @@ class _EvidencePanelState extends State<EvidencePanel> {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(
-          'Evidence · ${rupees(t.amountMinor)} · ${t.counterparty ?? "transfer"}',
+          // Source amount AND source currency — never detached (WO 05 §A.3).
+          'Evidence · ${t.sourceAmount}'
+          '${t.homeAmount != null ? "  ≈ ${t.homeAmount}" : ""}'
+          ' · ${t.counterparty ?? "transfer"}',
           style: const TextStyle(
               fontSize: 12.5, fontWeight: FontWeight.w600, color: VaultColors.ink),
         ),

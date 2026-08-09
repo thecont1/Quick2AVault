@@ -206,7 +206,7 @@ class _SearchBoxState extends State<SearchBox> {
             if (h.amountMinor != null) ...[
               const SizedBox(width: 8),
               Text(
-                rupees(h.amountMinor!),
+                money(h.amountMinor!, h.currency),
                 style: const TextStyle(
                   fontSize: 11.5,
                   fontFamily: VaultType.mono,

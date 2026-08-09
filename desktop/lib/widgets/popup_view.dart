@@ -449,7 +449,7 @@ class _MiniTxn extends StatelessWidget {
           ]),
         ),
         const SizedBox(width: 8),
-        Text(rupees(txn.amountMinor),
+        Text(txn.sourceAmount,
             maxLines: 1, softWrap: false,
             style: moneyStyle.copyWith(fontSize: 13.5, color: VaultColors.primary)),
       ]),

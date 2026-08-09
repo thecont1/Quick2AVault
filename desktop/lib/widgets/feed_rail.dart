@@ -19,7 +19,7 @@ class FeedRail extends StatelessWidget {
       'MarkdownReady' => 'converted  ${d["chars"]} chars',
       'AnalysisComplete' => 'analysed  ${_short(d["document_id"])}',
       'TransactionRecorded' =>
-        'transaction  ${rupees((d["amount_minor"] ?? 0) as int)}  ${d["direction"]}',
+        'transaction  ${money((d["amount_minor"] ?? 0) as int, d["currency"] as String?)}  ${d["direction"]}',
       'MatchProposed' =>
         'MATCHED  score ${((d["score"] ?? 0) as num).toStringAsFixed(2)}  → one rupee',
       'JobStateChanged' => '${d["phase"]}  ${d["state"]}',

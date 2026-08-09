@@ -205,7 +205,9 @@ class _LineRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sign = line.direction == 'out' ? '-' : '+';
-    final amount = '$sign${rupees(line.amountMinor)}';
+    // The line's own currency (statement header, or the line's FX override) —
+    // a foreign-currency line must never read as home currency.
+    final amount = '$sign${money(line.amountMinor, line.currency)}';
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
