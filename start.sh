@@ -90,7 +90,7 @@ Run './start.sh --stop' first, or set Q2AV_PORT to something else."
 
   mkdir -p "$LOG_DIR"
   Q2AV_TOKEN="$TOKEN" Q2AV_PORT="$PORT" \
-    nohup npx tsx daemon/main.ts > "$LOG_DIR/daemon.log" 2>&1 &
+    nohup bunx tsx daemon/main.ts > "$LOG_DIR/daemon.log" 2>&1 &
 
   # Poll for readiness instead of sleeping a fixed guess.
   local i
