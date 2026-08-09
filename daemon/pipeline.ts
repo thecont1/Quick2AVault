@@ -14,6 +14,8 @@ import { recordTransaction, resolveEntity } from "./ledger.js";
 import { findMatches, linkEvidence, AUTO_LINK, REVIEW_FLOOR } from "./matcher.js";
 import { ask } from "./learning.js";
 import { flattenExtraction, hashText, indexDocument } from "./search.js";
+import type { EmbeddingProvider } from "./embeddings.js";
+import { embedDocument } from "./embeddings.js";
 import { parseStatementMarkdown, stageStatementLines, reconcileStatement } from "./statements.js";
 
 export interface IntakeResult {
@@ -735,6 +737,7 @@ export class JobWorker {
     private ports: Ports,
     private ai: AiProvider,
     private intervalMs = 400,
+    private embed?: EmbeddingProvider,
   ) {}
 
   /** Reclaim jobs orphaned by a crash. Call once at startup. */
@@ -757,6 +760,40 @@ export class JobWorker {
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /**
+   * Embed one document for semantic search. Best-effort: reads the markdown
+   * + extraction from disk/DB, calls the embedding provider, and persists.
+   * Called fire-and-forget after a successful analyse job.
+   */
+  private async embedDocumentFor(documentId: string): Promise<void> {
+    try {
+      const doc = this.db
+        .prepare("SELECT markdown_path, extraction_json FROM documents WHERE id=?")
+        .get(documentId) as { markdown_path: string | null; extraction_json: string | null } | undefined;
+      if (!doc?.markdown_path) return;
+      let markdown = "";
+      try {
+        markdown = await import("node:fs/promises").then((fsp) => fsp.readFile(doc.markdown_path!, "utf-8"));
+      } catch {
+        return;
+      }
+      let extractionText = "";
+      if (doc.extraction_json) {
+        try {
+          extractionText = flattenExtraction(JSON.parse(doc.extraction_json));
+        } catch {
+          // corrupt extraction — embed markdown only
+        }
+      }
+      await embedDocument(this.db, this.ports, this.embed!, documentId, markdown, extractionText);
+    } catch (err) {
+      this.ports.logger.warn("embedding failed for document", {
+        document_id: documentId,
+        err: (err as Error)?.message,
+      });
+    }
   }
 
   async tick(): Promise<void> {
@@ -803,6 +840,12 @@ export class JobWorker {
           await runConvertJob(this.db, this.ports, job.id, job.document_id);
         } else if (job.phase === "analyse") {
           await runAnalyseJob(this.db, this.ports, this.ai, job.document_id);
+          // Best-effort embedding (work order 04 §Track B). Non-blocking:
+          // a failure here logs but does not fail the job — the document is
+          // already analysed and lexically indexed, embeddings are a bonus.
+          if (this.embed?.available) {
+            void this.embedDocumentFor(job.document_id);
+          }
         }
         const fin = this.ports.clock.isoNow();
         this.db.prepare("UPDATE jobs SET state='done', finished_at=? WHERE id=?").run(fin, job.id);

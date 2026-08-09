@@ -22,7 +22,7 @@ export type ClaimSubject = "document" | "transaction" | "entity";
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -277,6 +277,23 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
   markdown,
   extraction_text,
   tokenize = 'unicode61'
+);
+
+-- ── Semantic search (work order 04 §Track B) ──────────────────────────────
+-- One dense vector per document. The BLOB stores a Float64Array; the
+-- dimensionality is model-dependent, so dims is stored alongside to catch a
+-- model swap silently producing half-length vectors that score nonsense.
+-- text_hash is the markdown_hash of the embedded text: a document that was
+-- re-analysed but not re-converted keeps its embedding, and an embedding is
+-- only recomputed when the actual text changed.
+CREATE TABLE IF NOT EXISTS document_embeddings (
+  document_id  TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  model        TEXT NOT NULL,
+  dims         INTEGER NOT NULL,
+  text_hash    TEXT NOT NULL,
+  embedding    BLOB NOT NULL,
+  created_at   TEXT NOT NULL,
+  PRIMARY KEY (document_id, model)
 );
 
 -- ── Durable job queue (replaces the in-memory queue) ───────────────────────

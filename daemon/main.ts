@@ -20,6 +20,7 @@ import { GmailOAuth } from "./gmail/oauth.js";
 import { createTokenStore } from "./gmail/token-store.js";
 import { syncGmail } from "./gmail/sync.js";
 import { createMutableProvider } from "./ai-provider.js";
+import { createEmbeddingProvider } from "./embeddings.js";
 
 const VERSION = "2.0.0-daemon";
 
@@ -128,7 +129,20 @@ async function main() {
   );
   ports.logger.info("ai provider", { available: ai.available, model: ai.model });
 
-  const worker = new JobWorker(db, ports, ai);
+  // Embedding provider for hybrid search (work order 04 §Track B).
+  // Separate config namespace from the chat/extraction provider because
+  // embeddings are often a different vendor (Anthropic has no embeddings API).
+  const embed = createEmbeddingProvider(
+    {
+      apiKey: stored["embed.api_key"] || process.env.Q2AV_EMBED_KEY,
+      baseUrl: stored["embed.base_url"] || process.env.Q2AV_EMBED_BASE_URL,
+      model: stored["embed.model"] || process.env.Q2AV_EMBED_MODEL,
+    },
+    ports.logger,
+  );
+  ports.logger.info("embedding provider", { available: embed.available, model: embed.model });
+
+  const worker = new JobWorker(db, ports, ai, 400, embed);
   worker.start();
 
   const dropDir = DROP ?? path.join(ports.paths.vaultRoot(), "Drop");
@@ -162,6 +176,7 @@ async function main() {
     // ai.reconfigure() so a key saved in the UI applies without a restart.
     ai,
     dropDir,
+    embed,
     // The RESOLVED vault root, not the raw env var — Q2AV_VAULT may be unset,
     // in which case ports.paths applies the default location. Passing the env
     // var directly would leave the file route confining reads to "undefined".

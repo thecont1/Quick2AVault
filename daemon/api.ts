@@ -34,6 +34,11 @@ import {
 } from "./claims.js";
 import { rebuildSearchIndex, searchDocuments } from "./search.js";
 import {
+  backfillEmbeddings,
+  hybridSearch,
+  type EmbeddingProvider,
+} from "./embeddings.js";
+import {
   isLearningEnabled,
   questionBudget,
   answer as answerQuestion,
@@ -65,10 +70,20 @@ export interface ApiOptions {
   devUi?: boolean;
   /** Gmail dropbox, present only when Google OAuth credentials are set. */
   gmail?: { oauth: GmailOAuth; sync: () => Promise<unknown> };
+  /** Embedding provider for hybrid search (work order 04 §Track B). */
+  embed?: EmbeddingProvider;
 }
 
 export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   const startedAt = Date.now();
+  const embedProvider: EmbeddingProvider = opts.embed ?? {
+    available: false,
+    model: "(none)",
+    dims: 0,
+    async embed() {
+      return [];
+    },
+  };
   // Fall back to an inert provider when none was supplied (tests, headless
   // use). reconfigure() is a no-op there rather than undefined, so the
   // settings route does not need to branch on whether AI exists.
@@ -449,24 +464,58 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, { audit: rows });
       }
 
-      // ── lexical search (work order 03 §P1) ───────────────────────────────
+      // ── search (work order 03 §P1 lexical, 04 §Track B hybrid) ─────────
       if (p === "/v1/search" && req.method === "GET") {
         const q = (url.searchParams.get("q") ?? "").trim();
         if (!q) return send(res, 400, { error: "q required" });
         const limit = Math.min(Number(url.searchParams.get("limit") ?? 25) || 25, 100);
-        const mode = url.searchParams.get("mode") ?? "lexical";
-        if (mode !== "lexical") {
-          // Semantic search is P4. Saying so beats silently returning lexical
-          // results a caller believes are semantic.
-          return send(res, 501, { error: "not_implemented", mode, available: ["lexical"] });
+        const mode = url.searchParams.get("mode") ?? "auto";
+        const alphaParam = Number(url.searchParams.get("alpha") ?? "0.5");
+        const alpha = Number.isFinite(alphaParam) ? Math.min(Math.max(alphaParam, 0), 1) : 0.5;
+
+        // "auto" picks hybrid when embeddings exist, lexical otherwise.
+        // "lexical" is always available. "hybrid" falls back to lexical when
+        // the embedding provider is unavailable, rather than 501 — the query
+        // still has a useful answer.
+        const wantHybrid = mode === "hybrid" || mode === "auto";
+        const canHybrid = embedProvider.available;
+
+        if (wantHybrid && canHybrid) {
+          const hits = await hybridSearch(db, ports, embedProvider, q, limit, alpha);
+          return send(res, 200, {
+            query: q,
+            mode: "hybrid",
+            alpha,
+            count: hits.length,
+            results: hits,
+          });
+        }
+        if (mode === "hybrid" && !canHybrid) {
+          // Graceful fallback: the caller asked for hybrid but no embedding
+          // provider is configured. Return lexical with a flag rather than
+          // an error — the query still has a useful answer.
+          const hits = searchDocuments(db, q, limit);
+          return send(res, 200, {
+            query: q,
+            mode: "lexical",
+            fallback: true,
+            reason: "no embedding provider configured",
+            count: hits.length,
+            results: hits,
+          });
         }
         const hits = searchDocuments(db, q, limit);
-        return send(res, 200, { query: q, mode, count: hits.length, results: hits });
+        return send(res, 200, { query: q, mode: "lexical", count: hits.length, results: hits });
       }
 
       if (p === "/v1/search/rebuild" && req.method === "POST") {
         const result = await rebuildSearchIndex(db, ports);
-        return send(res, 200, result);
+        // Also backfill embeddings if a provider is configured.
+        let embeddings = null;
+        if (embedProvider.available) {
+          embeddings = await backfillEmbeddings(db, ports, embedProvider);
+        }
+        return send(res, 200, { ...result, embeddings });
       }
 
       // getTransaction — a single transaction with its resolved counterparty
