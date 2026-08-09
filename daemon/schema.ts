@@ -22,7 +22,7 @@ export type ClaimSubject = "document" | "transaction" | "entity";
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -91,9 +91,15 @@ CREATE TABLE IF NOT EXISTS entities (
   identifiers_json      TEXT,
   institution_entity_id TEXT REFERENCES entities(id),
   is_member             INTEGER NOT NULL DEFAULT 0,
+  -- Work order 05 §B.2: owner and member are distinct ideas. is_member means
+  -- "shares this vault"; is_owner means "this is me" and is EXCLUSIVE —
+  -- exactly one person may hold it. (Pre-v7 vaults conflated the two in
+  -- is_member; the migration promotes the first member to owner.)
+  is_owner              INTEGER NOT NULL DEFAULT 0,
   confidence            REAL,
   status                TEXT NOT NULL DEFAULT 'candidate' CHECK (status IN ('candidate','confirmed')),
-  created_at            TEXT NOT NULL
+  created_at            TEXT NOT NULL,
+  updated_at            TEXT
 );
 -- Same display_name may legitimately exist across kinds (the Swiggy rule),
 -- but never twice WITHIN a kind.
@@ -117,7 +123,17 @@ CREATE TABLE IF NOT EXISTS entity_aliases (
   alias_type TEXT NOT NULL DEFAULT 'name_variant'
              CHECK (alias_type IN ('name_variant','email','phone','handle')),
   source     TEXT,
-  created_at TEXT NOT NULL
+  -- Work order 05 §B.2: an alias is evidence with a lifecycle. 'proposed'
+  -- came from a single extraction and has never been confirmed (it drives
+  -- the unresolved-alias count in People); 'confirmed' was stated by the
+  -- user, taught by a confirmed rule, or carried on a document as a typed
+  -- identifier; 'rejected' was explicitly disowned and must never match
+  -- again — the row is kept because the string is still evidence.
+  status     TEXT NOT NULL DEFAULT 'confirmed'
+             CHECK (status IN ('proposed','confirmed','rejected')),
+  confidence REAL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_kind_norm ON entity_aliases(kind, normalised);
 
@@ -135,10 +151,15 @@ CREATE TABLE IF NOT EXISTS transactions (
   posted_at              TEXT,
   fy_key                 TEXT NOT NULL,
   amount_minor           INTEGER NOT NULL,
-  currency               TEXT NOT NULL DEFAULT 'INR',
+  -- Work order 05 §A.2: NULL means the source document did not state a
+  -- currency. That is a REVIEW state, not an invitation to assume INR —
+  -- the client renders it as "currency uncertain" and aggregates skip it
+  -- until a claim or a conversion resolves it.
+  currency               TEXT,
   home_amount_minor      INTEGER,
   fx_rate                REAL,
   fx_date                TEXT,
+  fx_source              TEXT,
   direction              TEXT NOT NULL CHECK (direction IN ('out','in','transfer')),
   counterparty_entity_id TEXT REFERENCES entities(id),
   payment_rail           TEXT,
@@ -525,6 +546,140 @@ export function migrate(db: DatabaseSync): void {
     } catch (e) {
       db.exec("ROLLBACK");
       throw e;
+    }
+  }
+
+  // ── v6 → v7 (work order 05) ──────────────────────────────────────────────
+
+  // entities gains is_owner / updated_at. Owner was conflated with member:
+  // promote the FIRST member (the one zero-setup auto-promoted) to owner.
+  const entCols = columnsOf(db, "entities");
+  if (entCols.size && !entCols.has("is_owner")) {
+    db.exec("ALTER TABLE entities ADD COLUMN is_owner INTEGER NOT NULL DEFAULT 0");
+    db.exec("ALTER TABLE entities ADD COLUMN updated_at TEXT");
+    db.exec(`
+      UPDATE entities SET is_owner=1
+       WHERE kind='person' AND is_member=1
+         AND id = (SELECT id FROM entities WHERE kind='person' AND is_member=1
+                   ORDER BY created_at LIMIT 1)`);
+  }
+
+  // transactions: currency becomes nullable (a missing source currency is a
+  // review state, never a silent INR) and gains fx_source. SQLite cannot
+  // drop NOT NULL in place — rebuild, same pattern as field_claims above.
+  const txnCols = columnsOf(db, "transactions");
+  if (txnCols.size && !txnCols.has("fx_source")) {
+    db.exec("BEGIN");
+    try {
+      db.exec(`
+        CREATE TABLE transactions_new (
+          id                     TEXT PRIMARY KEY,
+          occurred_at            TEXT NOT NULL,
+          posted_at              TEXT,
+          fy_key                 TEXT NOT NULL,
+          amount_minor           INTEGER NOT NULL,
+          currency               TEXT,
+          home_amount_minor      INTEGER,
+          fx_rate                REAL,
+          fx_date                TEXT,
+          fx_source              TEXT,
+          direction              TEXT NOT NULL CHECK (direction IN ('out','in','transfer')),
+          counterparty_entity_id TEXT REFERENCES entities(id),
+          payment_rail           TEXT,
+          category_id            TEXT,
+          impact_bucket          TEXT,
+          purpose_text           TEXT,
+          instrument_entity_id   TEXT REFERENCES entities(id),
+          quantity               REAL,
+          price_minor            INTEGER,
+          status                 TEXT NOT NULL DEFAULT 'evidenced',
+          confidence             REAL,
+          reverses_transaction_id TEXT REFERENCES transactions(id),
+          created_at             TEXT NOT NULL,
+          CHECK (direction <> 'transfer' OR counterparty_entity_id IS NULL)
+        );
+        INSERT INTO transactions_new
+          SELECT id, occurred_at, posted_at, fy_key, amount_minor, currency,
+                 home_amount_minor, fx_rate, fx_date, NULL, direction,
+                 counterparty_entity_id, payment_rail, category_id, impact_bucket,
+                 purpose_text, instrument_entity_id, quantity, price_minor,
+                 status, confidence, reverses_transaction_id, created_at
+            FROM transactions;
+        DROP TABLE transactions;
+        ALTER TABLE transactions_new RENAME TO transactions;
+        CREATE INDEX IF NOT EXISTS idx_txn_fy ON transactions(fy_key);
+        CREATE INDEX IF NOT EXISTS idx_txn_occurred ON transactions(occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_txn_direction ON transactions(direction);
+      `);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  // entity_aliases gains status/confidence/last_seen_at, and the alias_type
+  // backfill that v4 could not do: rows written before typed aliases existed
+  // were all stamped 'name_variant', including obvious emails and phone
+  // numbers (a real vault had ms@… and a 10-digit mobile as name_variant).
+  // Re-classifying them here is what makes identifier matching reach the
+  // history, not just new documents.
+  //
+  // The classifier below is a FROZEN SNAPSHOT of identity.ts's
+  // classifyIdentifier. Migrations must not drift with live code — a future
+  // tweak to identifier rules must not silently rewrite old vaults — so the
+  // regexes are deliberately duplicated here rather than imported.
+  const aliasCols2 = columnsOf(db, "entity_aliases");
+  if (aliasCols2.size && !aliasCols2.has("status")) {
+    db.exec("BEGIN");
+    try {
+      db.exec(`
+        CREATE TABLE entity_aliases_new (
+          id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          kind       TEXT NOT NULL,
+          alias      TEXT NOT NULL,
+          normalised TEXT NOT NULL,
+          alias_type TEXT NOT NULL DEFAULT 'name_variant'
+                     CHECK (alias_type IN ('name_variant','email','phone','handle')),
+          source     TEXT,
+          status     TEXT NOT NULL DEFAULT 'confirmed'
+                     CHECK (status IN ('proposed','confirmed','rejected')),
+          confidence REAL,
+          created_at TEXT NOT NULL,
+          last_seen_at TEXT
+        );
+        INSERT INTO entity_aliases_new
+          (id, entity_id, kind, alias, normalised, alias_type, source, status, confidence, created_at, last_seen_at)
+          SELECT id, entity_id, kind, alias, normalised, alias_type, source,
+                 'confirmed', NULL, created_at, NULL
+            FROM entity_aliases;
+        DROP TABLE entity_aliases;
+        ALTER TABLE entity_aliases_new RENAME TO entity_aliases;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_kind_norm ON entity_aliases(kind, normalised);
+      `);
+      db.exec("COMMIT");
+    } catch (e) {
+      db.exec("ROLLBACK");
+      throw e;
+    }
+  }
+
+  // alias_type re-classification runs OUTSIDE the rebuild guard: a vault that
+  // already took the rebuild in an earlier beta still needs its rows typed.
+  // Idempotent — only name_variant rows that classify as something else move.
+  if (columnsOf(db, "entity_aliases").has("alias_type")) {
+    const rows = db
+      .prepare("SELECT id, alias FROM entity_aliases WHERE alias_type='name_variant'")
+      .all() as { id: number; alias: string }[];
+    const upd = db.prepare("UPDATE entity_aliases SET alias_type=? WHERE id=?");
+    for (const r of rows) {
+      const v = r.alias.trim();
+      let type: string | null = null;
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) type = "email";
+      else if (/^(\+?91|0)?\d{10}$/.test(v.replace(/[\s-]/g, ""))) type = "phone";
+      else if (/^[^\s@]+@[^\s@.]+$/.test(v)) type = "handle";
+      if (type) upd.run(type, r.id);
     }
   }
 }

@@ -61,6 +61,10 @@ export const DOCUMENT_FIELDS = new Set([
   "currency",
   "reference_ids",
   "purpose_text",
+  // Work order 05 §Track C: who the human on this document is. Edits stay
+  // document-scoped (claims.ts) and the identity resolver relinks parties
+  // only for confirmed corrections (identity.ts applyPersonCorrection).
+  "person",
 ]);
 
 /** Fields a user may correct on a TRANSACTION (what the ledger holds). */
@@ -395,6 +399,8 @@ export function resolveTransaction(
   // invoice: what the bank moved beats what the vendor asked for.
   const amountClaim = winningClaim(db, "transaction", transactionId, "amount_minor");
   let amount: string | null = null;
+  // The document whose amount won, so the currency can follow it (below).
+  let amountWinnerDoc: { documentId: string; x: Record<string, unknown> | null } | null = null;
   if (amountClaim?.value != null && amountClaim.source === "user") {
     amount = amountClaim.value;
     reasons.amount_minor = "user claim on the transaction";
@@ -420,6 +426,7 @@ export function resolveTransaction(
     const winner = ranked[0];
     if (winner) {
       amount = winner.v!.value;
+      amountWinnerDoc = { documentId: winner.p.row.document_id, x: winner.p.x };
       const role = winner.p.row.evidence_role;
       reasons.amount_minor = `${winner.roleRank === 1 ? "settlement" : "invoice"} document (${role}), ${winner.v!.source} value`;
       for (const other of ranked.slice(1)) {
@@ -437,6 +444,33 @@ export function resolveTransaction(
   if (amount !== null && Number.isFinite(Number(amount)) && Number(amount) !== Number(txn.amount_minor)) {
     db.prepare("UPDATE transactions SET amount_minor=? WHERE id=?").run(Math.round(Number(amount)), transactionId);
     changed.push("amount_minor");
+  }
+
+  // ── currency (work order 05 §A.2) ─────────────────────────────────────────
+  // The source currency travels WITH the source amount: the document whose
+  // amount won is also the authority on the currency, and a user claim
+  // outranks both. This is the fix for a USD invoice displaying as ₹597 —
+  // the amount resolved from the document but the currency silently stayed
+  // at the ledger default.
+  const currencyClaim = winningClaim(db, "transaction", transactionId, "currency");
+  let currency: string | null = null;
+  if (currencyClaim?.value != null && currencyClaim.source === "user") {
+    currency = currencyClaim.value;
+    reasons.currency = "user claim on the transaction";
+  } else if (amountWinnerDoc) {
+    const v = documentValue(db, amountWinnerDoc.documentId, "currency", amountWinnerDoc.x);
+    if (v?.value) {
+      currency = v.value;
+      reasons.currency = `${v.source === "user" ? "user-corrected document" : "amount-winning document"} currency`;
+    }
+  }
+  if (currency !== null) {
+    const normalisedCurrency = currency.trim().toUpperCase();
+    const stored = typeof txn.currency === "string" ? txn.currency : null;
+    if (normalisedCurrency !== stored) {
+      db.prepare("UPDATE transactions SET currency=? WHERE id=?").run(normalisedCurrency, transactionId);
+      changed.push("currency");
+    }
   }
 
   // ── occurred_at / posted_at ───────────────────────────────────────────────

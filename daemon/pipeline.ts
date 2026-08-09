@@ -17,6 +17,7 @@ import { flattenExtraction, hashText, indexDocument } from "./search.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { embedDocument } from "./embeddings.js";
 import { parseStatementMarkdown, stageStatementLines, reconcileStatement } from "./statements.js";
+import { loadPack } from "./jurisdiction.js";
 
 export interface IntakeResult {
   status: "added" | "duplicate" | "failed";
@@ -609,7 +610,19 @@ export async function runAnalyseJob(
       subtype: acctParty?.subtype ?? (x.doc_type === "card_statement" ? "credit_card" : "bank"),
     });
 
-    const parsed = parseStatementMarkdown(markdown, x.currency || "INR");
+    // A statement is denominated in the ACCOUNT's currency, which for this
+    // vault is the configured home currency — reading it from app_settings
+    // keeps a non-INR vault correct. This is a statement-header default
+    // only; the header's own printed currency still wins inside the parser.
+    const homeCurrency = (
+      db.prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'").get() as
+        | { value?: string }
+        | undefined
+    )?.value;
+    const parsed = parseStatementMarkdown(
+      markdown,
+      x.currency || loadPack(homeCurrency || "IN").currency.code,
+    );
     if (!parsed.column_mapping_confident) {
       ports.logger.warn("statement: column mapping not confident, needs review", {
         document_id: documentId,

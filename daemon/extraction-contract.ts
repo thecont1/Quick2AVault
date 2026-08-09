@@ -48,7 +48,18 @@ export interface ExtractionResult {
   posted_at: string | null;
   /** Integer MINOR units. 643.72 INR -> 64372. Never a float. */
   amount_minor: number | null;
+  /**
+   * ISO 4217 code EXACTLY as evidenced by the document. Empty string when
+   * the document states no currency — never a guess (work order 05 §A.2:
+   * silently assuming INR is the bug that rendered a USD invoice as ₹597).
+   */
   currency: string;
+  /** Bill subtotal before tax, when the document itemises one. Minor units. */
+  subtotal_minor?: number | null;
+  /** Total tax charged, when stated. Minor units. */
+  tax_minor?: number | null;
+  /** Itemised bill lines, when the document prints them. */
+  line_items?: Array<{ description: string; amount_minor: number | null }> | null;
   direction: "out" | "in" | "transfer" | null;
   payment_rail: "upi" | "card" | "netbanking" | "auto_debit" | "cheque" | "cash" | "broker" | null;
   parties: ExtractedParty[];
@@ -155,7 +166,33 @@ export const EXTRACTION_TOOL_SCHEMA = {
       occurred_at: { type: ["string", "null"], description: "Economic date, ISO yyyy-mm-dd. Source dates are DD-MM-YYYY." },
       posted_at: { type: ["string", "null"], description: "Settlement date if stated separately, ISO yyyy-mm-dd." },
       amount_minor: { type: ["integer", "null"], description: "Total in MINOR units. 643.72 INR -> 64372." },
-      currency: { type: "string", description: "ISO 4217, default INR." },
+      currency: {
+        type: "string",
+        description:
+          "ISO 4217 code as PRINTED on the document (₹/Rs./INR -> INR, $/US$/USD -> USD). \
+Empty string when the document states no currency. NEVER default to a currency the document did not state.",
+      },
+      subtotal_minor: {
+        type: ["integer", "null"],
+        description: "Bill subtotal before tax, minor units, when the document itemises one.",
+      },
+      tax_minor: {
+        type: ["integer", "null"],
+        description: "Total tax charged, minor units, when stated. 0 when the document says zero.",
+      },
+      line_items: {
+        type: ["array", "null"],
+        description:
+          "Itemised bill lines as printed (description + amount in minor units). Omit for documents without an itemised bill.",
+        items: {
+          type: "object",
+          properties: {
+            description: { type: "string" },
+            amount_minor: { type: ["integer", "null"] },
+          },
+          required: ["description", "amount_minor"],
+        },
+      },
       direction: { type: ["string", "null"], enum: ["out", "in", "transfer", null] },
       payment_rail: {
         type: ["string", "null"],

@@ -362,7 +362,9 @@ export function recordTransaction(
     x.posted_at ?? null,
     fyKey(occurred),
     x.amount_minor,
-    x.currency || "INR",
+    // NULL when the document states no currency — a review state, not a
+    // silent INR assumption (work order 05 §A.2).
+    x.currency?.trim() ? x.currency.trim().toUpperCase() : null,
     direction,
     // CHECK constraint enforces this too, but be explicit: transfers have no counterparty.
     isTransfer ? null : counterpartyId,
@@ -466,12 +468,17 @@ export function recordTransaction(
   claim.run(id, "amount_minor", String(x.amount_minor), x.confidence, now);
   claim.run(id, "occurred_at", occurred, x.confidence, now);
   claim.run(id, "direction", direction, x.confidence, now);
+  // The source currency is a claim like any other reading: provenance for
+  // why the transaction is USD, overridable by a user correction.
+  const storedCurrency = x.currency?.trim() ? x.currency.trim().toUpperCase() : null;
+  if (storedCurrency) claim.run(id, "currency", storedCurrency, x.confidence, now);
 
   ports.bus.publish({
     type: "TransactionRecorded",
     transaction_id: id,
     direction,
     amount_minor: x.amount_minor,
+    currency: storedCurrency,
     at: now,
   });
 

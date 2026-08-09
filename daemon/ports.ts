@@ -54,7 +54,7 @@ export type DomainEvent =
   | { type: "DocumentDuplicate"; sha256: string; filename: string; existing_document_id: string; at: string }
   | { type: "MarkdownReady"; document_id: string; markdown_path: string; chars: number; at: string }
   | { type: "AnalysisComplete"; document_id: string; extraction_version: number; at: string }
-  | { type: "TransactionRecorded"; transaction_id: string; direction: string; amount_minor: number; at: string }
+  | { type: "TransactionRecorded"; transaction_id: string; direction: string; amount_minor: number; currency: string | null; at: string }
   | { type: "MatchProposed"; transaction_id: string; document_id: string; score: number; at: string }
   /**
    * A user edit changed the derived value of one or more transactions. The UI

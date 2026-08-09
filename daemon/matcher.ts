@@ -30,7 +30,7 @@ interface TxnRow {
   id: string;
   occurred_at: string;
   amount_minor: number;
-  currency: string;
+  currency: string | null;
   direction: string;
   counterparty_name: string | null;
 }
@@ -46,15 +46,21 @@ const STRONG_KEYS = ["approval_code", "auth_code", "utr", "order_no", "order_id"
 export function findMatches(db: DatabaseSync, x: ExtractionResult, excludeDocId: string): MatchCandidate[] {
   if (x.amount_minor === null) return [];
 
+  // Currency is a PRE-FILTER, but a nullable one (work order 05 §A.2): a
+  // document that does not state a currency must still be allowed to match —
+  // the amount+date+reference signals carry the score — while two KNOWN but
+  // different currencies are never the same payment. INR is no longer
+  // assumed for a missing currency.
   const rows = db
     .prepare(
       `SELECT t.id, t.occurred_at, t.amount_minor, t.currency, t.direction,
               e.display_name AS counterparty_name
        FROM transactions t
        LEFT JOIN entities e ON e.id = t.counterparty_entity_id
-       WHERE t.amount_minor = ? AND t.currency = ?`,
+       WHERE t.amount_minor = ?
+         AND (t.currency = ? OR t.currency IS NULL OR ? IS NULL)`,
     )
-    .all(x.amount_minor, x.currency || "INR") as unknown as TxnRow[];
+    .all(x.amount_minor, x.currency || null, x.currency || null) as unknown as TxnRow[];
 
   const out: MatchCandidate[] = [];
 
