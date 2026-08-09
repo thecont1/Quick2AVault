@@ -115,7 +115,8 @@ void main() {
     // two enum entries sharing a label (which would make the bar ambiguous).
     final labels = VaultTab.values.map((t) => t.label).toList();
     expect(labels.toSet().length, labels.length, reason: 'duplicate tab label');
-    expect(VaultTab.values.length, 5);
+    // Work order 06 added the Intake tab (Irrelevant view + intake feed).
+    expect(VaultTab.values.length, 6);
   });
 
   test('Ledger is the first tab, and therefore the default surface', () {

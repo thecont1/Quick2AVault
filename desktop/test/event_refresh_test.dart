@@ -23,6 +23,14 @@ const daemonEmits = {
   'MatchProposed',
   'Ready',
   'TransactionRecorded',
+  // Work order 06 — Intelligent Intake Triage events (§8).
+  'IntakeReceived',
+  'IntakeTriaged',
+  'IntakeAccepted',
+  'IntakeIrrelevant',
+  'IntakeDuplicate',
+  'IntakeFailed',
+  'IntakeRestored',
 };
 
 /// Mirrors the set in main.dart's _listen(). Kept in sync deliberately: this
@@ -34,6 +42,14 @@ const refreshOn = {
   'DocumentReceived',
   'DocumentDuplicate',
   'BatchFinished',
+  // Work order 06 — intake events that change the Irrelevant view or promote
+  // an item into the ledger. IntakeRestored must refresh because a restore
+  // can move an irrelevant item into accepted/processing.
+  'IntakeAccepted',
+  'IntakeIrrelevant',
+  'IntakeDuplicate',
+  'IntakeFailed',
+  'IntakeRestored',
 };
 
 /// Types that intentionally do NOT trigger a refetch, each with a reason.
@@ -41,6 +57,11 @@ const ignoredWithReason = {
   'JobStateChanged': 'fires ~6x per document — pure churn, no figure changes',
   'MarkdownReady': 'conversion done, no ledger figure yet; AnalysisComplete follows',
   'Ready': 'handled separately — it is the reconnect hello, always refreshes',
+  // Work order 06 — these narrate the intake pipeline but do not change a
+  // ledger figure on their own. The disposition finalizers (IntakeAccepted,
+  // IntakeIrrelevant, etc.) that DO change the view are in refreshOn.
+  'IntakeReceived': 'receipt only — no disposition yet, nothing to show',
+  'IntakeTriaged': 'triage decision — the finalizer event that follows updates the view',
 };
 
 void main() {
