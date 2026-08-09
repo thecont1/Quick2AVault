@@ -493,8 +493,10 @@ class _EvidenceCardState extends State<_EvidenceCard> {
             ),
             const SizedBox(width: 8),
             if (currency == null)
-              const Text('currency uncertain — set it below',
-                  style: TextStyle(fontSize: 11, color: VaultColors.warn))
+              const Flexible(
+                child: Text('currency uncertain — set it below',
+                    style: TextStyle(fontSize: 11, color: VaultColors.warn)),
+              )
             else
               _ProvBadge(source: d['currency']!.source),
             const Spacer(),
@@ -725,11 +727,22 @@ class _Detail extends StatelessWidget {
           // and provenance (work order 05 §A.3). Keyed by document so
           // switching documents or toggling Document/Markdown never shows a
           // stale document's figures.
-          _EvidenceCard(
-            key: ValueKey('evidence-${doc.id}'),
-            api: api,
-            doc: doc,
-            onChanged: onChanged,
+          //
+          // Flexible with a maxHeight so a tall card (many line items, multiple
+          // parties) scrolls internally instead of squeezing the document pane
+          // below a usable preview size.
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 220),
+              child: SingleChildScrollView(
+                child: _EvidenceCard(
+                  key: ValueKey('evidence-${doc.id}'),
+                  api: api,
+                  doc: doc,
+                  onChanged: onChanged,
+                ),
+              ),
+            ),
           ),
           Expanded(
             child: Padding(
