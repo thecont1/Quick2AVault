@@ -560,11 +560,21 @@ class _VaultHomeState extends State<VaultHome> {
                 pendingQuestions: _reviewCount,
                 onOpenQueue: () => setState(() => _reviewQueue = true),
               ),
-        VaultTab.people => PeopleView(api: _api, onClose: null),
-        VaultTab.settings => SetupView(
-            api: _api,
-            onClose: null,
-            onOpenPeople: () => setState(() => _tab = VaultTab.people),
+        VaultTab.people => Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: PeopleView(api: _api, onClose: null),
+            ),
+          ),
+        VaultTab.settings => Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 720),
+              child: SetupView(
+                api: _api,
+                onClose: null,
+                onOpenPeople: () => setState(() => _tab = VaultTab.people),
+              ),
+            ),
           ),
         VaultTab.charts => const ComingSoon(
             title: 'Charts',
