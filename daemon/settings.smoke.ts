@@ -206,21 +206,21 @@ function seedPerson(db: ReturnType<typeof openDatabase>, id: string, name: strin
 
 check("rename keeps the old spelling as an alias", () => {
   const db = freshDb();
-  seedPerson(db, "ent_a", "M. Shantaram");
+  seedPerson(db, "ent_a", "A. Kamath");
   // what the PATCH route does
-  db.prepare("UPDATE entities SET display_name=? WHERE id=?").run("Mahesh Shantaram", "ent_a");
+  db.prepare("UPDATE entities SET display_name=? WHERE id=?").run("Arun Kamath", "ent_a");
   db.prepare(
     "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, source, created_at) VALUES (?,?,?,?,?,?)",
-  ).run("ent_a", "person", "M. Shantaram", normaliseName("M. Shantaram"), "user", "2026-08-09T00:00:00.000Z");
+  ).run("ent_a", "person", "A. Kamath", normaliseName("A. Kamath"), "user", "2026-08-09T00:00:00.000Z");
 
   const row = db.prepare("SELECT display_name FROM entities WHERE id='ent_a'").get() as {
     display_name: string;
   };
-  eq(row.display_name, "Mahesh Shantaram", "renamed");
+  eq(row.display_name, "Arun Kamath", "renamed");
   const alias = db.prepare("SELECT alias FROM entity_aliases WHERE entity_id='ent_a'").get() as
     | { alias: string }
     | undefined;
-  eq(alias?.alias, "M. Shantaram", "old spelling preserved");
+  eq(alias?.alias, "A. Kamath", "old spelling preserved");
   db.close();
 });
 

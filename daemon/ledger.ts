@@ -108,8 +108,8 @@ export function resolveEntity(
   }
 
   // 4. PERSON-ONLY name-order and identifier matching.
-  //    One human is written many ways across documents: "Mahesh Shantaram",
-  //    "SHANTARAM MAHESH" (surname-first, common on Indian statements), and
+  //    One human is written many ways across documents: "Arun Kamath",
+  //    "KAMATH ARUN" (surname-first, common on Indian statements), and
   //    an email address on a receipt. Kind-scoped exact matching sees three
   //    people. Sorting the name tokens makes word ORDER irrelevant, which is
   //    the single most common real-world variant.

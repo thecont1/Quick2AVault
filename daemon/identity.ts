@@ -1,8 +1,8 @@
 /**
  * Person identity resolution (work order 04, Track D).
  *
- * Goal: a person is ONE entity however they appear — "Mahesh Shantaram",
- * "SHANTARAM MAHESH", "ms@thecontrarian.in", "techrose@gmail.com" all resolve
+ * Goal: a person is ONE entity however they appear — "Arun Kamath",
+ * "KAMATH ARUN", "arun@example.com", "workmail@example.com" all resolve
  * to the same canonical person, silently once known.
  *
  * ledger.ts already has kind-scoped name resolution (exact, alias, token-sort)
@@ -91,8 +91,8 @@ function tokens(s: string): string[] {
  * Jaccard overlap of name tokens, 0..1. Token-sort equality (ledger.ts step 3)
  * is the ratio-1.0 case; this scores everything below that.
  *
- * "Mahesh" vs "Mahesh Shantaram" → 1 shared / 2 union = 0.5 (fuzzy band).
- * "M Shantaram" vs "Mahesh Shantaram" → 1/2 shared token ("shantaram") = 0.5.
+ * "Arun" vs "Arun Kamath" → 1 shared / 2 union = 0.5 (fuzzy band).
+ * "A Kamath" vs "Arun Kamath" → 1/2 shared token ("kamath") = 0.5.
  * "Alice" vs "Bob" → 0 (no match at all).
  */
 export function tokenOverlapRatio(a: string, b: string): number {
@@ -189,7 +189,7 @@ function writeAlias(
  * applyRule() always runs the key through normaliseName() before comparing —
  * correct for name-shaped keys (idempotent: re-normalising an already
  * normalised name is a no-op), but WRONG for an identifier: normaliseName
- * strips '@' and '.', so "techrose@gmail.com" becomes "techrose gmail com"
+ * strips '@' and '.', so "workmail@example.com" becomes "workmail example com"
  * and never matches the literal key the rule was stored under. Identifier
  * rules are keyed on normaliseIdentifier()'s form instead, and looked up the
  * same way every time.
@@ -235,14 +235,14 @@ export function resolvePerson(
 
   // ── 0. the "name" is itself an identifier ─────────────────────────────────
   // A regression observed on a live vault: the extractor handed over
-  // "ms@thecontrarian.in" as a person NAME, and a second human called
-  // "ms@thecontrarian.in" was born next to the real Mahesh Shantaram. An
+  // "arun@example.com" as a person NAME, and a second human called
+  // "arun@example.com" was born next to the real Arun Kamath. An
   // email/phone/handle is never a name. If the identifier is known, link
   // silently; otherwise attach the document to the Unidentified placeholder
   // and ASK — one weak string must never mint a person (work order 05 §B.3).
   // classifyIdentifier anchors on the WHOLE string, so a hit here means the
   // "name" is exactly an email/phone/handle and nothing else. (Do NOT gate on
-  // token counts: normaliseName mangles "ms@x.in" into name-like tokens, so a
+  // token counts: normaliseName mangles "arun@x.in" into name-like tokens, so a
   // token check never fires — that was the live regression.)
   const nameAsIdentifier = classifyIdentifier(trimmed);
   if (nameAsIdentifier) {
@@ -321,8 +321,8 @@ export function resolvePerson(
   if (deterministic) {
     // §D.3 co-occurrence learning: this document pairs a KNOWN person with
     // an identifier the vault has never seen for anyone. Only co-occurrence
-    // can teach it — "techrose@gmail.com" shares zero tokens with "Mahesh
-    // Shantaram". Propose it via ONE confirmation; silent thereafter because
+    // can teach it — "workmail@example.com" shares zero tokens with "Arun
+    // Kamath". Propose it via ONE confirmation; silent thereafter because
     // the confirmed answer writes the alias, and step 1 above matches on it
     // from then on.
     for (const raw of idValues) {

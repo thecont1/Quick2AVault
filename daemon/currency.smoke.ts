@@ -71,7 +71,7 @@ function usdInvoice(): ExtractionResult {
     direction: "in",
     payment_rail: "netbanking",
     parties: [
-      { name: "Mahesh Shantaram", kind: "person", role: "owner" },
+      { name: "Arun Kamath", kind: "person", role: "owner" },
       { name: "PetaSight Inc.", kind: "organisation", role: "counterparty" },
     ],
     reference_ids: { invoice_no: "INV/2026-27/03" },
@@ -249,7 +249,7 @@ seedDoc(db, "doc_usd_api", {
   posted_at: "2026-06-28",
   reference_ids: { invoice_no: "INV/2026-27/03" },
   counterparty_descriptor: "PetaSight Inc.",
-  parties: [{ name: "Mahesh Shantaram", kind: "person", role: "owner" }],
+  parties: [{ name: "Arun Kamath", kind: "person", role: "owner" }],
 });
 const txnId = recordTransaction(db, ports, "doc_usd_api", usdInvoice())!.transaction_id;
 

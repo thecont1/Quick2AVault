@@ -1081,7 +1081,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       }
 
       // Add an alias to a person (work order 05 §B.6). The type is classified
-      // from the string when not given, so "ms@…" can never be added as a
+      // from the string when not given, so an email can never be added as a
       // name variant. A value already bound to ANOTHER person is a conflict —
       // 409, never a silent re-attach.
       {
@@ -1348,7 +1348,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
       // Merge two people into one, keeping every spelling as an alias.
       // The automatic rules catch word-order and identifier matches; this is
-      // for the rest ("M. Shantaram", a maiden name, an initials-only form).
+      // for the rest ("A. Kamath", a maiden name, an initials-only form).
       if (p === "/v1/people/merge" && req.method === "POST") {
         const b = await readJson(req);
         if (!b.from_id || !b.into_id) return send(res, 400, { error: "from_id and into_id required" });

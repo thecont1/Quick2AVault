@@ -88,7 +88,7 @@ async function main() {
   });
 
   await check("an email with no attachment has NO page image", async () => {
-    // The rule Mahesh specified: emails sans attachments are markdown-only.
+    // The rule the user specified: emails sans attachments are markdown-only.
     const f = path.join(tmp, "mail.eml");
     await fsp.writeFile(f, "From: a@b\n\nbody");
     const cap = await pageCapability(".eml", f);

@@ -65,12 +65,12 @@ function aliasRows(db: DatabaseSync, entityId: string) {
 console.log("── phone normalisation (regression: 10-digit mobile starting 91)");
 
 await check("+91, trunk-0, and bare forms of the same mobile normalise identically", () => {
-  const a = normaliseIdentifier("phone", "+91 99801 29770");
-  const b = normaliseIdentifier("phone", "09980129770");
-  const c = normaliseIdentifier("phone", "9980129770");
-  assert.equal(a, "9980129770");
-  assert.equal(b, "9980129770");
-  assert.equal(c, "9980129770");
+  const a = normaliseIdentifier("phone", "+91 55501 00200");
+  const b = normaliseIdentifier("phone", "05550100200");
+  const c = normaliseIdentifier("phone", "5550100200");
+  assert.equal(a, "5550100200");
+  assert.equal(b, "5550100200");
+  assert.equal(c, "5550100200");
 });
 
 await check("a 10-digit mobile that starts with 91 is NOT mangled into 8 digits", () => {
@@ -99,8 +99,8 @@ await check("a KNOWN email as the only name resolves silently to its person", ()
   const ports = testPorts("/tmp/q2v-people-2");
   seedDoc(db, "doc_a");
   seedDoc(db, "doc_b");
-  const first = resolvePerson(db, ports, "Mahesh Shantaram", { email: "ms@example.com" }, "doc_a");
-  const second = resolvePerson(db, ports, "ms@example.com", undefined, "doc_b");
+  const first = resolvePerson(db, ports, "Arun Kamath", { email: "arun@example.com" }, "doc_a");
+  const second = resolvePerson(db, ports, "arun@example.com", undefined, "doc_b");
   assert.equal(second.id, first.id);
   assert.equal(second.matched_via, "identifier");
   assert.equal(second.asked, false);
@@ -113,16 +113,16 @@ await check("co-occurrence writes a PROPOSED alias that never resolves silently 
   const ports = testPorts("/tmp/q2v-people-3");
   seedDoc(db, "doc_a");
   seedDoc(db, "doc_b");
-  const first = resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_a");
+  const first = resolvePerson(db, ports, "Arun Kamath", undefined, "doc_a");
   // A second document pairs the known name with an unseen email.
-  resolvePerson(db, ports, "Mahesh Shantaram", { email: "techrose@example.com" }, "doc_b");
-  const proposed = aliasRows(db, first.id).find((a) => a.alias === "techrose@example.com");
+  resolvePerson(db, ports, "Arun Kamath", { email: "workmail@example.com" }, "doc_b");
+  const proposed = aliasRows(db, first.id).find((a) => a.alias === "workmail@example.com");
   assert.ok(proposed, "the proposed alias is recorded");
   assert.equal(proposed!.status, "proposed");
   assert.equal(proposed!.alias_type, "email");
   // Proposed aliases do not resolve: a doc naming only the email still asks.
   seedDoc(db, "doc_c");
-  const third = resolvePerson(db, ports, "techrose@example.com", undefined, "doc_c");
+  const third = resolvePerson(db, ports, "workmail@example.com", undefined, "doc_c");
   assert.equal(third.id, UNIDENTIFIED_PERSON_ID, "proposed alias must not silently link");
 });
 
@@ -131,8 +131,8 @@ await check("a confirmed co-occurrence answer promotes the alias and resolves si
   const ports = testPorts("/tmp/q2v-people-4");
   seedDoc(db, "doc_a");
   seedDoc(db, "doc_b");
-  const first = resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_a");
-  resolvePerson(db, ports, "Mahesh Shantaram", { email: "techrose@example.com" }, "doc_b");
+  const first = resolvePerson(db, ports, "Arun Kamath", undefined, "doc_a");
+  resolvePerson(db, ports, "Arun Kamath", { email: "workmail@example.com" }, "doc_b");
 
   // Simulate the Learning confirmation: the daemon-side rule the client sends.
   const q = db
@@ -140,21 +140,21 @@ await check("a confirmed co-occurrence answer promotes the alias and resolves si
     .get() as { id: number };
   answer(db, ports, q.id, "Yes, save it", {
     kind: "entity_alias",
-    match_key: "techrose@example.com",
+    match_key: "workmail@example.com",
     match_kind: "person_identifier",
     value: first.id,
   });
 
   seedDoc(db, "doc_c");
-  const third = resolvePerson(db, ports, "Mahesh Shantaram", { email: "techrose@example.com" }, "doc_c");
+  const third = resolvePerson(db, ports, "Arun Kamath", { email: "workmail@example.com" }, "doc_c");
   assert.equal(third.id, first.id);
   assert.equal(third.asked, false, "no re-ask after confirmation");
-  const alias = aliasRows(db, first.id).find((a) => a.alias === "techrose@example.com");
+  const alias = aliasRows(db, first.id).find((a) => a.alias === "workmail@example.com");
   assert.equal(alias?.status, "confirmed", "promoted by the confirmed application");
 
   // And the email ALONE now resolves silently (step 1).
   seedDoc(db, "doc_d");
-  const fourth = resolvePerson(db, ports, "techrose@example.com", undefined, "doc_d");
+  const fourth = resolvePerson(db, ports, "workmail@example.com", undefined, "doc_d");
   assert.equal(fourth.id, first.id);
   assert.equal(fourth.asked, false);
 });
@@ -163,32 +163,32 @@ await check("a rejected alias is never resurrected by re-observation", () => {
   const db = openDatabase(":memory:");
   const ports = testPorts("/tmp/q2v-people-5");
   seedDoc(db, "doc_a");
-  const id = resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_a").id;
+  const id = resolvePerson(db, ports, "Arun Kamath", undefined, "doc_a").id;
   db.prepare("UPDATE entity_aliases SET status='rejected' WHERE entity_id=? AND alias=?").run(
     id,
-    "Mahesh Shantaram",
+    "Arun Kamath",
   );
   seedDoc(db, "doc_b");
   // The display-name match (entities row) still links, but the alias row
   // itself must stay rejected...
-  resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_b");
-  const alias = aliasRows(db, id).find((a) => a.alias === "Mahesh Shantaram");
+  resolvePerson(db, ports, "Arun Kamath", undefined, "doc_b");
+  const alias = aliasRows(db, id).find((a) => a.alias === "Arun Kamath");
   assert.equal(alias?.status, "rejected");
 });
 
-await check("Vidya Rao and Vidya Srinivasa Rao stay separate without strong evidence", () => {
+await check("Nisha Patel and Nisha Deepak Patel stay separate without strong evidence", () => {
   const db = openDatabase(":memory:");
   const ports = testPorts("/tmp/q2v-people-6");
   seedDoc(db, "doc_a");
   seedDoc(db, "doc_b");
-  const a = resolvePerson(db, ports, "Vidya Rao", undefined, "doc_a");
-  const b = resolvePerson(db, ports, "Vidya Srinivasa Rao", undefined, "doc_b");
+  const a = resolvePerson(db, ports, "Nisha Patel", undefined, "doc_a");
+  const b = resolvePerson(db, ports, "Nisha Deepak Patel", undefined, "doc_b");
   assert.notEqual(a.id, b.id, "name similarity alone must not merge");
   assert.equal(b.matched_via, "fuzzy_question");
   assert.ok(b.asked, "the fuzzy band asks");
   // Asking created no alias on either person and no learned rule.
   assert.equal(
-    aliasRows(db, a.id).filter((x) => x.alias === "Vidya Srinivasa Rao").length,
+    aliasRows(db, a.id).filter((x) => x.alias === "Nisha Deepak Patel").length,
     0,
   );
   const rules = db.prepare("SELECT COUNT(*) n FROM learned_rules").get() as { n: number };
@@ -197,7 +197,7 @@ await check("Vidya Rao and Vidya Srinivasa Rao stay separate without strong evid
 
 console.log("\n── §Track C: a Review correction relinks the document and teaches identity");
 
-await check("correcting M. Shantaram to Mahesh Shantaram relinks this doc and resolves future docs silently", () => {
+await check("correcting A. Kamath to Arun Kamath relinks this doc and resolves future docs silently", () => {
   const db = openDatabase(":memory:");
   const ports = testPorts("/tmp/q2v-people-7");
   seedDoc(db, "doc_a");
@@ -206,27 +206,27 @@ await check("correcting M. Shantaram to Mahesh Shantaram relinks this doc and re
 
   // The owner exists; a new document carries an initials-only variant, which
   // is NOT a token-sort match — the fuzzy path creates a stray candidate.
-  // (SHANTARAM MAHESH would be a token-sort hit and never reach Review.)
-  const owner = resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_a").id;
-  const stray = resolvePerson(db, ports, "M. Shantaram", undefined, "doc_b");
+  // (KAMATH ARUN would be a token-sort hit and never reach Review.)
+  const owner = resolvePerson(db, ports, "Arun Kamath", undefined, "doc_a").id;
+  const stray = resolvePerson(db, ports, "A. Kamath", undefined, "doc_b");
   assert.notEqual(stray.id, owner);
   db.prepare(
     "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES ('doc_b', ?, 'owner')",
   ).run(stray.id);
 
   // The correction from Review: previous value is the model's reading.
-  const r = applyPersonCorrection(db, ports, "doc_b", "Mahesh Shantaram", "M. Shantaram");
+  const r = applyPersonCorrection(db, ports, "doc_b", "Arun Kamath", "A. Kamath");
   assert.equal(r.person_id, owner);
   assert.equal(r.relinked, 1, "this document's party row moved");
 
   // The old spelling is now a confirmed name_variant on the canonical person.
-  const alias = aliasRows(db, owner).find((a) => a.alias === "M. Shantaram");
+  const alias = aliasRows(db, owner).find((a) => a.alias === "A. Kamath");
   assert.ok(alias, "old spelling kept as alias");
   assert.equal(alias!.status, "confirmed");
   assert.equal(alias!.alias_type, "name_variant");
 
   // A FUTURE document with the same printed name resolves silently.
-  const future = resolvePerson(db, ports, "M. Shantaram", undefined, "doc_c");
+  const future = resolvePerson(db, ports, "A. Kamath", undefined, "doc_c");
   assert.equal(future.id, owner);
   assert.equal(future.asked, false);
 });
@@ -237,11 +237,11 @@ await check("applyPersonCorrection never touches the document's extraction", () 
   db.prepare(
     `INSERT INTO documents (id, sha256, original_filename, raw_path, doc_type, received_at, extraction_json)
      VALUES ('doc_x','sha_x','x.pdf','/tmp/x.pdf','merchant_invoice',?,?)`,
-  ).run("2026-08-09T00:00:00.000Z", JSON.stringify({ parties: [{ name: "SHANTARAM MAHESH", kind: "person", role: "owner" }] }));
+  ).run("2026-08-09T00:00:00.000Z", JSON.stringify({ parties: [{ name: "KAMATH ARUN", kind: "person", role: "owner" }] }));
   const before = db.prepare("SELECT extraction_json FROM documents WHERE id='doc_x'").get() as {
     extraction_json: string;
   };
-  applyPersonCorrection(db, ports, "doc_x", "Mahesh Shantaram", "SHANTARAM MAHESH");
+  applyPersonCorrection(db, ports, "doc_x", "Arun Kamath", "KAMATH ARUN");
   const after = db.prepare("SELECT extraction_json FROM documents WHERE id='doc_x'").get() as {
     extraction_json: string;
   };
@@ -258,11 +258,11 @@ seedDoc(db, "doc_1");
 seedDoc(db, "doc_2");
 db.prepare(
   `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
-   VALUES ('ent_m','person','Mahesh Shantaram','confirmed',1.0,1,?)`,
+   VALUES ('ent_m','person','Arun Kamath','confirmed',1.0,1,?)`,
 ).run(now);
 db.prepare(
   `INSERT INTO entities (id, kind, display_name, status, confidence, created_at)
-   VALUES ('ent_v','person','Vidya Rao','candidate',0.8,?)`,
+   VALUES ('ent_v','person','Nisha Patel','candidate',0.8,?)`,
 ).run(now);
 db.prepare(
   `INSERT INTO entities (id, kind, display_name, status, confidence, created_at)
@@ -270,11 +270,11 @@ db.prepare(
 ).run(now);
 db.prepare(
   `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at)
-   VALUES ('ent_m','person','ms@example.com','ms@example.com','email','auto-identifier','confirmed',?)`,
+   VALUES ('ent_m','person','arun@example.com','arun@example.com','email','auto-identifier','confirmed',?)`,
 ).run(now);
 db.prepare(
   `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at)
-   VALUES ('ent_m','person','Mahesh Shantaram','mahesh shantaram','name_variant','auto','confirmed',?)`,
+   VALUES ('ent_m','person','Arun Kamath','arun kamath','name_variant','auto','confirmed',?)`,
 ).run(now);
 db.prepare(
   `INSERT INTO document_parties (document_id, entity_id, role) VALUES ('doc_1','ent_m','owner'), ('doc_2','ent_m','owner')`,
@@ -319,13 +319,13 @@ const detail = await call("GET", "/v1/people/ent_m");
 await check("person detail returns typed aliases, documents and transactions", () => {
   assert.equal(detail.status, 200);
   const email = detail.json?.aliases?.find((a: { alias_type: string }) => a.alias_type === "email");
-  assert.equal(email?.alias, "ms@example.com");
+  assert.equal(email?.alias, "arun@example.com");
   assert.equal(detail.json?.documents?.length, 2);
   assert.equal(detail.json?.transactions?.length, 1);
   assert.equal(detail.json?.transactions?.[0]?.currency, "USD");
 });
 
-const addAlias = await call("POST", "/v1/people/ent_m/aliases", { alias: "9980129770" });
+const addAlias = await call("POST", "/v1/people/ent_m/aliases", { alias: "5550100200" });
 await check("adding an alias classifies the type from the string", () => {
   assert.equal(addAlias.status, 200);
   assert.equal(addAlias.json?.alias_type, "phone");
@@ -344,7 +344,7 @@ await check("an email requested as a name variant is retyped to email, never sto
   assert.equal(stored?.alias_type, "email");
 });
 
-const conflict = await call("POST", "/v1/people/ent_v/aliases", { alias: "ms@example.com" });
+const conflict = await call("POST", "/v1/people/ent_v/aliases", { alias: "arun@example.com" });
 await check("adding an identifier already bound to another person is a 409 conflict, never a merge", () => {
   assert.equal(conflict.status, 409);
   assert.equal(conflict.json?.error, "alias_in_use");
@@ -358,7 +358,7 @@ await check("a generic mailbox cannot become a person alias", () => {
 
 await check("rejecting an alias keeps the row with status=rejected and audits it", async () => {
   const row = db
-    .prepare("SELECT id FROM entity_aliases WHERE entity_id='ent_m' AND alias='9980129770'")
+    .prepare("SELECT id FROM entity_aliases WHERE entity_id='ent_m' AND alias='5550100200'")
     .get() as { id: number };
   const r = await call("DELETE", `/v1/people/ent_m/aliases/${row.id}`);
   assert.equal(r.status, 200);
@@ -372,7 +372,7 @@ await check("rejecting an alias keeps the row with status=rejected and audits it
 
 await check("the display name itself is not rejectable (that is a rename)", async () => {
   const row = db
-    .prepare("SELECT id FROM entity_aliases WHERE entity_id='ent_m' AND alias='Mahesh Shantaram'")
+    .prepare("SELECT id FROM entity_aliases WHERE entity_id='ent_m' AND alias='Arun Kamath'")
     .get() as { id: number };
   const r = await call("DELETE", `/v1/people/ent_m/aliases/${row.id}`);
   assert.equal(r.status, 409);
@@ -394,11 +394,11 @@ await check("making one person owner demotes the previous owner — exactly one 
 });
 
 await check("renaming preserves the old name as a confirmed name_variant alias", async () => {
-  const r = await call("PATCH", "/v1/people/ent_v", { display_name: "Vidya Srinivasa Rao" });
+  const r = await call("PATCH", "/v1/people/ent_v", { display_name: "Nisha Deepak Patel" });
   assert.equal(r.status, 200);
   const alias = db
     .prepare(
-      "SELECT alias_type, status, source FROM entity_aliases WHERE entity_id='ent_v' AND alias='Vidya Rao'",
+      "SELECT alias_type, status, source FROM entity_aliases WHERE entity_id='ent_v' AND alias='Nisha Patel'",
     )
     .get() as { alias_type: string; status: string; source: string } | undefined;
   assert.ok(alias, "old name retained");
@@ -414,19 +414,19 @@ await check("cross-kind merge is refused", async () => {
 await check("merging two people keeps every alias and the audit survives re-analysis", async () => {
   db.prepare(
     `INSERT INTO entities (id, kind, display_name, status, confidence, created_at)
-     VALUES ('ent_dup','person','M Shantaram','candidate',0.8,?)`,
+     VALUES ('ent_dup','person','A Kamath','candidate',0.8,?)`,
   ).run(now);
   db.prepare(
     `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at)
-     VALUES ('ent_dup','person','M Shantaram','m shantaram','name_variant','auto','confirmed',?)`,
+     VALUES ('ent_dup','person','A Kamath','a kamath','name_variant','auto','confirmed',?)`,
   ).run(now);
   const r = await call("POST", "/v1/people/merge", { from_id: "ent_dup", into_id: "ent_m" });
   assert.equal(r.status, 200);
   const aliases = db
     .prepare("SELECT alias FROM entity_aliases WHERE entity_id='ent_m'")
     .all() as { alias: string }[];
-  assert.ok(aliases.some((a) => a.alias === "M Shantaram"), "absorbed name is an alias");
-  assert.ok(aliases.some((a) => a.alias === "ms@example.com"), "identifier aliases survive");
+  assert.ok(aliases.some((a) => a.alias === "A Kamath"), "absorbed name is an alias");
+  assert.ok(aliases.some((a) => a.alias === "arun@example.com"), "identifier aliases survive");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

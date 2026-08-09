@@ -330,8 +330,8 @@ export function migrateGlaze(
   }
 
   // ── person aliases → kind-scoped entity aliases ───────────────────────────
-  // The highest-value import: "SHANTARAM MAHESH", "Mahesh Shantaram" and
-  // "ms@thecontrarian.in" are the SAME human, and the daemon relearning that
+  // The highest-value import: "KAMATH ARUN", "Arun Kamath" and
+  // "arun@example.com" are the SAME human, and the daemon relearning that
   // from scratch requires the same documents to arrive in the same order.
   const aliases = g
     .prepare(

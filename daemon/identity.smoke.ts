@@ -61,7 +61,7 @@ function personCount(db: DatabaseSync): number {
 console.log("── identifier classification");
 
 check("email is classified as email", () => {
-  assert.equal(classifyIdentifier("techrose@gmail.com"), "email");
+  assert.equal(classifyIdentifier("workmail@example.com"), "email");
 });
 check("Indian mobile with country code is classified as phone", () => {
   assert.equal(classifyIdentifier("+919876543210"), "phone");
@@ -70,7 +70,7 @@ check("bare 10-digit mobile is classified as phone", () => {
   assert.equal(classifyIdentifier("9876543210"), "phone");
 });
 check("a UPI-style handle (no dot in the domain part) is 'handle', not email", () => {
-  assert.equal(classifyIdentifier("mahesh@okhdfcbank"), "handle");
+  assert.equal(classifyIdentifier("arun@okhdfcbank"), "handle");
 });
 check("an amount or reference number is not an identifier", () => {
   assert.equal(classifyIdentifier("64372"), null);
@@ -80,16 +80,16 @@ check("generic mailboxes are recognised across common prefixes", () => {
   assert.ok(isGenericMailbox("billing@swiggy.com"));
   assert.ok(isGenericMailbox("no-reply@hdfcbank.com"));
   assert.ok(isGenericMailbox("support@example.com"));
-  assert.ok(!isGenericMailbox("mahesh.shantaram@example.com"));
+  assert.ok(!isGenericMailbox("arun.kamath@example.com"));
 });
 
 console.log("\n── token overlap scoring");
 
 check("identical names score 1.0 (would already be caught by token-sort upstream)", () => {
-  assert.equal(tokenOverlapRatio("Mahesh Shantaram", "mahesh shantaram"), 1);
+  assert.equal(tokenOverlapRatio("Arun Kamath", "arun kamath"), 1);
 });
 check("a subset name scores in the fuzzy band", () => {
-  const s = tokenOverlapRatio("Mahesh", "Mahesh Shantaram");
+  const s = tokenOverlapRatio("Arun", "Arun Kamath");
   assert.ok(s >= 0.34 && s < 1, `expected fuzzy band, got ${s}`);
 });
 check("unrelated names score 0", () => {
@@ -104,11 +104,11 @@ check("exact name match resolves silently (no question)", () => {
   seedDoc(db, "doc_1");
   seedDoc(db, "doc_2");
 
-  const first = resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_1");
+  const first = resolvePerson(db, ports, "Arun Kamath", undefined, "doc_1");
   assert.equal(first.asked, false);
   assert.equal(personCount(db), 1);
 
-  const second = resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_2");
+  const second = resolvePerson(db, ports, "Arun Kamath", undefined, "doc_2");
   assert.equal(second.id, first.id, "identical name must resolve to the same entity");
   assert.equal(second.asked, false);
   assert.equal(personCount(db), 1, "no duplicate created");
@@ -120,8 +120,8 @@ check("surname-first order (token-sort) resolves silently", () => {
   seedDoc(db, "doc_1");
   seedDoc(db, "doc_2");
 
-  const first = resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_1");
-  const second = resolvePerson(db, ports, "SHANTARAM MAHESH", undefined, "doc_2");
+  const first = resolvePerson(db, ports, "Arun Kamath", undefined, "doc_1");
+  const second = resolvePerson(db, ports, "KAMATH ARUN", undefined, "doc_2");
 
   assert.equal(second.id, first.id, "word-order variant must resolve to the same person");
   assert.equal(second.matched_via, "token_sort");
@@ -135,12 +135,12 @@ check("an email identifier resolves silently once known (exact identifier match)
   seedDoc(db, "doc_1");
   seedDoc(db, "doc_2");
 
-  const first = resolvePerson(db, ports, "Mahesh Shantaram", { email: "ms@thecontrarian.in" }, "doc_1");
+  const first = resolvePerson(db, ports, "Arun Kamath", { email: "arun@example.com" }, "doc_1");
   assert.equal(personCount(db), 1);
 
   // A LATER document names only the email (a receipt CC line, say) — the
   // identifier alone must resolve it, no name needed.
-  const second = resolvePerson(db, ports, "Mahesh Shantaram", { email: "ms@thecontrarian.in" }, "doc_2");
+  const second = resolvePerson(db, ports, "Arun Kamath", { email: "arun@example.com" }, "doc_2");
   assert.equal(second.id, first.id);
   assert.equal(second.matched_via, "identifier");
   assert.equal(second.asked, false);
@@ -155,12 +155,12 @@ check("co-occurrence teaches an unfamiliar email via exactly one Learning confir
   seedDoc(db, "doc_4");
 
   // Known person, first appearance.
-  const known = resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_1");
+  const known = resolvePerson(db, ports, "Arun Kamath", undefined, "doc_1");
 
   // Document 2 pairs the SAME known name with a never-seen personal email.
-  // techrose@gmail.com shares zero tokens with "Mahesh Shantaram" — only
+  // workmail@example.com shares zero tokens with "Arun Kamath" — only
   // co-occurrence teaches this, never name matching.
-  const before = resolvePerson(db, ports, "Mahesh Shantaram", { email: "techrose@gmail.com" }, "doc_2");
+  const before = resolvePerson(db, ports, "Arun Kamath", { email: "workmail@example.com" }, "doc_2");
   assert.equal(before.id, known.id, "the NAME still resolves deterministically");
   assert.equal(before.asked, false, "the DOCUMENT resolves silently; the identifier question is separate");
 
@@ -170,7 +170,7 @@ check("co-occurrence teaches an unfamiliar email via exactly one Learning confir
   assert.equal(openQuestions.length, 1, "exactly one co-occurrence question, not one per document");
 
   const ctx = JSON.parse(openQuestions[0].context) as { identifier: string; identifier_match_key: string; entity_id: string };
-  assert.equal(ctx.identifier, "techrose@gmail.com");
+  assert.equal(ctx.identifier, "workmail@example.com");
   assert.equal(ctx.entity_id, known.id);
 
   // Confirm it — this is what the Flutter client does on "Yes, save it",
@@ -186,14 +186,14 @@ check("co-occurrence teaches an unfamiliar email via exactly one Learning confir
   // the co-occurrence path, having found the confirmed rule) and resolves
   // silently — but still via the deterministic NAME match, since the
   // identifier alias is written during this very call, not before it.
-  const third = resolvePerson(db, ports, "Mahesh Shantaram", { email: "techrose@gmail.com" }, "doc_3");
+  const third = resolvePerson(db, ports, "Arun Kamath", { email: "workmail@example.com" }, "doc_3");
   assert.equal(third.id, known.id);
   assert.equal(third.asked, false, "taught once, never asked again for this pair");
 
   // The REAL proof of "taught": a FOURTH document carrying ONLY the email —
   // no name at all — must now resolve on the identifier alone. This is only
   // possible because the previous call wrote the alias.
-  const fourth = resolvePerson(db, ports, "techrose@gmail.com", { email: "techrose@gmail.com" }, "doc_4");
+  const fourth = resolvePerson(db, ports, "workmail@example.com", { email: "workmail@example.com" }, "doc_4");
   assert.equal(fourth.id, known.id, "the taught identifier alone resolves to the right person");
   assert.equal(fourth.matched_via, "identifier");
   assert.equal(fourth.asked, false);
@@ -213,11 +213,11 @@ check("a genuinely new, unrelated-looking name variant asks once and is remember
   seedDoc(db, "doc_2");
   seedDoc(db, "doc_3");
 
-  resolvePerson(db, ports, "Mahesh Shantaram", undefined, "doc_1");
+  resolvePerson(db, ports, "Arun Kamath", undefined, "doc_1");
 
-  // "M Shantaram" shares one token ("shantaram") out of the two-token union —
+  // "A Kamath" shares one token ("kamath") out of the two-token union —
   // squarely in the fuzzy band, not an exact or token-sort match.
-  const first = resolvePerson(db, ports, "M Shantaram", undefined, "doc_2");
+  const first = resolvePerson(db, ports, "A Kamath", undefined, "doc_2");
   assert.equal(first.matched_via, "fuzzy_question");
   assert.equal(first.asked, true);
   assert.equal(personCount(db), 2, "a candidate is created immediately — a document needs somewhere to attach");
@@ -229,10 +229,10 @@ check("a genuinely new, unrelated-looking name variant asks once and is remember
 
   // Confirm: same person. The client sends the SAME matchKey the resolver
   // used (fuzzy_match_key in context), which identity.ts's normaliseName
-  // reproduces for "M Shantaram".
+  // reproduces for "A Kamath".
   const ctxRow = db.prepare("SELECT context FROM training_reviews WHERE id=?").get(q!.id) as { context: string };
   const ctx = JSON.parse(ctxRow.context) as { fuzzy_match_key: string; existing_entity_id: string };
-  answer(db, ports, q!.id, "Yes, same as Mahesh Shantaram", {
+  answer(db, ports, q!.id, "Yes, same as Arun Kamath", {
     kind: "entity_alias",
     match_key: ctx.fuzzy_match_key,
     match_kind: "person_fuzzy",
@@ -241,7 +241,7 @@ check("a genuinely new, unrelated-looking name variant asks once and is remember
 
   // A THIRD document with the identical spelling must now resolve silently —
   // no repeat question for the same taught pair.
-  const second = resolvePerson(db, ports, "M Shantaram", undefined, "doc_3");
+  const second = resolvePerson(db, ports, "A Kamath", undefined, "doc_3");
   assert.equal(second.asked, false, "answering once must make the identical pair silent forever");
   assert.equal(personCount(db), 2, "no new candidate created on the second occurrence");
 
@@ -309,7 +309,7 @@ check("an org billing mailbox is never person-linked, even when co-located with 
   const ports = testPorts();
   seedDoc(db, "doc_1");
 
-  resolvePerson(db, ports, "Mahesh Shantaram", { email: "billing@swiggy.com" }, "doc_1");
+  resolvePerson(db, ports, "Arun Kamath", { email: "billing@swiggy.com" }, "doc_1");
 
   const linked = db
     .prepare("SELECT COUNT(*) n FROM entity_aliases WHERE alias_type='email' AND normalised='billing@swiggy.com'")

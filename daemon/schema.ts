@@ -621,7 +621,7 @@ export function migrate(db: DatabaseSync): void {
   // entity_aliases gains status/confidence/last_seen_at, and the alias_type
   // backfill that v4 could not do: rows written before typed aliases existed
   // were all stamped 'name_variant', including obvious emails and phone
-  // numbers (a real vault had ms@… and a 10-digit mobile as name_variant).
+  // numbers (a real vault had an email and a 10-digit mobile as name_variant).
   // Re-classifying them here is what makes identifier matching reach the
   // history, not just new documents.
   //
