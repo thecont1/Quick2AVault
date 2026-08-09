@@ -49,7 +49,7 @@ class _PeopleViewState extends State<PeopleView> {
         _loading = false;
       });
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _message = 'Could not reach the daemon.'; });
+      if (mounted) setState(() { _loading = false; _message = VaultError.from(e).message; });
     }
   }
 
@@ -68,7 +68,7 @@ class _PeopleViewState extends State<PeopleView> {
       if (mounted) setState(() => _adding = false);
       await _load();
     } catch (e) {
-      if (mounted) setState(() => _message = 'Could not add: $e');
+      if (mounted) setState(() => _message = VaultError.from(e).message);
     }
   }
 
@@ -390,7 +390,7 @@ class _PersonDetailPanelState extends State<_PersonDetailPanel> {
       if (!mounted) return;
       setState(() { _detail = d; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = '$e'; });
+      if (mounted) setState(() { _loading = false; _error = VaultError.from(e).message; });
     }
   }
 
@@ -411,7 +411,7 @@ class _PersonDetailPanelState extends State<_PersonDetailPanel> {
     } on PersonConflict catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = VaultError.from(e).message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -428,7 +428,7 @@ class _PersonDetailPanelState extends State<_PersonDetailPanel> {
     } on PersonConflict catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = VaultError.from(e).message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -440,7 +440,7 @@ class _PersonDetailPanelState extends State<_PersonDetailPanel> {
       await widget.api.rejectPersonAlias(widget.person.id, alias.id);
       _load();
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = VaultError.from(e).message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -501,10 +501,10 @@ class _PersonDetailPanelState extends State<_PersonDetailPanel> {
         if (!mounted) return;
         widget.onChanged();
       } catch (err) {
-        if (mounted) setState(() => _error = '$err');
+        if (mounted) setState(() => _error = VaultError.from(err).message);
       }
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = VaultError.from(e).message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -536,7 +536,7 @@ class _PersonDetailPanelState extends State<_PersonDetailPanel> {
       widget.onChanged();
       _load();
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = VaultError.from(e).message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -669,7 +669,7 @@ class _PersonDetailPanelState extends State<_PersonDetailPanel> {
                   widget.onChanged();
                   _load();
                 } catch (e) {
-                  if (mounted) setState(() => _error = '$e');
+                  if (mounted) setState(() => _error = VaultError.from(e).message);
                 } finally {
                   if (mounted) setState(() => _busy = false);
                 }

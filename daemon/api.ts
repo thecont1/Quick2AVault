@@ -60,6 +60,12 @@ export interface ApiOptions {
   token: string;
   version: string;
   /**
+   * Work order 07 §C1: a build identifier (git SHA or build ID) surfaced on
+   * /v1/health so the client can distinguish a stale daemon from an empty
+   * vault. Defaults to the version string when not separately provided.
+   */
+  buildId?: string;
+  /**
    * Surfaced on the Setup page, and reconfigured in place when the user saves
    * or clears an API key — the provider is mutable so a Settings change takes
    * effect on the next job instead of requiring a daemon restart.
@@ -80,6 +86,21 @@ export interface ApiOptions {
   /** Embedding provider for hybrid search (work order 04 §Track B). */
   embed?: EmbeddingProvider;
 }
+
+/**
+ * Work order 07 §C1: capability flags advertised on /v1/health. The client
+ * uses these to distinguish compatible, outdated, and capability-unavailable
+ * states. A stale daemon must not masquerade as an empty vault.
+ */
+export const DAEMON_CAPABILITIES = {
+  irrelevant: true,        // WO06: deterministic intake triage
+  people_aliases: true,    // WO05: typed aliases + identity resolution
+  semantic_search: true,   // WO04: hybrid lexical + embedding search
+  statement_lines: true,   // WO04: statement staging + reconciliation
+  provider_test: true,     // WO07: /v1/settings/provider-test endpoint
+  popover_mode: true,      // WO07: health flag for popover-aware clients
+  idempotent_ledger: true, // WO07: evidence-key uniqueness prevents duplicates
+} as const;
 
 export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   const startedAt = Date.now();
@@ -231,8 +252,15 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }[];
         return send(res, 200, {
           status: "ok",
+          // Work order 07 §C1: the health contract. The client uses these to
+          // distinguish compatible, outdated, unreachable, and
+          // capability-unavailable states. A stale daemon must not masquerade
+          // as an empty vault.
+          api_version: "1",
           version: opts.version,
+          build_id: opts.buildId ?? opts.version,
           schema_version: SCHEMA_VERSION,
+          capabilities: DAEMON_CAPABILITIES,
           uptime_s: Math.round((Date.now() - startedAt) / 1000),
           db: ports.paths.dbPath(),
           documents: (db.prepare("SELECT COUNT(*) n FROM documents").get() as { n: number }).n,

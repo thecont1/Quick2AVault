@@ -412,6 +412,72 @@ class VaultEvent {
   VaultEvent(this.type, this.data) : at = DateTime.now();
 }
 
+/// Work order 07 §C1 — daemon health and capability handshake.
+///
+/// The client uses this to distinguish:
+/// - **compatible**: daemon is reachable and its capabilities match what the
+///   client needs.
+/// - **outdated**: daemon is reachable but its schema_version or capabilities
+///   are behind what the client expects. A stale daemon must not masquerade as
+///   an empty vault.
+/// - **unreachable**: daemon is not responding at all.
+/// - **capability-unavailable**: daemon is reachable but a specific capability
+///   the client needs (e.g. `irrelevant`) is false or missing.
+class HealthStatus {
+  final bool isReachable;
+  final String? apiVersion;
+  final String? version;
+  final String? buildId;
+  final int? schemaVersion;
+  final Map<String, dynamic> capabilities;
+  final int? statusCode;
+  final String? error;
+
+  const HealthStatus({
+    required this.isReachable,
+    this.apiVersion,
+    this.version,
+    this.buildId,
+    this.schemaVersion,
+    this.capabilities = const {},
+    this.statusCode,
+    this.error,
+  });
+
+  factory HealthStatus.fromJson(Map<String, dynamic> j) {
+    final caps = j['capabilities'];
+    return HealthStatus(
+      isReachable: true,
+      apiVersion: j['api_version'] as String?,
+      version: j['version'] as String?,
+      buildId: j['build_id'] as String?,
+      schemaVersion: (j['schema_version'] as num?)?.toInt(),
+      capabilities: caps is Map<String, dynamic>
+          ? caps
+          : caps is Map
+              ? Map<String, dynamic>.from(caps)
+              : const {},
+    );
+  }
+
+  factory HealthStatus.unreachable({int? statusCode, String? error}) =>
+      HealthStatus(isReachable: false, statusCode: statusCode, error: error);
+
+  /// Whether a specific capability is advertised as available.
+  bool hasCapability(String name) =>
+      capabilities[name] == true;
+
+  /// Whether the daemon's schema version is at least [required].
+  bool isSchemaCompatible(int required) =>
+      schemaVersion != null && schemaVersion! >= required;
+
+  @override
+  String toString() =>
+      isReachable
+          ? 'HealthStatus(ok, v=$version, schema=$schemaVersion, caps=${capabilities.keys.join(",")})'
+          : 'HealthStatus(unreachable, status=$statusCode, error=$error)';
+}
+
 /// Work order 06 — one intake event with full disposition detail.
 ///
 /// The daemon's intake_events row, surfaced to the Flutter intake feed and the
@@ -494,6 +560,107 @@ class VaultAuthException implements Exception {
   const VaultAuthException(this.statusCode, this.path);
   @override
   String toString() => 'GET $path -> $statusCode (bad or missing API token)';
+}
+
+/// Work order 07 §C3 — structured user-facing error. Never show raw exception
+/// strings. Map errors to a title, explanation, recovery action, and optional
+/// technical disclosure.
+///
+/// Usage:
+///   catch (e) { setState(() => _error = VaultError.from(e).message); }
+///   catch (e) { _error = VaultError.from(e); }
+///
+/// The [technical] field is the raw exception string, available behind a
+/// disclosure so a developer or support engineer can see what actually
+/// happened without the user having to read it.
+class VaultError {
+  final String title;
+  final String explanation;
+  final String recovery;
+  final String? technical;
+
+  const VaultError({
+    required this.title,
+    required this.explanation,
+    required this.recovery,
+    this.technical,
+  });
+
+  /// A one-line message suitable for a snackbar or inline error.
+  String get message => '$title — $recovery';
+
+  @override
+  String toString() => message;
+
+  /// Map any caught exception to a user-facing error. Raw exception strings
+  /// are never shown directly — they go into [technical].
+  factory VaultError.from(Object e) {
+    if (e is VaultAuthException) {
+      return VaultError(
+        title: 'Authentication failed',
+        explanation: 'The daemon refused the API token (HTTP ${e.statusCode}).',
+        recovery: 'Check the token in Settings and restart the daemon.',
+        technical: e.toString(),
+      );
+    }
+    if (e is PersonConflict) {
+      return VaultError(
+        title: 'Name already in use',
+        explanation: e.message,
+        recovery: 'Merge the two people instead of renaming.',
+        technical: e.toString(),
+      );
+    }
+    if (e is PersonInUse) {
+      return VaultError(
+        title: 'Person is named on documents',
+        explanation: '${e.documents} document(s) reference this person.',
+        recovery: 'Confirm force-delete or remove the references first.',
+        technical: e.toString(),
+      );
+    }
+    if (e is NotAStatement) {
+      return VaultError(
+        title: 'Not a statement',
+        explanation: 'This document is not a bank or card statement.',
+        recovery: 'Select a statement document to view its lines.',
+        technical: e.toString(),
+      );
+    }
+    if (e is ClaimRefusedException) {
+      return VaultError(
+        title: 'Claim refused',
+        explanation: e.message,
+        recovery: 'Adjust the claim and try again.',
+        technical: e.toString(),
+      );
+    }
+    // Generic fallback — never show the raw string as the primary message.
+    final raw = e.toString();
+    // Detect common network errors from the raw string.
+    if (raw.contains('SocketException') || raw.contains('connection refused')) {
+      return VaultError(
+        title: 'Daemon unreachable',
+        explanation: 'The daemon is not running or refused the connection.',
+        recovery: 'Start the daemon or check it is listening.',
+        technical: raw,
+      );
+    }
+    if (raw.contains('TimeoutException') || raw.contains('timed out')) {
+      return VaultError(
+        title: 'Request timed out',
+        explanation: 'The daemon did not respond in time.',
+        recovery: 'Try again; if it persists, check daemon load.',
+        technical: raw,
+      );
+    }
+    return VaultError(
+      title: 'Something went wrong',
+      explanation: 'An unexpected error occurred.',
+      recovery: 'Try again; if it persists, restart the daemon.',
+      technical: raw,
+    );
+  }
 }
 
 /// One open question from the curiosity engine, plus everything needed to
@@ -1328,15 +1495,29 @@ class VaultApi {
     return parse(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
-  Future<bool> health() async {
+  /// Work order 07 §C1: structured health status. Replaces the bare bool
+  /// `health()` so the client can distinguish compatible, outdated,
+  /// unreachable, and capability-unavailable states. A stale daemon must not
+  /// masquerade as an empty vault.
+  Future<HealthStatus> healthStatus() async {
     try {
       final res = await _client
           .get(Uri.parse('$baseUrl/v1/health'))
           .timeout(const Duration(seconds: 3));
-      return res.statusCode == 200;
-    } catch (_) {
-      return false;
+      if (res.statusCode != 200) {
+        return HealthStatus.unreachable(statusCode: res.statusCode);
+      }
+      final j = Map<String, dynamic>.from(jsonDecode(res.body) as Map);
+      return HealthStatus.fromJson(j);
+    } catch (e) {
+      return HealthStatus.unreachable(error: e.toString());
     }
+  }
+
+  /// Backward-compatible bool health check. Prefer [healthStatus] for new code.
+  Future<bool> health() async {
+    final s = await healthStatus();
+    return s.isReachable;
   }
 
   /// Totals for a period. `period` is a quick key (this_month, last_month,

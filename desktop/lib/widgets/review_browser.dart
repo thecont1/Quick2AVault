@@ -94,13 +94,13 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'Cannot read documents — ${e.statusCode} from the daemon.';
+        _error = VaultError.from(e).message;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _error = 'Could not load documents: $e';
+        _error = VaultError.from(e).message;
       });
     }
   }

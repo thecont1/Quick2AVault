@@ -38,7 +38,7 @@ class _IrrelevantViewState extends State<IrrelevantView> {
       final items = await widget.api.irrelevantItems();
       if (mounted) setState(() => _items = items);
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = VaultError.from(e).message);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -56,7 +56,7 @@ class _IrrelevantViewState extends State<IrrelevantView> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Restore failed: $e'),
+        content: Text(VaultError.from(e).message),
       ));
     }
   }

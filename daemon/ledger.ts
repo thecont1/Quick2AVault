@@ -348,33 +348,77 @@ export function recordTransaction(
   }
 
   // ── transaction ───────────────────────────────────────────────────────────
-  const id = newId("txn");
+  // Work order 07 §A1: idempotent ledger writes. Before creating a new
+  // transaction, check whether this document already produced one with the
+  // same evidence_role. A retry, restart, or manual reprocess must upsert the
+  // existing transaction, not insert a second economic event.
+  const role = evidenceRole(x);
+  const existing = db
+    .prepare("SELECT transaction_id FROM transaction_documents WHERE document_id=? AND evidence_role=?")
+    .get(documentId, role) as { transaction_id?: string } | undefined;
+  const id = existing?.transaction_id ?? newId("txn");
   const now = ports.clock.isoNow();
-  db.prepare(
-    `INSERT INTO transactions
-      (id, occurred_at, posted_at, fy_key, amount_minor, currency, direction,
-       counterparty_entity_id, payment_rail, impact_bucket, purpose_text,
-       status, confidence, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-  ).run(
-    id,
-    occurred,
-    x.posted_at ?? null,
-    fyKey(occurred),
-    x.amount_minor,
-    // NULL when the document states no currency — a review state, not a
-    // silent INR assumption (work order 05 §A.2).
-    x.currency?.trim() ? x.currency.trim().toUpperCase() : null,
-    direction,
-    // CHECK constraint enforces this too, but be explicit: transfers have no counterparty.
-    isTransfer ? null : counterpartyId,
-    x.payment_rail ?? null,
-    isTransfer ? "transfer" : (x.category_hint ?? null),
-    x.purpose_text ?? null,
-    "evidenced",
-    x.confidence,
-    now,
-  );
+  const isReanalysis = !!existing;
+
+  if (isReanalysis) {
+    // UPDATE the existing transaction in place. User-confirmed claims are NOT
+    // touched — the resolver keeps them (§A3: user corrections survive
+    // re-analysis). Only the transaction row itself is refreshed.
+    db.prepare(
+      `UPDATE transactions
+          SET occurred_at=?, posted_at=?, fy_key=?, amount_minor=?, currency=?,
+              direction=?, counterparty_entity_id=?, payment_rail=?,
+              impact_bucket=?, purpose_text=?, confidence=?
+        WHERE id=?`,
+    ).run(
+      occurred,
+      x.posted_at ?? null,
+      fyKey(occurred),
+      x.amount_minor,
+      x.currency?.trim() ? x.currency.trim().toUpperCase() : null,
+      direction,
+      isTransfer ? null : counterpartyId,
+      x.payment_rail ?? null,
+      isTransfer ? "transfer" : (x.category_hint ?? null),
+      x.purpose_text ?? null,
+      x.confidence,
+      id,
+    );
+    // Clear old legs and holdings — they will be re-created from the new
+    // extraction. Cascading delete handles dependent rows.
+    db.prepare("DELETE FROM transaction_legs WHERE transaction_id=?").run(id);
+    db.prepare("DELETE FROM holdings WHERE transaction_id=?").run(id);
+    ports.logger.info("re-analysis: upserted existing transaction", {
+      transaction_id: id,
+      document_id: documentId,
+    });
+  } else {
+    db.prepare(
+      `INSERT INTO transactions
+        (id, occurred_at, posted_at, fy_key, amount_minor, currency, direction,
+         counterparty_entity_id, payment_rail, impact_bucket, purpose_text,
+         status, confidence, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      id,
+      occurred,
+      x.posted_at ?? null,
+      fyKey(occurred),
+      x.amount_minor,
+      // NULL when the document states no currency — a review state, not a
+      // silent INR assumption (work order 05 §A.2).
+      x.currency?.trim() ? x.currency.trim().toUpperCase() : null,
+      direction,
+      // CHECK constraint enforces this too, but be explicit: transfers have no counterparty.
+      isTransfer ? null : counterpartyId,
+      x.payment_rail ?? null,
+      isTransfer ? "transfer" : (x.category_hint ?? null),
+      x.purpose_text ?? null,
+      "evidenced",
+      x.confidence,
+      now,
+    );
+  }
 
   // ── legs ──────────────────────────────────────────────────────────────────
   const addLeg = (accountId: string, leg: "debit" | "credit") =>
@@ -453,6 +497,10 @@ export function recordTransaction(
   }
 
   // ── evidence ──────────────────────────────────────────────────────────────
+  // INSERT OR IGNORE: on a first analysis this creates the link; on a
+  // re-analysis the link already exists (same transaction_id) and this is a
+  // no-op. The unique index on (document_id, evidence_role) is the backstop
+  // that prevents a second transaction from ever being created.
   db.prepare(
     `INSERT OR IGNORE INTO transaction_documents
       (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
@@ -462,16 +510,25 @@ export function recordTransaction(
   // ── provenance ────────────────────────────────────────────────────────────
   // AI claims enter as 'proposed'. They are the model's opinion until a human
   // confirms them, and the resolver treats them accordingly.
-  const claim = db.prepare(
-    "INSERT INTO field_claims (subject_type, subject_id, field, value, source, confidence, status, created_at) VALUES ('transaction',?,?,?,'ai',?,'proposed',?)",
-  );
-  claim.run(id, "amount_minor", String(x.amount_minor), x.confidence, now);
-  claim.run(id, "occurred_at", occurred, x.confidence, now);
-  claim.run(id, "direction", direction, x.confidence, now);
-  // The source currency is a claim like any other reading: provenance for
-  // why the transaction is USD, overridable by a user correction.
+  //
+  // Work order 07 §A3: on re-analysis, do NOT insert new AI claims. The
+  // existing claims are either 'proposed' (the resolver will pick up the new
+  // extraction values from the transaction row itself) or 'confirmed' (a user
+  // correction that must survive re-analysis). Inserting fresh 'proposed'
+  // claims would create duplicates and risk a 'confirmed' claim being
+  // overshadowed by a stale 'proposed' one.
   const storedCurrency = x.currency?.trim() ? x.currency.trim().toUpperCase() : null;
-  if (storedCurrency) claim.run(id, "currency", storedCurrency, x.confidence, now);
+  if (!isReanalysis) {
+    const claim = db.prepare(
+      "INSERT INTO field_claims (subject_type, subject_id, field, value, source, confidence, status, created_at) VALUES ('transaction',?,?,?,'ai',?,'proposed',?)",
+    );
+    claim.run(id, "amount_minor", String(x.amount_minor), x.confidence, now);
+    claim.run(id, "occurred_at", occurred, x.confidence, now);
+    claim.run(id, "direction", direction, x.confidence, now);
+    // The source currency is a claim like any other reading: provenance for
+    // why the transaction is USD, overridable by a user correction.
+    if (storedCurrency) claim.run(id, "currency", storedCurrency, x.confidence, now);
+  }
 
   ports.bus.publish({
     type: "TransactionRecorded",

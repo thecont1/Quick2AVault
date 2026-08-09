@@ -22,7 +22,7 @@ export type ClaimSubject = "document" | "transaction" | "entity";
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -202,6 +202,14 @@ CREATE TABLE IF NOT EXISTS transaction_documents (
   PRIMARY KEY (transaction_id, document_id)
 );
 CREATE INDEX IF NOT EXISTS idx_txndocs_doc ON transaction_documents(document_id);
+-- Work order 07 §A2: evidence identity at the correct granularity. A document
+-- may only be the evidence of ONE transaction for a given evidence_role — this
+-- prevents a retry, restart, or manual reprocess from creating a second
+-- economic event for the same document. Statement lines have their own
+-- idempotency via statement_lines; this covers single-event documents and
+-- contract notes.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_txndoc_evidence_key
+  ON transaction_documents(document_id, evidence_role);
 
 -- ── Statement imports (work order 04 §Track A) ─────────────────────────────
 -- One statement document -> N staged lines -> promoted to transactions once
@@ -811,6 +819,47 @@ export function migrate(db: DatabaseSync): void {
         throw e;
       }
     }
+  }
+
+  // ── v8 → v9: idempotent evidence key (work order 07 §A2) ──────────────────
+  // A unique index on (document_id, evidence_role) prevents a retry, restart,
+  // or manual reprocess from creating a second transaction for the same
+  // document. Pre-v9 vaults may have duplicate evidence rows from the bug this
+  // fixes; the migration deduplicates them before creating the unique index,
+  // keeping the FIRST transaction for each (document_id, evidence_role) and
+  // deleting the later duplicates (their legs and holdings cascade).
+  //
+  // The dedup is conservative: it only removes rows where a SECOND transaction
+  // exists for the same (document_id, evidence_role), leaving the original
+  // intact. User corrections on the duplicate transactions are lost — but
+  // those transactions were economic errors (double-counted money) and their
+  // claims should not survive.
+  if (columnsOf(db, "transaction_documents").size) {
+    // Deduplicate before adding the unique index. A pre-v9 vault that hit the
+    // re-analysis bug has rows like:
+    //   (txn_a, doc_1, 'contract_note') and (txn_b, doc_1, 'contract_note')
+    // Keep the FIRST (lowest linked_at / earliest created), delete the rest.
+    db.exec(`
+      DELETE FROM transaction_documents
+       WHERE rowid IN (
+         SELECT td.rowid
+           FROM transaction_documents td
+           JOIN (
+             SELECT document_id, evidence_role, MIN(rowid) AS keep_rowid
+               FROM transaction_documents
+           GROUP BY document_id, evidence_role
+           HAVING COUNT(*) > 1
+           ) d
+             ON td.document_id = d.document_id
+            AND td.evidence_role = d.evidence_role
+          WHERE td.rowid <> d.keep_rowid
+       );
+    `);
+    // Now safe to create the unique index.
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_txndoc_evidence_key
+        ON transaction_documents(document_id, evidence_role)
+    `);
   }
 }
 
