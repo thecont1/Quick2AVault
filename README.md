@@ -1,20 +1,20 @@
 # Quick2AVault
 
-A macOS desktop utility that turns your financial document chaos into a calm, organised, AI-powered vault. Drop a PDF, spreadsheet, or photo of a receipt into the vault and **Quick2AVault** safely archives it, converts it to searchable Markdown, reads its contents, classifies it by person and financial period, converts foreign currencies at official exchange rates, and surfaces only the things that actually need your attention.
+A macOS desktop utility that turns your financial document chaos into a calm, organised, AI-powered vault. 
 
-> **Architecture note:** Quick2AVault is two programs. A **headless TypeScript daemon** owns the vault, the SQLite ledger, and every AI call, exposing a token-authenticated HTTP API on `localhost:4477`. A **Flutter macOS client** in `desktop/` is one consumer of that API — not the app itself. Any client (CLI, MCP server, another UI) can speak the same protocol.
->
-> The original Electron/Glaze implementation was retired on 2026-08-09. Its complete history is archived at [thecont1/Quick2AVault-archived](https://github.com/thecont1/Quick2AVault-archived), tagged `glaze-final`.
+When a PDF invoice, transaction slip email or photo of a receipt lands in the vault (a watched folder on your local system), **Quick2AVault** safely archives it, converts it to searchable Markdown, reads its contents, classifies it by person and financial period, converts foreign currencies at official exchange rates, and surfaces only the things that actually need your attention.
+
+> **Architecture note:** Quick2AVault is two programs. A **headless TypeScript daemon** owns the vault, the SQLite ledger, and every AI call, exposing a token-authenticated HTTP API. A **Flutter macOS client** is one consumer of that API — not the app itself. Any client (CLI, MCP server, another UI) can speak the same protocol. The original Electron/Glaze implementation was retired on 2026-08-09.
 
 ## The Problem
 
-Personal financial documents live everywhere: email attachments, phone photos, downloads folders, random folders on the desktop. They're PDFs you can't search, spreadsheets with no context, photos of receipts that vanish into your camera roll. When tax season or a loan application comes around, good luck finding that one statement from three years ago.
+Personal financial documents live everywhere: email attachments, phone photos, downloads folders, random folders on the desktop. They're PDFs you can't search, spreadsheets with no context, photos of receipts that vanish into your camera roll. 
 
-**Quick2AVault** solves this by being the single, calm place where every financial document lands — automatically organised, intelligently analyzed, and always findable.
+Come tax season or maybe a random weekend when you feel the urge to get your personal finances in order, if you're usually quick to a fault, say no more. Now you have **Quick2AVault** – the single, calm place where every financial document lands, is automatically organised, stays always findable, intelligently analysed and thoughtfully visualised.
 
 ## The Vision
 
-**Quick2AVault** is not just a document scanner. It's a **personal financial intelligence layer** that reasons about your money life:
+**Quick2AVault** is a *personal financial intelligence layer* that reasons about your money life:
 
 - **Who** does this document belong to? (You, your spouse, a client, a vendor?)
 - **What** kind of document is it? (Invoice, statement, receipt, contract note?)
@@ -214,6 +214,61 @@ The app is rebuilt automatically when the Dart sources change, when the token
 changes, or when you switch between popup and full window. Otherwise startup is
 instant. Logs land in `.logs/`.
 
+### How to start the daemon
+
+**Daemon** (Node.js + TypeScript + SQLite)
+`/Users/home/DEV/tools/Quick2AVault/daemon/`
+
+From the repo root:
+
+```bash
+npm run daemon          # one-shot
+npm run daemon:dev      # auto-restart on file changes (tsx watch)
+```
+
+Or directly:
+
+```bash
+npx tsx daemon/main.ts
+```
+
+There's also a `start.sh` wrapper:
+
+```bash
+npm start               # starts daemon (background)
+npm run start:full      # starts daemon + Flutter app together
+npm run stop            # stops the daemon
+npm run status          # checks if daemon is running
+```
+
+### How to launch the Flutter app
+
+**Flutter client** (macOS desktop app)
+`/Users/home/DEV/tools/Quick2AVault/desktop/`
+
+```bash
+npm run app             # cd desktop && flutter run -d macos
+```
+
+Or directly:
+
+```bash
+cd desktop && /Users/home/flutter-sdk/bin/flutter run -d macos
+```
+
+For a release build:
+
+```bash
+npm run app:build       # cd desktop && flutter build macos --release
+```
+
+### Running tests
+
+```bash
+npm test                # runs all daemon/*.smoke.ts in sequence
+npm run app:test        # runs Flutter widget/unit tests
+```
+
 ## Development
 
 ```bash
@@ -245,22 +300,6 @@ curl -H "Authorization: Bearer devtoken" localhost:4477/v1/health
 | `Q2AV_PORT` | API port (default `4477`) |
 | `Q2AV_TOKEN` | Bearer token; random per boot when unset |
 | `Q2AV_VAULT` | Vault root (default `~/Documents/Quick2AVault`) |
-
-### Migrating from the Glaze app
-
-A one-time importer carries corrections out of the retired Electron app's
-database into the daemon's claim store, matching documents by SHA-256:
-
-```bash
-npm run migrate:glaze -- --dry-run   # report only, writes nothing
-npm run migrate:glaze -- --apply
-```
-
-It is idempotent and deliberately conservative: it imports vendor, document
-type, document date, amount, person links and confirmed aliases, and **refuses**
-to import fields whose vocabularies don't match between the two apps (Glaze's
-accounting treatment and impact classification). Those stay in the archive
-rather than being guessed at.
 
 ### Gmail OAuth setup
 
