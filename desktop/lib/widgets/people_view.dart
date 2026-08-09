@@ -23,6 +23,10 @@ class PeopleView extends StatefulWidget {
 
 class _PeopleViewState extends State<PeopleView> {
   List<Person> _people = const [];
+  // Work order 07 §E: the canonical owner, from the daemon's /v1/people
+  // response. Used for the banner and per-row badges so the UI never shows
+  // "No owner set" while a row has an OWNER badge, or multiple OWNER badges.
+  Person? _owner;
   bool _loading = true;
   bool _adding = false;
   String? _message;
@@ -46,6 +50,7 @@ class _PeopleViewState extends State<PeopleView> {
       if (!mounted) return;
       setState(() {
         _people = r.people;
+        _owner = r.owner;
         _loading = false;
       });
     } catch (e) {
@@ -92,7 +97,10 @@ class _PeopleViewState extends State<PeopleView> {
 
   @override
   Widget build(BuildContext context) {
-    final owner = _people.where((p) => p.isOwner).firstOrNull;
+    // Work order 07 §E: use the canonical owner from the daemon, not a
+    // client-side filter. This is the single source of truth for the banner
+    // and the per-row OWNER badge.
+    final owner = _owner;
 
     return Container(
       color: VaultColors.bg,
@@ -147,6 +155,7 @@ class _PeopleViewState extends State<PeopleView> {
                             onToggleExpand: () => _toggleExpand(p),
                             onMakeOwner: () => _makeOwner(p),
                             onChanged: _load,
+                            isCanonicalOwner: owner?.id == p.id,
                           )),
 
                     const SizedBox(height: 16),
@@ -197,6 +206,9 @@ class _PersonEntry extends StatelessWidget {
   final VoidCallback onToggleExpand;
   final VoidCallback onMakeOwner;
   final VoidCallback onChanged;
+  // Work order 07 §E: the canonical owner flag, derived from the daemon's
+  // owner field (not from person.isOwner, which may be stale on multiple rows).
+  final bool isCanonicalOwner;
 
   const _PersonEntry({
     required this.person,
@@ -205,6 +217,7 @@ class _PersonEntry extends StatelessWidget {
     required this.onToggleExpand,
     required this.onMakeOwner,
     required this.onChanged,
+    required this.isCanonicalOwner,
   });
 
   @override
@@ -219,7 +232,7 @@ class _PersonEntry extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: vaultCard(
-        border: person.isOwner
+        border: isCanonicalOwner
             ? VaultColors.accent.withValues(alpha: 0.45)
             : VaultColors.line,
       ),
@@ -236,7 +249,7 @@ class _PersonEntry extends StatelessWidget {
                 Container(
                   width: 30, height: 30,
                   decoration: BoxDecoration(
-                    color: person.isOwner
+                    color: isCanonicalOwner
                         ? VaultColors.accent.withValues(alpha: 0.18)
                         : VaultColors.controlSubtle,
                     shape: BoxShape.circle,
@@ -246,7 +259,7 @@ class _PersonEntry extends StatelessWidget {
                       style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
-                          color: person.isOwner ? VaultColors.accent : VaultColors.tertiary)),
+                          color: isCanonicalOwner ? VaultColors.accent : VaultColors.tertiary)),
                 ),
                 const SizedBox(width: 11),
                 Expanded(
@@ -258,14 +271,14 @@ class _PersonEntry extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 12.5, color: VaultColors.primary)),
                       ),
-                      if (person.isOwner) ...[
+                      if (isCanonicalOwner) ...[
                         const SizedBox(width: 7),
                         _Badge(
                           label: 'OWNER',
                           color: VaultColors.accent,
                         ),
                       ],
-                      if (person.isMember && !person.isOwner) ...[
+                      if (person.isMember && !isCanonicalOwner) ...[
                         const SizedBox(width: 6),
                         _Badge(
                           label: 'MEMBER',

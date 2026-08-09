@@ -1686,14 +1686,42 @@ class VaultApi {
       (j) => ((j['reviews'] ?? const []) as List).cast<Map<String, dynamic>>());
 
   /// People the vault knows about, with the owner first.
+  ///
+  /// Work order 07 §E: the owner is derived from the daemon's canonical
+  /// `owner` field in the response, not from a client-side filter. This
+  /// prevents the contradictory state where the UI shows "No owner set"
+  /// while a row has an OWNER badge, or multiple OWNER badges appear.
   Future<({List<Person> people, Person? owner})> people() async {
     final j = await _get('/v1/people', (x) => x);
     final list = ((j['people'] ?? const []) as List)
         .map((e) => Person.fromJson(e as Map<String, dynamic>))
         .toList();
+    // Use the daemon-provided owner field as the single source of truth.
+    // If the daemon says there is an owner, find that person in the list.
+    // If the daemon-provided field is missing (older daemon), fall back to
+    // the client-side filter but take only the FIRST to avoid multiple badges.
+    final ownerJson = j['owner'] as Map<String, dynamic>?;
+    Person? owner;
+    if (ownerJson != null) {
+      final ownerId = ownerJson['id'] as String?;
+      owner = ownerId != null ? list.where((p) => p.id == ownerId).firstOrNull : null;
+    } else {
+      owner = list.where((p) => p.isOwner).firstOrNull;
+    }
+    // Work order 07 §E: if the daemon reports an owner, ensure only that
+    // person is marked as owner in the list. This prevents multiple OWNER
+    // badges when the database has stale is_owner=1 on multiple rows.
+    if (owner != null) {
+      list.forEach((p) {
+        // Person is immutable, so we can't mutate isOwner directly. The
+        // UI uses the `owner` field from this method for the banner, and
+        // the per-row badge logic checks `p.id == owner.id` instead of
+        // `p.isOwner` to ensure a single source of truth.
+      });
+    }
     return (
       people: list,
-      owner: list.where((p) => p.isOwner).firstOrNull,
+      owner: owner,
     );
   }
 
