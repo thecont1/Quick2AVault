@@ -49,6 +49,8 @@ export function createPaths(root?: string): Paths {
     vaultRoot: () => vaultRoot,
     rawDir: (dateKey) => ensure(path.join(vaultRoot, "Raw", dateKey)),
     markdownDir: (dateKey) => ensure(path.join(vaultRoot, "Markdown", dateKey)),
+    irrelevantDir: (dateKey) => ensure(path.join(vaultRoot, "Irrelevant", dateKey)),
+    duplicatesDir: (dateKey) => ensure(path.join(vaultRoot, "Duplicates", dateKey)),
     dbPath: () => path.join(vaultRoot, "vault.db"),
   };
 }

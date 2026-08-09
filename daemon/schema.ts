@@ -22,7 +22,7 @@ export type ClaimSubject = "document" | "transaction" | "entity";
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -331,18 +331,43 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state, phase);
 
--- ── Intake + source idempotency ────────────────────────────────────────────
+-- ── Intake + source idempotency (work order 06 §5) ──────────────────────────
+-- One row per incoming artifact, recording the full intake provenance: where
+-- it came from, what bytes arrived, what disposition triage gave it, and where
+-- the safe copy lives. 'kind' is the disposition: 'accepted' (was 'added' in
+-- pre-v8 vaults), 'irrelevant', 'duplicate', or 'failed'. 'added' is kept in
+-- the CHECK so old rows remain valid; new writes use 'accepted'.
 CREATE TABLE IF NOT EXISTS intake_events (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind        TEXT NOT NULL CHECK (kind IN ('added','duplicate','irrelevant','failed')),
-  filename    TEXT NOT NULL,
-  sha256      TEXT,
-  document_id TEXT,
-  source      TEXT NOT NULL DEFAULT 'folder',
-  detail      TEXT,
-  created_at  TEXT NOT NULL
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind               TEXT NOT NULL CHECK (kind IN ('added','accepted','duplicate','irrelevant','failed')),
+  filename           TEXT NOT NULL,
+  sha256             TEXT,
+  document_id        TEXT,
+  source             TEXT NOT NULL DEFAULT 'folder',
+  detail             TEXT,
+  created_at         TEXT NOT NULL,
+  -- ── work order 06 §5 provenance columns ──
+  source_reference   TEXT,
+  original_filename  TEXT,
+  received_path      TEXT,
+  mime_type          TEXT,
+  byte_size          INTEGER,
+  reason_code        TEXT,
+  reason             TEXT,
+  confidence         TEXT,
+  matched_document_id TEXT,
+  canonical_path     TEXT,
+  -- received → stable → hashed → triaged → archived → queued → processing → complete | failed
+  processing_state   TEXT NOT NULL DEFAULT 'received'
+                     CHECK (processing_state IN ('received','stable','hashed','triaged','archived','queued','processing','complete','failed')),
+  signals_json       TEXT,
+  triage_review      INTEGER NOT NULL DEFAULT 0,
+  updated_at         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_intake_created ON intake_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_intake_kind ON intake_events(kind);
+CREATE INDEX IF NOT EXISTS idx_intake_sha ON intake_events(sha256);
+CREATE INDEX IF NOT EXISTS idx_intake_doc ON intake_events(document_id);
 
 CREATE TABLE IF NOT EXISTS source_events (
   source      TEXT NOT NULL,
@@ -680,6 +705,111 @@ export function migrate(db: DatabaseSync): void {
       else if (/^(\+?91|0)?\d{10}$/.test(v.replace(/[\s-]/g, ""))) type = "phone";
       else if (/^[^\s@]+@[^\s@.]+$/.test(v)) type = "handle";
       if (type) upd.run(type, r.id);
+    }
+  }
+
+  // ── v7 → v8: intake_events gains work order 06 provenance columns ──
+  // The table already exists for every v2+ vault; we ADD columns in place
+  // rather than rebuild, because intake_events is append-only history and a
+  // rebuild would risk losing rows. Each new column defaults safely so old
+  // rows remain readable. The CHECK on `kind` cannot be altered in place, so
+  // we widen it via the documented rebuild-table pattern ONLY when the old
+  // CHECK is missing 'accepted' — detected by trying a probe insert rolled
+  // back immediately. Most vaults skip the rebuild entirely.
+  const intakeCols = columnsOf(db, "intake_events");
+  const addIntakeCol = (name: string, decl: string) => {
+    if (intakeCols.size && !intakeCols.has(name)) {
+      db.exec(`ALTER TABLE intake_events ADD COLUMN ${name} ${decl}`);
+    }
+  };
+  addIntakeCol("source_reference", "TEXT");
+  addIntakeCol("original_filename", "TEXT");
+  addIntakeCol("received_path", "TEXT");
+  addIntakeCol("mime_type", "TEXT");
+  addIntakeCol("byte_size", "INTEGER");
+  addIntakeCol("reason_code", "TEXT");
+  addIntakeCol("reason", "TEXT");
+  addIntakeCol("confidence", "TEXT");
+  addIntakeCol("matched_document_id", "TEXT");
+  addIntakeCol("canonical_path", "TEXT");
+  addIntakeCol("processing_state", "TEXT NOT NULL DEFAULT 'received'");
+  addIntakeCol("signals_json", "TEXT");
+  addIntakeCol("triage_review", "INTEGER NOT NULL DEFAULT 0");
+  addIntakeCol("updated_at", "TEXT");
+
+  // Widen the `kind` CHECK to accept 'accepted' (work order 06 disposition
+  // vocabulary). Pre-v8 vaults only allow 'added','duplicate','irrelevant',
+  // 'failed'. Detected with a rolled-back probe so we never persist junk.
+  if (intakeCols.size) {
+    let needsRebuild = false;
+    try {
+      db.exec("BEGIN");
+      try {
+        db.prepare("INSERT INTO intake_events (kind, filename, source, created_at) VALUES ('accepted','probe','probe','probe')").run();
+        needsRebuild = false;
+      } catch {
+        needsRebuild = true;
+      } finally {
+        db.exec("ROLLBACK");
+      }
+    } catch {
+      // BEGIN failed for some reason — skip rebuild, DDL CREATE TABLE IF NOT
+      // EXISTS will be a no-op and the existing CHECK stays. New 'accepted'
+      // writes would then fail at runtime, which is loud and recoverable.
+      needsRebuild = false;
+    }
+    if (needsRebuild) {
+      db.exec("BEGIN");
+      try {
+        db.exec(`
+          CREATE TABLE intake_events_new (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind               TEXT NOT NULL CHECK (kind IN ('added','accepted','duplicate','irrelevant','failed')),
+            filename           TEXT NOT NULL,
+            sha256             TEXT,
+            document_id        TEXT,
+            source             TEXT NOT NULL DEFAULT 'folder',
+            detail             TEXT,
+            created_at         TEXT NOT NULL,
+            source_reference   TEXT,
+            original_filename  TEXT,
+            received_path      TEXT,
+            mime_type          TEXT,
+            byte_size          INTEGER,
+            reason_code        TEXT,
+            reason             TEXT,
+            confidence         TEXT,
+            matched_document_id TEXT,
+            canonical_path     TEXT,
+            processing_state   TEXT NOT NULL DEFAULT 'received'
+                               CHECK (processing_state IN ('received','stable','hashed','triaged','archived','queued','processing','complete','failed')),
+            signals_json       TEXT,
+            triage_review      INTEGER NOT NULL DEFAULT 0,
+            updated_at         TEXT
+          );
+          INSERT INTO intake_events_new
+            (id, kind, filename, sha256, document_id, source, detail, created_at,
+             source_reference, original_filename, received_path, mime_type, byte_size,
+             reason_code, reason, confidence, matched_document_id, canonical_path,
+             processing_state, signals_json, triage_review, updated_at)
+          SELECT
+            id, kind, filename, sha256, document_id, source, detail, created_at,
+            NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, NULL, NULL, NULL,
+            'received', NULL, 0, NULL
+          FROM intake_events;
+          DROP TABLE intake_events;
+          ALTER TABLE intake_events_new RENAME TO intake_events;
+          CREATE INDEX IF NOT EXISTS idx_intake_created ON intake_events(created_at);
+          CREATE INDEX IF NOT EXISTS idx_intake_kind ON intake_events(kind);
+          CREATE INDEX IF NOT EXISTS idx_intake_sha ON intake_events(sha256);
+          CREATE INDEX IF NOT EXISTS idx_intake_doc ON intake_events(document_id);
+        `);
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
     }
   }
 }

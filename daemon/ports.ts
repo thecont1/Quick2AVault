@@ -23,6 +23,10 @@ export interface Paths {
   rawDir(dateKey: string): string;
   markdownDir(dateKey: string): string;
   dbPath(): string;
+  /** Work order 06 §7: irrelevant files preserved under Irrelevant/<date>/. */
+  irrelevantDir(dateKey: string): string;
+  /** Work order 06 §7: duplicate bytes preserved under Duplicates/<date>/. */
+  duplicatesDir(dateKey: string): string;
 }
 
 /**
@@ -71,7 +75,82 @@ export type DomainEvent =
   | { type: "JobStateChanged"; job_id: number; phase: string; state: string; at: string }
   | { type: "BatchFinished"; processed: number; at: string }
   /** Vault wiped from Settings. Clients should drop cached state and refetch. */
-  | { type: "VaultReset"; scope: "ledger" | "factory"; at: string };
+  | { type: "VaultReset"; scope: "ledger" | "factory"; at: string }
+  // ── Work order 06 — Intelligent Intake Triage events (§8) ──
+  // Each event carries the intake id, source, filename, disposition, reason,
+  // hash, matched document id where relevant, path, and timestamp. The Flutter
+  // intake feed distinguishes all dispositions rather than showing generic
+  // "processed". Emitted in pipeline order: Received → Triaged → (Accepted |
+  // Irrelevant | Duplicate | Failed); Restored on user action.
+  | {
+      type: "IntakeReceived";
+      intake_id: number;
+      source: string;
+      filename: string;
+      received_path: string | null;
+      at: string;
+    }
+  | {
+      type: "IntakeTriaged";
+      intake_id: number;
+      source: string;
+      filename: string;
+      disposition: "accepted" | "irrelevant" | "failed";
+      reason_code: string;
+      reason: string;
+      confidence: "high" | "medium" | "low";
+      triage_review: boolean;
+      at: string;
+    }
+  | {
+      type: "IntakeAccepted";
+      intake_id: number;
+      source: string;
+      filename: string;
+      sha256: string;
+      document_id: string;
+      canonical_path: string;
+      triage_review: boolean;
+      at: string;
+    }
+  | {
+      type: "IntakeIrrelevant";
+      intake_id: number;
+      source: string;
+      filename: string;
+      sha256: string | null;
+      reason_code: string;
+      reason: string;
+      canonical_path: string;
+      at: string;
+    }
+  | {
+      type: "IntakeDuplicate";
+      intake_id: number;
+      source: string;
+      filename: string;
+      sha256: string;
+      matched_document_id: string;
+      canonical_path: string | null;
+      at: string;
+    }
+  | {
+      type: "IntakeFailed";
+      intake_id: number;
+      source: string;
+      filename: string;
+      reason: string;
+      at: string;
+    }
+  | {
+      type: "IntakeRestored";
+      intake_id: number;
+      source: string;
+      filename: string;
+      new_disposition: "accepted" | "irrelevant" | "failed";
+      document_id: string | null;
+      at: string;
+    };
 
 export interface EventBus {
   publish(e: DomainEvent): void;
