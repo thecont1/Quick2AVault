@@ -42,7 +42,7 @@ class PopoverPlugin: NSObject, FlutterPlugin, NSPopoverDelegate {
     }
   }
 
-  private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+  func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
     case "installStatusItem":
       installStatusItem()

@@ -19,7 +19,7 @@ class AppDelegate: FlutterAppDelegate {
   // FlutterViewController between the main window and the popover.
   override func applicationDidFinishLaunching(_ notification: Notification) {
     if let controller = mainFlutterWindow?.contentViewController as? FlutterViewController {
-      PopoverPlugin.register(with: controller.registrar(forPlugin: "PopoverPlugin")!)
+      PopoverPlugin.register(with: controller.registrar(forPlugin: "PopoverPlugin"))
     }
     super.applicationDidFinishLaunching(notification)
   }
