@@ -23,6 +23,22 @@ class FeedRail extends StatelessWidget {
       'MatchProposed' =>
         'MATCHED  score ${((d["score"] ?? 0) as num).toStringAsFixed(2)}  → one rupee',
       'JobStateChanged' => '${d["phase"]}  ${d["state"]}',
+      // ── work order 06 — intake triage events (§8) ──
+      // The feed must distinguish all dispositions rather than showing generic
+      // "processed". Each disposition has its own line so the user can see at a
+      // glance what happened to each incoming file.
+      'IntakeReceived' => 'received  ${d["filename"]}',
+      'IntakeTriaged' =>
+        'triaged  ${d["filename"]}  → ${d["disposition"]}  ${d["reason_code"]}',
+      'IntakeAccepted' =>
+        'accepted  ${d["filename"]}${d["triage_review"] == true ? "  (review)" : ""}',
+      'IntakeIrrelevant' =>
+        'irrelevant  ${d["filename"]}  — ${d["reason_code"]}',
+      'IntakeDuplicate' =>
+        'duplicate  ${d["filename"]}  → ${_short(d["matched_document_id"])}',
+      'IntakeFailed' => 'failed  ${d["filename"]}  — ${d["reason"]}',
+      'IntakeRestored' =>
+        'restored  ${d["filename"]}  → ${d["new_disposition"]}',
       _ => e.type,
     };
   }
@@ -43,6 +59,14 @@ class FeedRail extends StatelessWidget {
         'TransactionRecorded' => VaultColors.income,
         'DocumentDuplicate' => VaultColors.warn,
         'DocumentReceived' => VaultColors.ink,
+        // Work order 06 — intake triage disposition colours.
+        'IntakeAccepted' => VaultColors.ink,
+        'IntakeIrrelevant' => VaultColors.dim,
+        'IntakeDuplicate' => VaultColors.warn,
+        'IntakeFailed' => VaultColors.warn,
+        'IntakeRestored' => VaultColors.ok,
+        'IntakeTriaged' => VaultColors.dim,
+        'IntakeReceived' => VaultColors.ink,
         _ => VaultColors.dim,
       };
 

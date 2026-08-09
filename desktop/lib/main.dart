@@ -31,6 +31,7 @@ import 'widgets/treemap.dart';
 import 'widgets/people_view.dart';
 import 'widgets/review_browser.dart';
 import 'widgets/review_view.dart';
+import 'widgets/irrelevant_view.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -344,6 +345,11 @@ class _VaultHomeState extends State<VaultHome> {
         const refreshOn = {
           'TransactionRecorded', 'MatchProposed', 'AnalysisComplete',
           'DocumentReceived', 'DocumentDuplicate', 'BatchFinished',
+          // Work order 06 — intake events that change what the Irrelevant view
+          // and intake feed show. IntakeRestored must refresh because a restore
+          // promotes an irrelevant item into the ledger.
+          'IntakeAccepted', 'IntakeIrrelevant', 'IntakeDuplicate',
+          'IntakeFailed', 'IntakeRestored',
         };
         // 'Ready' is the daemon's hello — it arrives on every (re)connect.
         // Refreshing on it is how the app recovers after the daemon restarts:
@@ -565,6 +571,11 @@ class _VaultHomeState extends State<VaultHome> {
               constraints: const BoxConstraints(maxWidth: 720),
               child: PeopleView(api: _api, onClose: null),
             ),
+          ),
+        // Work order 06 §9 — Intake tab: the Irrelevant view with Restore.
+        VaultTab.intake => IrrelevantView(
+            api: _api,
+            onRestored: _refresh,
           ),
         VaultTab.settings => Center(
             child: ConstrainedBox(

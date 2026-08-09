@@ -12,6 +12,8 @@ enum VaultTab {
   ledger('Ledger', Icons.receipt_long_outlined),
   review('Review', Icons.school_outlined),
   people('People', Icons.people_outline),
+  // Work order 06 §9 — Intake tab hosts the Irrelevant view and intake feed.
+  intake('Intake', Icons.inbox_outlined),
   charts('Charts', Icons.insights_outlined),
   settings('Settings', Icons.settings_outlined);
 
@@ -51,17 +53,23 @@ class VaultTabBar extends StatelessWidget {
         border: Border(bottom: BorderSide(color: VaultColors.line)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: [
-          for (final t in VaultTab.values)
-            _Tab(
-              tab: t,
-              selected: t == current,
-              enabled: !disabled.contains(t),
-              badge: t == VaultTab.review ? reviewCount : 0,
-              onTap: () => onChanged(t),
-            ),
-        ],
+      // SingleChildScrollView so adding a tab (work order 06: Intake) never
+      // overflows on narrow windows. The tabs are cheap selectors, so a scroll
+      // surface does not change the no-PageView/no-TabController design.
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (final t in VaultTab.values)
+              _Tab(
+                tab: t,
+                selected: t == current,
+                enabled: !disabled.contains(t),
+                badge: t == VaultTab.review ? reviewCount : 0,
+                onTap: () => onChanged(t),
+              ),
+          ],
+        ),
       ),
     );
   }

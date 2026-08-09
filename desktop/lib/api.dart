@@ -412,6 +412,78 @@ class VaultEvent {
   VaultEvent(this.type, this.data) : at = DateTime.now();
 }
 
+/// Work order 06 — one intake event with full disposition detail.
+///
+/// The daemon's intake_events row, surfaced to the Flutter intake feed and the
+/// Irrelevant view. `kind` is the disposition: 'accepted' (was 'added'),
+/// 'irrelevant', 'duplicate', or 'failed'. Every disposition has a reason.
+class IntakeEvent {
+  final int id;
+  final String kind; // accepted | irrelevant | duplicate | failed | added
+  final String filename;
+  final String? sha256;
+  final String? documentId;
+  final String source;
+  final String? detail;
+  final String? reasonCode;
+  final String? reason;
+  final String? confidence;
+  final String? matchedDocumentId;
+  final String? canonicalPath;
+  final String processingState;
+  final bool triageReview;
+  final DateTime createdAt;
+
+  const IntakeEvent({
+    required this.id,
+    required this.kind,
+    required this.filename,
+    this.sha256,
+    this.documentId,
+    required this.source,
+    this.detail,
+    this.reasonCode,
+    this.reason,
+    this.confidence,
+    this.matchedDocumentId,
+    this.canonicalPath,
+    required this.processingState,
+    required this.triageReview,
+    required this.createdAt,
+  });
+
+  /// Normalised disposition: 'added' (legacy) → 'accepted'.
+  String get disposition =>
+      kind == 'added' ? 'accepted' : kind;
+
+  factory IntakeEvent.fromJson(Map<String, dynamic> j) {
+    final raw = (j['created_at'] ?? '') as String;
+    DateTime createdAt;
+    try {
+      createdAt = DateTime.parse(raw);
+    } catch (_) {
+      createdAt = DateTime.now();
+    }
+    return IntakeEvent(
+      id: (j['id'] ?? 0) as int,
+      kind: (j['kind'] ?? 'failed') as String,
+      filename: (j['filename'] ?? '') as String,
+      sha256: j['sha256'] as String?,
+      documentId: j['document_id'] as String?,
+      source: (j['source'] ?? 'folder') as String,
+      detail: j['detail'] as String?,
+      reasonCode: j['reason_code'] as String?,
+      reason: j['reason'] as String?,
+      confidence: j['confidence'] as String?,
+      matchedDocumentId: j['matched_document_id'] as String?,
+      canonicalPath: j['canonical_path'] as String?,
+      processingState: (j['processing_state'] ?? 'received') as String,
+      triageReview: j['triage_review'] == 1 || j['triage_review'] == true,
+      createdAt: createdAt,
+    );
+  }
+}
+
 /// The daemon rejected our credentials. Distinct from a transient network
 /// failure because the remedy is different: retrying forever will not help,
 /// and rendering zeros would be a lie — an unauthorised client knows nothing
@@ -1331,6 +1403,36 @@ class VaultApi {
 
   Future<List<Map<String, dynamic>>> intakeFeed() => _get('/v1/intake-feed',
       (j) => ((j['events'] ?? const []) as List).cast<Map<String, dynamic>>());
+
+  /// Work order 06 §8 — recent intake with full disposition detail.
+  Future<List<IntakeEvent>> intakeRecent({int limit = 50}) =>
+      _get('/v1/intake/recent?limit=$limit', (j) => ((j['events'] ?? const []) as List)
+          .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
+          .toList());
+
+  /// Work order 06 §9 — irrelevant items only, for the Irrelevant view.
+  Future<List<IntakeEvent>> irrelevantItems({int limit = 200}) =>
+      _get('/v1/irrelevant?limit=$limit', (j) => ((j['events'] ?? const []) as List)
+          .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
+          .toList());
+
+  /// Work order 06 §8 — restore an irrelevant intake (re-triage and promote).
+  Future<Map<String, dynamic>> restoreIntake(int id) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/intake/$id/restore'),
+      headers: _headers,
+    );
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Work order 06 §8 — reclassify an intake (force re-triage).
+  Future<Map<String, dynamic>> reclassifyIntake(int id) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/intake/$id/reclassify'),
+      headers: _headers,
+    );
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
 
   Future<List<Map<String, dynamic>>> entities() => _get('/v1/entities',
       (j) => ((j['entities'] ?? const []) as List).cast<Map<String, dynamic>>());
