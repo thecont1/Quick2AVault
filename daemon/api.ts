@@ -46,6 +46,13 @@ import {
   findNearDuplicates,
   proposeDescriptorRule,
 } from "./learning.js";
+import {
+  applyPersonCorrection,
+  classifyIdentifier,
+  isGenericMailbox,
+  normaliseIdentifier,
+  UNIDENTIFIED_PERSON_ID,
+} from "./identity.js";
 
 export interface ApiOptions {
   port: number;
@@ -413,6 +420,24 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 ? proposeDescriptorRule(db, ports, subjectId, value)
                 : null;
 
+            // Work order 05 §Track C: a corrected PERSON relinks this
+            // document's party row and stores the old spelling as a confirmed
+            // alias on the corrected person — document-scoped first, durable
+            // identity second. The extraction JSON and markdown are untouched.
+            let personResolution: ReturnType<typeof applyPersonCorrection> | null = null;
+            if (subject === "document" && field === "person" && value) {
+              personResolution = applyPersonCorrection(db, ports, subjectId, value, before?.value);
+              audit(db, ports, {
+                subject: "entity",
+                subjectId: personResolution.person_id,
+                field: "document_link",
+                action: "edit",
+                oldValue: before?.value ?? null,
+                newValue: value,
+                source: "user",
+              });
+            }
+
             return send(res, 200, {
               claim_id: written.claim_id,
               subject_type: subject,
@@ -428,6 +453,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 mismatches: a.mismatches,
               })),
               rule_candidate: candidate,
+              person_resolution: personResolution,
             });
           }
 
@@ -933,12 +959,27 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       // is auto-promoted to member; everyone else stays a candidate until the
       // user says otherwise (plan §5: zero setup, confirm on novelty).
       if (p === "/v1/people" && req.method === "GET") {
+        // Work order 05 §B.6: the list is an identity-management surface —
+        // each row carries the counts a user needs to decide what to look at:
+        // linked documents AND transactions, unresolved (proposed) aliases,
+        // and when this person was last seen on a document.
         const people = db
           .prepare(
-            `SELECT e.id, e.display_name, e.subtype, e.is_member, e.status, e.confidence,
-                    (SELECT COUNT(*) FROM document_parties dp WHERE dp.entity_id = e.id) AS document_count
+            `SELECT e.id, e.display_name, e.subtype, e.is_member, e.is_owner, e.status, e.confidence,
+                    (SELECT COUNT(*) FROM document_parties dp WHERE dp.entity_id = e.id) AS document_count,
+                    (SELECT COUNT(DISTINCT td.transaction_id)
+                       FROM transaction_documents td
+                       JOIN document_parties dp ON dp.document_id = td.document_id
+                      WHERE dp.entity_id = e.id) AS transaction_count,
+                    (SELECT COUNT(*) FROM entity_aliases a
+                      WHERE a.entity_id = e.id AND a.status = 'proposed') AS unresolved_alias_count,
+                    (SELECT COUNT(*) FROM entity_aliases a
+                      WHERE a.entity_id = e.id AND a.status <> 'rejected') AS alias_count,
+                    (SELECT MAX(d.received_at)
+                       FROM document_parties dp JOIN documents d ON d.id = dp.document_id
+                      WHERE dp.entity_id = e.id) AS last_seen_at
              FROM entities e WHERE e.kind='person'
-             ORDER BY e.is_member DESC, document_count DESC, e.display_name`,
+             ORDER BY e.is_owner DESC, e.is_member DESC, document_count DESC, e.display_name`,
           )
           .all() as Record<string, unknown>[];
         for (const person of people) {
@@ -951,8 +992,59 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
         return send(res, 200, {
           people,
-          owner: people.find((x) => x.is_member === 1) ?? null,
+          owner: people.find((x) => x.is_owner === 1) ?? null,
         });
+      }
+
+      // One person, in full: aliases with provenance, the documents that name
+      // them, the transactions those documents evidence, and any unresolved
+      // identity questions. The drill-down the People tab opens on click.
+      if (/^\/v1\/people\/[^/]+$/.test(p) && req.method === "GET") {
+        const id = decodeURIComponent(p.slice("/v1/people/".length));
+        const person = db
+          .prepare("SELECT * FROM entities WHERE id=? AND kind='person'")
+          .get(id) as Record<string, unknown> | undefined;
+        if (!person) return send(res, 404, { error: "no such person" });
+
+        const aliases = db
+          .prepare(
+            `SELECT id, alias, normalised, alias_type, source, status, confidence, created_at, last_seen_at,
+                    (SELECT COUNT(DISTINCT dp.document_id) FROM document_parties dp
+                      WHERE dp.entity_id = entity_aliases.entity_id) AS supporting_documents
+             FROM entity_aliases WHERE entity_id=? ORDER BY alias_type, id`,
+          )
+          .all(id);
+        const documents = db
+          .prepare(
+            `SELECT d.id, d.original_filename, d.doc_type, d.received_at, dp.role
+               FROM document_parties dp JOIN documents d ON d.id = dp.document_id
+              WHERE dp.entity_id=? ORDER BY d.received_at DESC`,
+          )
+          .all(id);
+        const transactions = db
+          .prepare(
+            `SELECT DISTINCT t.id, t.occurred_at, t.amount_minor, t.currency, t.direction,
+                    e.display_name AS counterparty_name
+               FROM transaction_documents td
+               JOIN document_parties dp ON dp.document_id = td.document_id
+               JOIN transactions t ON t.id = td.transaction_id
+               LEFT JOIN entities e ON e.id = t.counterparty_entity_id
+              WHERE dp.entity_id=? ORDER BY t.occurred_at DESC`,
+          )
+          .all(id);
+        const questions = db
+          .prepare(
+            `SELECT id, question, trigger, context, options, created_at FROM training_reviews
+              WHERE answered_at IS NULL AND dismissed=0 AND context LIKE ? ORDER BY id DESC`,
+          )
+          .all(`%${id}%`)
+          .map((q) => {
+            const r = q as Record<string, unknown>;
+            r.context = r.context ? safeParse(r.context as string) : null;
+            r.options = r.options ? safeParse(r.options as string) : null;
+            return r;
+          });
+        return send(res, 200, { person, aliases, documents, transactions, questions });
       }
 
       // Declare a person, or update one. Used by the People dialog.
@@ -970,21 +1062,135 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         if (!id) {
           id = `ent_${randomBytes(8).toString("hex")}`;
           db.prepare(
-            `INSERT INTO entities (id, kind, subtype, display_name, confidence, status, is_member, created_at)
-             VALUES (?, 'person', ?, ?, 1.0, 'confirmed', ?, ?)`,
-          ).run(id, b.relationship ?? null, name, b.is_member ? 1 : 0, now);
+            `INSERT INTO entities (id, kind, subtype, display_name, confidence, status, is_member, created_at, updated_at)
+             VALUES (?, 'person', ?, ?, 1.0, 'confirmed', ?, ?, ?)`,
+          ).run(id, b.relationship ?? null, name, b.is_member ? 1 : 0, now, now);
         } else {
           db.prepare(
-            "UPDATE entities SET subtype=COALESCE(?,subtype), is_member=?, status='confirmed' WHERE id=?",
-          ).run(b.relationship ?? null, b.is_member ? 1 : 0, id);
+            "UPDATE entities SET subtype=COALESCE(?,subtype), is_member=?, status='confirmed', updated_at=? WHERE id=?",
+          ).run(b.relationship ?? null, b.is_member ? 1 : 0, now, id);
         }
 
-        // Exactly one owner: promoting a person demotes the previous one.
+        // Exactly one owner (work order 05 §B.2): promoting a person demotes
+        // the previous one. An owner is trivially also a member.
         if (b.is_owner) {
-          db.prepare("UPDATE entities SET is_member=0 WHERE kind='person' AND id<>?").run(id);
-          db.prepare("UPDATE entities SET is_member=1, status='confirmed' WHERE id=?").run(id);
+          db.prepare("UPDATE entities SET is_owner=0 WHERE kind='person' AND id<>?").run(id);
+          db.prepare("UPDATE entities SET is_owner=1, is_member=1, status='confirmed', updated_at=? WHERE id=?").run(now, id);
         }
         return send(res, 200, { id, display_name: name, declared: !existing });
+      }
+
+      // Add an alias to a person (work order 05 §B.6). The type is classified
+      // from the string when not given, so "ms@…" can never be added as a
+      // name variant. A value already bound to ANOTHER person is a conflict —
+      // 409, never a silent re-attach.
+      {
+        const m = /^\/v1\/people\/([^/]+)\/aliases$/.exec(p);
+        if (m && req.method === "POST") {
+          const id = decodeURIComponent(m[1]);
+          const person = db
+            .prepare("SELECT id FROM entities WHERE id=? AND kind='person'")
+            .get(id) as { id: string } | undefined;
+          if (!person) return send(res, 404, { error: "no such person" });
+
+          const b = await readJson(req);
+          const alias = String(b.alias ?? "").trim();
+          if (!alias) return send(res, 400, { error: "alias required" });
+          const classified = classifyIdentifier(alias);
+          let type = typeof b.alias_type === "string" ? b.alias_type : (classified ?? "name_variant");
+          if (!["name_variant", "email", "phone", "handle"].includes(type)) {
+            return send(res, 400, { error: "alias_type must be name_variant|email|phone|handle" });
+          }
+          // The string's own shape wins over the caller's label: an email
+          // stored as a name_variant would normalise differently
+          // (normaliseName mangles '@') and silently stop matching. Retype
+          // rather than store a lie; contradicting identifier types are an
+          // outright refusal.
+          if (classified && type === "name_variant") type = classified;
+          if (classified && type !== classified) {
+            return send(res, 400, {
+              error: "alias_type_mismatch",
+              message: `"${alias}" is a ${classified}, not a ${type}.`,
+            });
+          }
+          if (type === "email" && isGenericMailbox(alias)) {
+            return send(res, 409, {
+              error: "generic_mailbox",
+              message: "A billing/support mailbox names a function at an organisation, not a person.",
+            });
+          }
+          const normalised =
+            type === "name_variant"
+              ? normaliseName(alias)
+              : normaliseIdentifier(type as "email" | "phone" | "handle", alias);
+          const clash = db
+            .prepare(
+              "SELECT entity_id, status FROM entity_aliases WHERE kind='person' AND normalised=? AND entity_id<>? AND status<>'rejected'",
+            )
+            .get(normalised, id) as { entity_id: string; status: string } | undefined;
+          if (clash) {
+            return send(res, 409, {
+              error: "alias_in_use",
+              message: "That name/identifier is already on file for another person. Merge them explicitly if they are the same human.",
+              bound_to: clash.entity_id,
+            });
+          }
+          const now = ports.clock.isoNow();
+          db.prepare(
+            `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at, last_seen_at)
+             VALUES (?, 'person', ?, ?, ?, 'user', 'confirmed', ?, ?)
+             ON CONFLICT(kind, normalised) DO UPDATE SET status='confirmed', last_seen_at=excluded.last_seen_at`,
+          ).run(id, alias, normalised, type, now, now);
+          audit(db, ports, {
+            subject: "entity",
+            subjectId: id,
+            field: `alias:${type}`,
+            action: "edit",
+            oldValue: null,
+            newValue: alias,
+            source: "user",
+          });
+          return send(res, 200, { added: true, alias, alias_type: type, normalised });
+        }
+      }
+
+      // Reject an alias. The row is KEPT with status='rejected': the string
+      // is still evidence, and a rejected alias must never resolve again —
+      // deleting the row would let the next extraction re-propose it.
+      {
+        const m = /^\/v1\/people\/([^/]+)\/aliases\/(\d+)$/.exec(p);
+        if (m && (req.method === "DELETE" || req.method === "PATCH")) {
+          const id = decodeURIComponent(m[1]);
+          const aliasId = Number(m[2]);
+          const row = db
+            .prepare(
+              "SELECT a.id, a.alias, a.alias_type FROM entity_aliases a JOIN entities e ON e.id=a.entity_id WHERE a.id=? AND a.entity_id=? AND e.kind='person'",
+            )
+            .get(aliasId, id) as { id: number; alias: string; alias_type: string } | undefined;
+          if (!row) return send(res, 404, { error: "no such alias" });
+          // A person's own display name is not rejectable — that is a rename,
+          // not an alias rejection, and renaming has its own endpoint.
+          const owner = db.prepare("SELECT display_name FROM entities WHERE id=?").get(id) as
+            | { display_name: string }
+            | undefined;
+          if (owner && owner.display_name === row.alias) {
+            return send(res, 409, {
+              error: "cannot_reject_display_name",
+              message: "This is the person's display name. Rename them instead.",
+            });
+          }
+          db.prepare("UPDATE entity_aliases SET status='rejected' WHERE id=?").run(aliasId);
+          audit(db, ports, {
+            subject: "entity",
+            subjectId: id,
+            field: `alias:${row.alias_type}`,
+            action: "reject",
+            oldValue: row.alias,
+            newValue: null,
+            source: "user",
+          });
+          return send(res, 200, { rejected: aliasId });
+        }
       }
 
       // Edit one person: rename, change relationship, set/clear owner.
@@ -1019,18 +1225,24 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             });
           }
           if (name !== row.display_name) {
-            db.prepare("UPDATE entities SET display_name=? WHERE id=?").run(name, id);
-            // Keep the old spelling as an alias so past documents still match.
-            // kind and normalised are NOT NULL and carry a unique index on
-            // (kind, normalised) — the same shape ledger.ts writes.
+            db.prepare("UPDATE entities SET display_name=?, updated_at=? WHERE id=?").run(
+              name,
+              ports.clock.isoNow(),
+              id,
+            );
+            // Keep the old spelling as a confirmed name_variant alias so past
+            // documents still match (work order 05 §B.6: renaming preserves
+            // the previous canonical name — it is evidence, never discarded).
             db.prepare(
-              "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, source, created_at) VALUES (?,?,?,?,?,?)",
+              `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at, last_seen_at)
+               VALUES (?,?,?,?, 'name_variant', 'user', 'confirmed', ?, ?)
+               ON CONFLICT(kind, normalised) DO UPDATE SET status='confirmed', last_seen_at=excluded.last_seen_at`,
             ).run(
               id,
               "person",
               row.display_name,
               normaliseName(row.display_name),
-              "user",
+              ports.clock.isoNow(),
               ports.clock.isoNow(),
             );
             changed.push("display_name");
@@ -1047,10 +1259,13 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
         if (typeof b.is_owner === "boolean") {
           if (b.is_owner) {
-            db.prepare("UPDATE entities SET is_member=0 WHERE kind='person' AND id<>?").run(id);
-            db.prepare("UPDATE entities SET is_member=1, status='confirmed' WHERE id=?").run(id);
+            db.prepare("UPDATE entities SET is_owner=0 WHERE kind='person' AND id<>?").run(id);
+            db.prepare("UPDATE entities SET is_owner=1, is_member=1, status='confirmed', updated_at=? WHERE id=?").run(
+              ports.clock.isoNow(),
+              id,
+            );
           } else {
-            db.prepare("UPDATE entities SET is_member=0 WHERE id=?").run(id);
+            db.prepare("UPDATE entities SET is_owner=0, updated_at=? WHERE id=?").run(ports.clock.isoNow(), id);
           }
           changed.push("is_owner");
         }
@@ -1093,7 +1308,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           // entity_id is NOT NULL and part of the primary key, so there is no
           // FK-preserving way to null it out — and simply deleting the rows
           // would silently detach evidence, which the work order forbids.
-          const UNIDENTIFIED_ID = "ent_unidentified_person";
+          const UNIDENTIFIED_ID = UNIDENTIFIED_PERSON_ID;
           const already = db.prepare("SELECT 1 FROM entities WHERE id=?").get(UNIDENTIFIED_ID);
           if (!already) {
             db.prepare(
@@ -1155,15 +1370,23 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           db.prepare("UPDATE OR IGNORE document_parties SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
           db.prepare("UPDATE OR IGNORE entity_aliases SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
           // The absorbed spelling becomes an alias, so the same variant on a
-          // future document resolves without asking again.
+          // future document resolves without asking again. Normalised with
+          // normaliseName — a bare toLowerCase leaves punctuation in the key
+          // and the resolver would never find this alias again.
           db.prepare(
-            `INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, source, created_at)
-             VALUES (?, 'person', ?, ?, 'user-merge', ?)`,
-          ).run(into.id, from.display_name, from.display_name.toLowerCase(), now);
-          // Merging into a non-member keeps membership if either side had it.
+            `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at, last_seen_at)
+             VALUES (?, 'person', ?, ?, 'name_variant', 'user-merge', 'confirmed', ?, ?)
+             ON CONFLICT(kind, normalised) DO UPDATE SET status='confirmed', last_seen_at=excluded.last_seen_at`,
+          ).run(into.id, from.display_name, normaliseName(from.display_name), now, now);
+          // Merging into a non-member keeps membership (and ownership) if
+          // either side had it.
           db.prepare(
-            "UPDATE entities SET is_member = MAX(is_member, (SELECT is_member FROM entities WHERE id=?)) WHERE id=?",
-          ).run(from.id, into.id);
+            `UPDATE entities SET
+               is_member = MAX(is_member, (SELECT is_member FROM entities WHERE id=?)),
+               is_owner  = MAX(is_owner,  (SELECT is_owner  FROM entities WHERE id=?)),
+               updated_at=?
+             WHERE id=?`,
+          ).run(from.id, from.id, now, into.id);
           db.prepare("DELETE FROM entities WHERE id=?").run(from.id);
           db.exec("COMMIT");
         } catch (e) {
@@ -1174,14 +1397,19 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, { merged: true, into: into.display_name });
       }
 
-      // Every spelling the vault knows for one person.
+      // Every spelling the vault knows for one person, typed and with
+      // provenance (work order 05 §B.6: aliases grouped by type, source
+      // visible, rejected ones shown struck through rather than hidden —
+      // they are evidence).
       if (p.startsWith("/v1/people/") && p.endsWith("/aliases") && req.method === "GET") {
-        const id = p.split("/")[3];
-        return send(res, 200, {
-          aliases: db
-            .prepare("SELECT alias, source, created_at FROM entity_aliases WHERE entity_id=? ORDER BY id")
-            .all(id),
-        });
+        const id = decodeURIComponent(p.split("/")[3]);
+        const aliases = db
+          .prepare(
+            `SELECT id, alias, normalised, alias_type, source, status, confidence, created_at, last_seen_at
+             FROM entity_aliases WHERE entity_id=? ORDER BY alias_type, id`,
+          )
+          .all(id);
+        return send(res, 200, { aliases });
       }
 
       // ── gmail dropbox ────────────────────────────────────────────────────
@@ -1328,13 +1556,20 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           const rows = db
             .prepare(
               `SELECT impact_bucket,
-                      SUM(amount_minor) AS amount_minor,
+                      -- Home-currency sums, same rule as snapshot(): converted
+                      -- amounts count at their home value; unconverted foreign
+                      -- and currency-uncertain rows are excluded rather than
+                      -- silently added as if they were ${pack.currency.code}.
+                      SUM(CASE
+                            WHEN home_amount_minor IS NOT NULL THEN home_amount_minor
+                            WHEN currency = ? THEN amount_minor
+                            ELSE NULL END) AS amount_minor,
                       COUNT(*)          AS transactions
                  FROM transactions
                 WHERE ${clauses.join(" AND ")}
                 GROUP BY impact_bucket`,
             )
-            .all(...args) as Array<{
+            .all(pack.currency.code, ...args) as Array<{
             impact_bucket: string | null;
             amount_minor: number;
             transactions: number;
@@ -1388,7 +1623,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
 
         case "/v1/snapshot":
-          return send(res, 200, snapshot(db, resolvePeriod(pack, url.searchParams)));
+          return send(res, 200, snapshot(db, resolvePeriod(pack, url.searchParams), pack.currency.code));
 
         case "/v1/periods": {
           // What the UI's period selector offers. Months come from the data,
@@ -1549,6 +1784,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               question: `Only one document backs this ${r.counterparty_name ?? "payment"}. Is there a matching receipt or statement line?`,
               transaction_id: r.id,
               amount_minor: r.amount_minor,
+              // The amount means nothing detached from its currency — the
+              // review card renders both, or flags the currency as uncertain
+              // when the source document never stated one.
+              currency: r.currency,
               occurred_at: r.occurred_at,
               counterparty: r.counterparty_name,
             });
@@ -1602,6 +1841,91 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
 
         default: {
+          // getDocumentDetail — /v1/documents/<id>/detail
+          //
+          // Everything the Document Review evidence summary shows (work order
+          // 05 §A.3/§Track C): the raw extraction (immutable reading), the
+          // winning claim per field with provenance, the resolved parties,
+          // and the transactions this document evidences. The client renders
+          // source amount + source currency from here and never invents one.
+          const detailMatch = p.match(/^\/v1\/documents\/([^/]+)\/detail$/);
+          if (detailMatch) {
+            const docId = decodeURIComponent(detailMatch[1]);
+            const doc = db
+              .prepare(
+                `SELECT id, original_filename, ext, doc_type, source, received_at,
+                        converted_at, analysed_at, extraction_json, markdown_chars
+                   FROM documents WHERE id=?`,
+              )
+              .get(docId) as Record<string, unknown> | undefined;
+            if (!doc) return send(res, 404, { error: "document_not_found", document_id: docId });
+
+            const extraction = doc.extraction_json ? safeParse(doc.extraction_json as string) : null;
+            doc.extraction_json = undefined;
+            doc.extraction = extraction;
+
+            // Provenance per editable field, and the value that WINS (claim
+            // over extraction) — the summary shows the winning value and a
+            // "who said so" badge, never the raw model output alone.
+            const claims = claimsFor(db, "document", docId);
+            const claimMap = Object.fromEntries(
+              Object.entries(claims).map(([field, c]) => [
+                field,
+                { value: c.value, source: c.source, status: c.status, confidence: c.confidence, at: c.created_at },
+              ]),
+            );
+            const x = (extraction ?? {}) as Record<string, unknown>;
+            const effective = (field: string, extractionKey?: string) => {
+              const c = claims[field];
+              if (c && c.value !== null) return { value: c.value, source: c.source, status: c.status };
+              const v = extractionKey ? x[extractionKey] : x[field];
+              return v === undefined || v === null
+                ? null
+                : { value: String(v), source: "ai" as const, status: "proposed" as const };
+            };
+            const parties = db
+              .prepare(
+                `SELECT dp.role, e.id, e.kind, e.display_name, e.status
+                   FROM document_parties dp JOIN entities e ON e.id = dp.entity_id
+                  WHERE dp.document_id=? ORDER BY dp.role, e.display_name`,
+              )
+              .all(docId);
+            const transactions = db
+              .prepare(
+                `SELECT t.id, t.occurred_at, t.amount_minor, t.currency, t.direction,
+                        t.home_amount_minor, t.fx_rate, t.fx_date, t.fx_source,
+                        td.evidence_role, td.match_score, td.linked_by,
+                        e.display_name AS counterparty_name
+                   FROM transaction_documents td
+                   JOIN transactions t ON t.id = td.transaction_id
+                   LEFT JOIN entities e ON e.id = t.counterparty_entity_id
+                  WHERE td.document_id=? ORDER BY t.occurred_at DESC`,
+              )
+              .all(docId);
+
+            return send(res, 200, {
+              document: doc,
+              extraction,
+              claims: claimMap,
+              editable_fields: [...allowedFields("document")],
+              effective: {
+                doc_type: effective("doc_type"),
+                amount_minor: effective("amount_minor"),
+                currency: effective("currency"),
+                document_date: effective("document_date", "occurred_at"),
+                posted_at: effective("posted_at"),
+                counterparty: effective("counterparty", "counterparty_descriptor"),
+                person: effective("person"),
+                reference_ids: (x.reference_ids as Record<string, string> | undefined) ?? {},
+                subtotal_minor: x.subtotal_minor ?? null,
+                tax_minor: x.tax_minor ?? null,
+                line_items: x.line_items ?? null,
+              },
+              parties,
+              transactions,
+            });
+          }
+
           // getDocumentPageInfo — /v1/documents/<id>/pageinfo
           //
           // How many pages, and can they be rendered? Separate from /page
@@ -2030,6 +2354,7 @@ export function resolvePeriod(
 export function snapshot(
   db: DatabaseSync,
   period: { from: string | null; to: string | null; label: string; key: string },
+  homeCurrency = "INR",
 ) {
   const where = period.from && period.to ? "AND occurred_at BETWEEN ? AND ?" : "";
   const args = period.from && period.to ? [period.from, period.to] : [];
@@ -2040,11 +2365,22 @@ export function snapshot(
                    OR lower(COALESCE(category_id,'')) LIKE '%invest%'
                    OR lower(COALESCE(impact_bucket,'')) LIKE '%invest%')`;
 
+  // Totals are HOME-CURRENCY figures (work order 05 §A.2): a foreign-currency
+  // transaction contributes its converted home_amount_minor when one exists,
+  // and is otherwise EXCLUDED from the sum and reported under `unconverted`
+  // instead — silently adding USD 597.85 to a rupee total is exactly the bug
+  // this work order exists to kill. Rows with no stated currency are
+  // excluded too: "currency uncertain" is not "rupees".
+  const HOME_AMOUNT = `CASE
+    WHEN home_amount_minor IS NOT NULL THEN home_amount_minor
+    WHEN currency = '${homeCurrency.replace(/'/g, "''")}' THEN amount_minor
+    ELSE NULL END`;
+
   const sum = (dir: string, invest: boolean) =>
     (
       db
         .prepare(
-          `SELECT COALESCE(SUM(amount_minor),0) v FROM transactions
+          `SELECT COALESCE(SUM(${HOME_AMOUNT}),0) v FROM transactions
            WHERE direction=? AND status <> 'scheduled'
              AND ${invest ? INVEST : `NOT ${INVEST}`} ${where}`,
         )
@@ -2055,11 +2391,24 @@ export function snapshot(
     (
       db
         .prepare(
-          `SELECT COALESCE(SUM(amount_minor),0) v FROM transactions
+          `SELECT COALESCE(SUM(${HOME_AMOUNT}),0) v FROM transactions
            WHERE direction=? AND status <> 'scheduled' ${where}`,
         )
         .get(dir, ...args) as { v: number }
     ).v;
+
+  // What the totals deliberately leave out, per currency — the honest
+  // remainder a converted total cannot speak for.
+  const unconvertedFor = (dir: string) =>
+    db
+      .prepare(
+        `SELECT currency, SUM(amount_minor) AS amount_minor, COUNT(*) AS transactions
+           FROM transactions
+          WHERE direction=? AND status <> 'scheduled' AND home_amount_minor IS NULL
+            AND (currency IS NULL OR currency <> ?) ${where}
+          GROUP BY currency ORDER BY currency`,
+      )
+      .all(dir, homeCurrency, ...args) as { currency: string | null; amount_minor: number; transactions: number }[];
 
   const countIn = (sql: string, extra: (string | number)[] = []) =>
     (db.prepare(sql).get(...extra) as { n: number }).n;
@@ -2095,7 +2444,14 @@ export function snapshot(
     income_documents: docsFor("in", false),
     spending_documents: docsFor("out", false),
     investment_documents: docsFor("out", true),
-    currency: "INR",
+    // The totals above are expressed in this currency. Individual rows keep
+    // their own source currency — this is the aggregate's unit, not theirs.
+    currency: homeCurrency,
+    unconverted: {
+      spending: unconvertedFor("out"),
+      income: unconvertedFor("in"),
+      transfers: unconvertedFor("transfer"),
+    },
     counts: {
       documents: countIn("SELECT COUNT(*) n FROM documents"),
       transactions: countIn(

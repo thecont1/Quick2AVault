@@ -55,7 +55,17 @@ export function classifyIdentifier(raw: string): IdentifierType | null {
 
 /** Comparable form for exact identifier matching. */
 export function normaliseIdentifier(type: IdentifierType, raw: string): string {
-  if (type === "phone") return raw.replace(/[^\d]/g, "").replace(/^91/, "").replace(/^0/, "");
+  if (type === "phone") {
+    const digits = raw.replace(/[^\d]/g, "");
+    // Strip the country/Trunk prefix ONLY when the length says it is one:
+    // 12 digits starting 91 = +91 mobile, 11 starting 0 = trunk-dialling
+    // form. The naive "always strip a leading 91" corrupts a genuine
+    // 10-digit mobile that happens to start with 91 into 8 digits, and two
+    // different people would then collide on the mangled string.
+    if (digits.length === 12 && digits.startsWith("91")) return digits.slice(2);
+    if (digits.length === 11 && digits.startsWith("0")) return digits.slice(1);
+    return digits;
+  }
   return raw.trim().toLowerCase();
 }
 
@@ -103,7 +113,7 @@ const FUZZY_CEIL = 1.0;
 export interface PersonResolution {
   id: string;
   /** How the id was reached, for logging and for the acceptance tests. */
-  matched_via: "identifier" | "alias" | "token_sort" | "fuzzy_question" | "created";
+  matched_via: "identifier" | "alias" | "token_sort" | "fuzzy_question" | "created" | "unresolved";
   /** A Learning question was raised (fuzzy band, co-occurrence, or a shared-identifier conflict). */
   asked: boolean;
   /** A shared identifier pointed at TWO different confirmed people — never auto-merged. */
@@ -117,13 +127,24 @@ function findByExactIdentifier(
   type: IdentifierType,
   norm: string,
 ): { entity_id: string } | undefined {
+  // Only CONFIRMED aliases resolve silently (work order 05 §B.4 step 1). A
+  // proposed alias is a hypothesis awaiting one Learning confirmation; a
+  // rejected one must never match again.
   return db
     .prepare(
-      "SELECT entity_id FROM entity_aliases WHERE kind='person' AND alias_type=? AND normalised=?",
+      "SELECT entity_id FROM entity_aliases WHERE kind='person' AND alias_type=? AND normalised=? AND status='confirmed'",
     )
     .get(type, norm) as { entity_id: string } | undefined;
 }
 
+/**
+ * Write an alias, honouring the lifecycle (work order 05 §B.2).
+ *
+ * Upsert semantics on the (kind, normalised) unique key: a re-observation
+ * bumps last_seen_at rather than duplicating the row, and a stronger source
+ * (user-taught or rule-learned) PROMOTES a proposed alias to confirmed. A
+ * rejected alias is never resurrected — the user already said no.
+ */
 function writeAlias(
   db: DatabaseSync,
   ports: Ports,
@@ -132,11 +153,34 @@ function writeAlias(
   normalised: string,
   type: IdentifierType | "name_variant",
   source: string,
+  status: "proposed" | "confirmed" = "confirmed",
 ): void {
+  const now = ports.clock.isoNow();
+  const existing = db
+    .prepare("SELECT id, entity_id, status FROM entity_aliases WHERE kind='person' AND normalised=?")
+    .get(normalised) as { id: number; entity_id: string; status: string } | undefined;
+
+  if (existing) {
+    if (existing.status === "rejected") return; // a 'no' is durable
+    if (existing.entity_id !== entityId) {
+      // Two people claiming one identifier is a conflict the resolver asks
+      // about; the writer never arbitrates it.
+      return;
+    }
+    // The FIRST-SEEN spelling stays as the display alias — it is evidence,
+    // and silently rewriting it would falsify the record of what documents
+    // actually printed. Only the lifecycle fields move.
+    db.prepare(
+      `UPDATE entity_aliases SET last_seen_at=?,
+         status = CASE WHEN ?='confirmed' AND status='proposed' THEN 'confirmed' ELSE status END
+       WHERE id=?`,
+    ).run(now, status, existing.id);
+    return;
+  }
   db.prepare(
-    `INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, created_at)
-     VALUES (?, 'person', ?, ?, ?, ?, ?)`,
-  ).run(entityId, alias, normalised, type, source, ports.clock.isoNow());
+    `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at, last_seen_at)
+     VALUES (?, 'person', ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(entityId, alias, normalised, type, source, status, now, now);
 }
 
 /**
@@ -188,6 +232,41 @@ export function resolvePerson(
   if (!trimmed) throw new Error("cannot resolve an empty person name");
   const norm = normaliseName(trimmed);
   const idValues = Object.values(identifiers ?? {}).filter(Boolean);
+
+  // ── 0. the "name" is itself an identifier ─────────────────────────────────
+  // A regression observed on a live vault: the extractor handed over
+  // "ms@thecontrarian.in" as a person NAME, and a second human called
+  // "ms@thecontrarian.in" was born next to the real Mahesh Shantaram. An
+  // email/phone/handle is never a name. If the identifier is known, link
+  // silently; otherwise attach the document to the Unidentified placeholder
+  // and ASK — one weak string must never mint a person (work order 05 §B.3).
+  // classifyIdentifier anchors on the WHOLE string, so a hit here means the
+  // "name" is exactly an email/phone/handle and nothing else. (Do NOT gate on
+  // token counts: normaliseName mangles "ms@x.in" into name-like tokens, so a
+  // token check never fires — that was the live regression.)
+  const nameAsIdentifier = classifyIdentifier(trimmed);
+  if (nameAsIdentifier) {
+    if (!(nameAsIdentifier === "email" && isGenericMailbox(trimmed))) {
+      const idNorm = normaliseIdentifier(nameAsIdentifier, trimmed);
+      const hit = findByExactIdentifier(db, nameAsIdentifier, idNorm);
+      if (hit) {
+        return { id: hit.entity_id, matched_via: "identifier", asked: false, conflict: false };
+      }
+    }
+    const placeholder = unidentifiedPerson(db, ports);
+    ask(db, ports, {
+      trigger: "unidentified_person",
+      question: `A document names only "${trimmed}" — no human name. Who is this?`,
+      context: {
+        document_id: documentId,
+        identifier: trimmed,
+        identifier_type: nameAsIdentifier ?? "unknown",
+        placeholder_entity_id: placeholder,
+      },
+      options: ["Assign to an existing person", "This is a new person", "Not a person"],
+    });
+    return { id: placeholder, matched_via: "unresolved", asked: true, conflict: false };
+  }
 
   // ── 1. exact identifier (email/phone/handle) ──────────────────────────────
   for (const raw of idValues) {
@@ -255,9 +334,16 @@ export function resolvePerson(
       const learned = appliedIdentifierRule(db, ports, idNorm, "person_identifier");
       if (learned === deterministic.id) {
         // Already taught and confirmed for this exact pair — apply silently.
+        // writeAlias promotes the proposed row (written when first asked) to
+        // confirmed, so the question is never re-asked.
         writeAlias(db, ports, deterministic.id, raw, idNorm, type, "learned");
         continue;
       }
+      // Record the observation as a PROPOSED alias before asking: the People
+      // tab's unresolved-alias count and the alias editor read these rows,
+      // and the evidence survives even if the question is never answered.
+      // Proposed aliases never resolve silently (findByExactIdentifier).
+      writeAlias(db, ports, deterministic.id, raw, idNorm, type, "auto-cooccurrence", "proposed");
       ask(db, ports, {
         trigger: "identifier_cooccurrence",
         question: `This document also lists "${raw}" for ${deterministic.display_name}. Save it as theirs?`,
@@ -333,7 +419,7 @@ function findDeterministicNameMatch(
   //    match once normalised, so this also covers a previously-seen spelling).
   const viaAlias = db
     .prepare(
-      "SELECT e.id, e.display_name, e.status FROM entity_aliases a JOIN entities e ON e.id=a.entity_id WHERE a.kind='person' AND a.normalised=?",
+      "SELECT e.id, e.display_name, e.status FROM entity_aliases a JOIN entities e ON e.id=a.entity_id WHERE a.kind='person' AND a.normalised=? AND a.status='confirmed'",
     )
     .get(norm) as { id: string; display_name: string; status: string } | undefined;
   if (viaAlias) return { ...viaAlias, via: "alias" };
@@ -354,6 +440,24 @@ function findDeterministicNameMatch(
     if (sortedTokens(e.display_name) === mine) return { ...e, via: "token_sort" };
   }
   return undefined;
+}
+
+export const UNIDENTIFIED_PERSON_ID = "ent_unidentified_person";
+
+/**
+ * The placeholder person for documents that name no identifiable human.
+ * Shared with api.ts's force-delete path, which reassigns evidence here too —
+ * one well-known id, so "who is unattached?" is one WHERE clause.
+ */
+export function unidentifiedPerson(db: DatabaseSync, ports: Ports): string {
+  const existing = db.prepare("SELECT 1 FROM entities WHERE id=?").get(UNIDENTIFIED_PERSON_ID);
+  if (!existing) {
+    db.prepare(
+      `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
+       VALUES (?, 'person', 'Unidentified', 'confirmed', 1.0, 0, ?)`,
+    ).run(UNIDENTIFIED_PERSON_ID, ports.clock.isoNow());
+  }
+  return UNIDENTIFIED_PERSON_ID;
 }
 
 function createCandidate(
@@ -383,4 +487,106 @@ function createCandidate(
   }
   ports.logger.info("person candidate created", { id, name });
   return id;
+}
+
+/**
+ * Apply a user-confirmed person correction from Document Review
+ * (work order 05 §Track C).
+ *
+ * The edit is DOCUMENT-SCOPED first: only this document's party link moves.
+ * But the user's answer is also a confirmed fact about the person, so the
+ * old printed spelling is retained as a CONFIRMED name_variant alias on the
+ * corrected person — that is what makes the next document carrying the same
+ * string resolve silently instead of being corrected again.
+ *
+ * The document's own extraction JSON and markdown are never touched; the
+ * correction lives in document_parties + entity_aliases + field_claims.
+ */
+export function applyPersonCorrection(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+  correctedName: string,
+  previousName?: string | null,
+): { person_id: string; display_name: string; created: boolean; relinked: number } {
+  const name = correctedName.trim();
+  if (!name) throw new Error("cannot correct to an empty person name");
+
+  // Resolve the TARGET deterministically — never fuzzy, never cross-kind.
+  const norm = normaliseName(name);
+  const target = findDeterministicNameMatch(db, name, norm);
+  let personId: string;
+  let created = false;
+  if (target) {
+    personId = target.id;
+    // A user correction confirms the person too.
+    db.prepare("UPDATE entities SET status='confirmed', updated_at=? WHERE id=?").run(
+      ports.clock.isoNow(),
+      personId,
+    );
+  } else {
+    personId = newId("ent");
+    db.prepare(
+      `INSERT INTO entities (id, kind, display_name, confidence, status, is_member, created_at, updated_at)
+       VALUES (?, 'person', ?, 1.0, 'confirmed', 0, ?, ?)`,
+    ).run(personId, name, ports.clock.isoNow(), ports.clock.isoNow());
+    writeAlias(db, ports, personId, name, norm, "name_variant", "user");
+    created = true;
+  }
+
+  // Relink THIS document's person parties away from the previously-resolved
+  // person. Only rows whose entity matches the previous name move — a
+  // document naming two people keeps the other one untouched.
+  let relinked = 0;
+  if (previousName?.trim()) {
+    const prevNorm = normaliseName(previousName);
+    const prevRows = db
+      .prepare(
+        `SELECT dp.entity_id, dp.role FROM document_parties dp
+           JOIN entities e ON e.id = dp.entity_id
+         WHERE dp.document_id=? AND e.kind='person' AND e.id<>?
+           AND (lower(e.display_name)=lower(?)
+                OR EXISTS (SELECT 1 FROM entity_aliases a
+                            WHERE a.entity_id=e.id AND a.kind='person' AND a.normalised=?))`,
+      )
+      .all(documentId, personId, previousName.trim(), prevNorm) as { entity_id: string; role: string }[];
+    for (const r of prevRows) {
+      db.prepare(
+        "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+      ).run(documentId, personId, r.role);
+      db.prepare(
+        "DELETE FROM document_parties WHERE document_id=? AND entity_id=? AND role=?",
+      ).run(documentId, r.entity_id, r.role);
+      relinked++;
+    }
+  } else {
+    // No prior name known (field was empty): attach in the weakest role.
+    db.prepare(
+      "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?, 'owner')",
+    ).run(documentId, personId);
+  }
+
+  // The old spelling is now KNOWN to name this person. Keep it as a
+  // confirmed alias so re-analysis and future documents resolve silently.
+  if (previousName?.trim() && normaliseName(previousName) !== norm) {
+    const prevNorm = normaliseName(previousName);
+    // The resolver may already have created a stray candidate carrying this
+    // spelling (the fuzzy path does exactly that). A USER correction
+    // outranks it: move the alias row to the confirmed person rather than
+    // leaving the evidence stranded on the candidate. This is not a merge —
+    // the stray entity and its other documents remain for explicit review.
+    db.prepare(
+      `UPDATE entity_aliases SET entity_id=?, status='confirmed', last_seen_at=?
+       WHERE kind='person' AND normalised=? AND entity_id<>?`,
+    ).run(personId, ports.clock.isoNow(), prevNorm, personId);
+    writeAlias(db, ports, personId, previousName.trim(), prevNorm, "name_variant", "user");
+  }
+
+  ports.logger.info("person correction applied", {
+    document_id: documentId,
+    person_id: personId,
+    created,
+    relinked,
+  });
+  return { person_id: personId, display_name: name, created, relinked };
 }
