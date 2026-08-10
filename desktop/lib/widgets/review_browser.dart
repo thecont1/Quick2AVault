@@ -728,19 +728,20 @@ class _Detail extends StatelessWidget {
           // switching documents or toggling Document/Markdown never shows a
           // stale document's figures.
           //
-          // Flexible with a maxHeight so a tall card (many line items, multiple
-          // parties) scrolls internally instead of squeezing the document pane
-          // below a usable preview size.
-          Flexible(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 220),
-              child: SingleChildScrollView(
-                child: _EvidenceCard(
-                  key: ValueKey('evidence-${doc.id}'),
-                  api: api,
-                  doc: doc,
-                  onChanged: onChanged,
-                ),
+          // No flex factor: the card takes only its intrinsic height (capped at
+          // 220px by the ConstrainedBox), and the Expanded document pane below
+          // gets ALL the remaining space. With a shared flex: 1 the two split
+          // the remaining height 50/50, leaving the document pane too small to
+          // read — the document must fit to height, the card must not steal
+          // that space.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 220),
+            child: SingleChildScrollView(
+              child: _EvidenceCard(
+                key: ValueKey('evidence-${doc.id}'),
+                api: api,
+                doc: doc,
+                onChanged: onChanged,
               ),
             ),
           ),
