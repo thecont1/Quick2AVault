@@ -1,9 +1,8 @@
 {
   "name": "quick2avault",
   "version": "2.0.0",
-  "productName": "Quick2AVault",
-  "description": "Local-first financial document vault: a daemon that reads your documents, and a Flutter desktop client that lets you correct it.",
   "private": true,
+  "description": "Local-first financial document vault: a daemon that reads your documents, and a Flutter desktop client that lets you correct it.",
   "type": "module",
   "scripts": {
     "daemon": "tsx daemon/main.ts",
@@ -19,7 +18,9 @@
     "status": "./start.sh --status",
     "app": "cd desktop && flutter run -d macos",
     "app:build": "cd desktop && flutter build macos --release",
-    "app:test": "cd desktop && flutter test"
+    "app:test": "cd desktop && flutter test",
+    "qa:combined": "tsx qa/combined/cli.ts",
+    "qa:combined:test": "tsx qa/combined/harness.smoke.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
@@ -37,11 +38,12 @@
     "tsx": "^4.20.5",
     "typescript": "^5.5.3"
   },
-  "engines": {
-    "node": ">=24"
-  },
   "overrides": {
     "brace-expansion": "^5.0.8"
   },
-  "packageManager": "npm@11.11.0+sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw=="
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "npm@11.11.0+sha512-82gRxKrh/eY5UnNorkTFcdBQAGpgjWehkfGVqAGlJjejEtJZGGJUqjo3mbBTNbc5BTnPKGVtGPBZGhElujX5cw==",
+  "productName": "Quick2AVault"
 }

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "H",
+  "order": 80,
+  "source": {
+    "filename": "fixture-H-paytm-contract-note.pdf",
+    "fixturePath": "fixtures/pdfs/fixture-H-paytm-contract-note.pdf"
+  },
+  "expectations": {
+    "disposition": "accepted",
+    "sourcePolicy": "until_complete",
+    "capabilities": ["contract_note_extractor"]
+  }
+}

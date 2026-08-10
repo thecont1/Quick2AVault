@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "G",
+  "documentType": "tax_invoice",
+  "confidenceAtLeast": 0.9,
+  "fields": {
+    "issuer": {
+      "name": "SHANTARAM MAHESH",
+      "kind": "person",
+      "address": "No. 3 Anugraha, 15th Cross, 5th Main, KR Garden, Murgeshpalya, Bangalore - 560 017, Karnataka, INDIA",
+      "contact": "Mahesh Shantaram",
+      "email": "ms@thecontrarian.in",
+      "gstin": "29AONPS5418R1ZS"
+    },
+    "vendor": {
+      "name": "PetaSight Inc.",
+      "kind": "organisation",
+      "address": "8 The Green, Suite R, Dover, DE 19901, USA",
+      "contact": "Sunil Hegde",
+      "email": "sunil.h@tagfact.com"
+    },
+    "documentNumber": "INV/2026-27/01",
+    "documentDate": "2026-04-01",
+    "dueDate": "2026-04-15",
+    "financialYear": "FY 2026-27",
+    "currency": "USD",
+    "amountMinor": 169131,
+    "subtotalMinor": 169131,
+    "taxMinor": 0,
+    "placeOfSupply": "Export of Service",
+    "lineItems": [
+      {
+        "description": "Data Science consulting services (March 4 - 31)",
+        "hsnSac": "998393",
+        "quantity": "0.3043",
+        "rateMinor": 539700,
+        "amountMinor": 164231
+      },
+      {
+        "description": "Kilo Pass subscription (Reimbursement)",
+        "hsnSac": "998393",
+        "quantity": "1",
+        "rateMinor": 4900,
+        "amountMinor": 4900
+      }
+    ],
+    "bank": {
+      "institution": "HDFC Bank",
+      "branch": "Chandra Layout, Bangalore - 560 040",
+      "accountNumber": "50200035215675",
+      "last4": "5675",
+      "type": "bank",
+      "ifsc": "HDFC0001757",
+      "swift": "HDFCINBB"
+    },
+    "currencyConversion": {
+      "required": true,
+      "originalAmountMinor": 169131,
+      "originalCurrency": "USD",
+      "targetCurrency": "INR",
+      "rateDate": "2026-04-01",
+      "source": "frankfurter"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "B",
+  "order": 20,
+  "scenario": "identity_collapse",
+  "source": {
+    "filename": "b-mahesh-1.txt",
+    "text": "Invoice for Mahesh Shantaram. Total INR 1,000.00"
+  },
+  "sources": [
+    { "filename": "b-mahesh-2.txt", "text": "Receipt for Shantaram Mahesh. Total INR 2,000.00" },
+    { "filename": "b-mahesh-3.txt", "text": "Invoice for M. Shantaram. Total INR 3,000.00" },
+    { "filename": "b-mahesh-4.txt", "text": "Invoice for Mahesh S. Total INR 4,000.00" },
+    { "filename": "b-mahesh-5.txt", "text": "Invoice for MS. Total INR 5,000.00" }
+  ],
+  "expectations": {
+    "disposition": "accepted",
+    "capabilities": ["entity_resolution", "document_parties"]
+  }
+}

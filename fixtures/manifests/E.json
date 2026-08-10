@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "E",
+  "order": 50,
+  "scenario": "duplicate",
+  "source": {
+    "filename": "e-original.txt",
+    "text": "Invoice E\nInvoice Number: E-001\nTotal INR 100.00"
+  },
+  "sources": [
+    { "filename": "e-duplicate.txt", "text": "Invoice E\nInvoice Number: E-001\nTotal INR 100.00" }
+  ],
+  "expectations": { "disposition": "duplicate", "sourcePolicy": "archived" }
+}

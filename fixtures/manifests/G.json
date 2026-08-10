@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "G",
+  "order": 70,
+  "source": {
+    "filename": "fixture-G-pet_asight-tax-invoice.pdf",
+    "fixturePath": "fixtures/pdfs/fixture-G-pet_asight-tax-invoice.pdf"
+  },
+  "expectations": {
+    "disposition": "accepted",
+    "sourcePolicy": "until_complete",
+    "capabilities": ["tax_invoice_extractor", "currency_conversion"]
+  }
+}

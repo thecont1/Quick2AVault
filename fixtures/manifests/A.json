@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "A",
+  "order": 10,
+  "scenario": "ambiguous_alias",
+  "source": {
+    "filename": "a-ambiguous-alias.txt",
+    "text": "Invoice\nIssuer: Mahesh Shantaram\nEmail: ms@thecontrarian.in\nAlternative: techrose@gmail.com\nTotal: USD 100.00"
+  },
+  "expectations": {
+    "disposition": "accepted",
+    "sourcePolicy": "until_complete",
+    "capabilities": ["pipeline_events", "learning.question", "document_parties"]
+  }
+}
