@@ -29,6 +29,11 @@ class _SetupViewState extends State<SetupView> {
   final _model = TextEditingController();
   final _apiKey = TextEditingController();
   final _gmail = TextEditingController();
+  // Work order 07 §D2: secondary (vision/fallback) model.
+  final _secBaseUrl = TextEditingController();
+  final _secModel = TextEditingController();
+  final _secApiKey = TextEditingController();
+  bool _obscureSec = true;
 
   Map<String, dynamic>? _settings;
   bool _loading = true;
@@ -47,10 +52,13 @@ class _SetupViewState extends State<SetupView> {
       final s = await widget.api.settings();
       if (!mounted) return;
       final ai = (s['ai'] ?? const {}) as Map<String, dynamic>;
+      final sec = (ai['secondary'] ?? const {}) as Map<String, dynamic>;
       setState(() {
         _settings = s;
         _baseUrl.text = (ai['base_url'] ?? '') as String;
         _model.text = (ai['model'] ?? '') as String;
+        _secBaseUrl.text = (sec['base_url'] ?? '') as String;
+        _secModel.text = (sec['model'] ?? '') as String;
         final gm = (s['gmail'] ?? const {}) as Map<String, dynamic>;
         _gmail.text = (gm['local_part'] ?? '') as String;
         _loading = false;
@@ -64,6 +72,7 @@ class _SetupViewState extends State<SetupView> {
     setState(() { _saving = true; _message = null; });
     try {
       final typedKey = _apiKey.text.trim();
+      final typedSecKey = _secApiKey.text.trim();
       final r = await widget.api.saveSettings(
         aiBaseUrl: _baseUrl.text.trim(),
         model: _model.text.trim(),
@@ -73,15 +82,20 @@ class _SetupViewState extends State<SetupView> {
         // Clearing is an explicit action — see _clearKey.
         apiKey: typedKey.isEmpty ? null : typedKey,
         gmailLocalPart: _gmail.text.trim(),
+        // Secondary model: same rule — only send the key if the user typed one.
+        secondaryBaseUrl: _secBaseUrl.text.trim(),
+        secondaryModel: _secModel.text.trim(),
+        secondaryApiKey: typedSecKey.isEmpty ? null : typedSecKey,
       );
       if (!mounted) return;
       final available = r['ai_available'] == true;
       setState(() {
         _saving = false;
         _apiKey.clear();
+        _secApiKey.clear();
         // The daemon reconfigures its provider in place, so a saved key is
         // live immediately — no restart message any more.
-        _message = typedKey.isNotEmpty
+        _message = typedKey.isNotEmpty || typedSecKey.isNotEmpty
             ? (available ? 'Saved. AI is active.' : 'Saved, but the key was not accepted.')
             : 'Saved.';
       });
@@ -131,12 +145,16 @@ class _SetupViewState extends State<SetupView> {
     _model.dispose();
     _apiKey.dispose();
     _gmail.dispose();
+    _secBaseUrl.dispose();
+    _secModel.dispose();
+    _secApiKey.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final ai = (_settings?['ai'] ?? const {}) as Map<String, dynamic>;
+    final sec = (ai['secondary'] ?? const {}) as Map<String, dynamic>;
     final vault = (_settings?['vault'] ?? const {}) as Map<String, dynamic>;
     final juris = (_settings?['jurisdiction'] ?? const {}) as Map<String, dynamic>;
 
@@ -240,6 +258,45 @@ class _SetupViewState extends State<SetupView> {
                                       : VaultColors.ok)),
                         ),
                     ]),
+
+                    // ── Secondary (vision/fallback) model ────────────────────
+                    const SizedBox(height: 28),
+                    const _SectionTitle('Secondary Model (Vision / Fallback)'),
+                    const _Hint(
+                      'An optional second LLM for vision tasks or as a fallback '
+                      'when the primary model is unavailable. Leave blank to use '
+                      'only the primary model. Shares the primary base URL if '
+                      'left empty.',
+                    ),
+                    const SizedBox(height: 14),
+                    _Field(
+                      label: 'Base URL',
+                      hint: 'same as primary  (default)',
+                      controller: _secBaseUrl,
+                    ),
+                    const SizedBox(height: 12),
+                    _Field(
+                      label: 'Model',
+                      hint: 'claude-haiku-4 or a vision model',
+                      controller: _secModel,
+                    ),
+                    const SizedBox(height: 12),
+                    _Field(
+                      label: 'API Key',
+                      hint: (sec['api_key_set'] == true)
+                          ? 'stored ${sec['api_key_hint']} — type to replace'
+                          : 'sk-ant-…  (optional)',
+                      controller: _secApiKey,
+                      obscure: _obscureSec,
+                      trailing: IconButton(
+                        icon: Icon(_obscureSec ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                            size: 15, color: VaultColors.tertiary),
+                        onPressed: () => setState(() => _obscureSec = !_obscureSec),
+                        splashRadius: 14,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _SecondaryStatusRow(sec: sec),
 
                     const SizedBox(height: 28),
                     const _SectionTitle('People'),
@@ -533,6 +590,34 @@ class _StatusRow extends StatelessWidget {
         const Text('(key from environment)',
             style: TextStyle(fontSize: 10.5, color: VaultColors.faint)),
       ],
+    ]);
+  }
+}
+
+class _SecondaryStatusRow extends StatelessWidget {
+  final Map<String, dynamic> sec;
+  const _SecondaryStatusRow({required this.sec});
+
+  @override
+  Widget build(BuildContext context) {
+    final configured = sec['configured'] == true;
+    if (!configured) {
+      return const Row(children: [
+        Icon(Icons.add_circle_outline, size: 13, color: VaultColors.faint),
+        SizedBox(width: 8),
+        Text('Not configured — primary model only',
+            style: TextStyle(fontSize: 11.5, color: VaultColors.faint)),
+      ]);
+    }
+    return Row(children: [
+      Container(width: 6, height: 6,
+          decoration: const BoxDecoration(
+              color: VaultColors.ok, shape: BoxShape.circle)),
+      const SizedBox(width: 8),
+      Text(
+        'Configured · ${sec['model'] ?? ''}',
+        style: const TextStyle(fontSize: 11.5, color: VaultColors.secondary),
+      ),
     ]);
   }
 }
