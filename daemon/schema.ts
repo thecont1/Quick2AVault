@@ -371,6 +371,7 @@ CREATE TABLE IF NOT EXISTS intake_events (
   source_reference   TEXT,
   original_filename  TEXT,
   received_path      TEXT,
+  consume_source     INTEGER NOT NULL DEFAULT 0,
   mime_type          TEXT,
   byte_size          INTEGER,
   reason_code        TEXT,
@@ -803,6 +804,7 @@ export function migrate(db: DatabaseSync): void {
   addIntakeCol("source_reference", "TEXT");
   addIntakeCol("original_filename", "TEXT");
   addIntakeCol("received_path", "TEXT");
+  addIntakeCol("consume_source", "INTEGER NOT NULL DEFAULT 0");
   addIntakeCol("mime_type", "TEXT");
   addIntakeCol("byte_size", "INTEGER");
   addIntakeCol("reason_code", "TEXT");

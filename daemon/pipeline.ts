@@ -11,6 +11,7 @@ import type { Ports } from "./ports.js";
 import type { AiProvider } from "./ai-provider.js";
 import { EXTRACTION_VERSION } from "./extraction-contract.js";
 import { recordTransaction, resolveEntity } from "./ledger.js";
+import { resolvePerson } from "./identity.js";
 import { findMatches, linkEvidence, AUTO_LINK, REVIEW_FLOOR } from "./matcher.js";
 import { ask } from "./learning.js";
 import { flattenExtraction, hashText, indexDocument } from "./search.js";
@@ -19,6 +20,16 @@ import { embedDocument } from "./embeddings.js";
 import { parseStatementMarkdown, stageStatementLines, reconcileStatement } from "./statements.js";
 import { loadPack } from "./jurisdiction.js";
 import { triage, dispositionToIntakeKind, type TriageResult } from "./triage.js";
+import {
+  extractTypedDocument,
+  generateLearningQuestions,
+  impactFor,
+  transitionPipeline,
+  type LearningAmbiguity,
+  type PipelineState,
+  type TypedExtraction,
+} from "./workorders.js";
+import { setDocumentParty, writeClaim, type DocumentPartyRole } from "./claims.js";
 
 /**
  * Intake disposition — work order 06 §3. `added` is kept as an alias for
@@ -197,6 +208,65 @@ async function cheapText(filePath: string, ext: string): Promise<string> {
   return "";
 }
 
+function transitionIntakePipeline(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+  toState: PipelineState,
+  source: string,
+  reason?: string,
+): void {
+  const result = transitionPipeline(db, {
+    documentId,
+    toState,
+    timestamp: ports.clock.isoNow(),
+    source,
+    reason,
+  });
+  if (!result.changed || !result.event) return;
+  ports.bus.publish({
+    type: "PipelineStateChanged",
+    document_id: documentId,
+    from_state: result.event.fromState,
+    to_state: result.event.toState,
+    source,
+    reason: result.event.reason ?? null,
+    at: result.event.timestamp,
+  });
+}
+
+function pipelineSource(db: DatabaseSync, documentId: string): string {
+  return (
+    db.prepare("SELECT source FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1").get(documentId) as
+      | { source: string }
+      | undefined
+  )?.source ?? "pipeline";
+}
+
+async function removeCompletedSource(db: DatabaseSync, ports: Ports, documentId: string): Promise<void> {
+  const row = db
+    .prepare(
+      "SELECT received_path, consume_source FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1",
+    )
+    .get(documentId) as { received_path: string | null; consume_source: number } | undefined;
+  if (!row?.consume_source || !row.received_path) return;
+  try {
+    await fs.unlink(row.received_path);
+    ports.logger.info("removed watched source after complete", {
+      document_id: documentId,
+      source_path: row.received_path,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      ports.logger.warn("pipeline completed but watched source could not be removed", {
+        document_id: documentId,
+        source_path: row.received_path,
+        err: (error as Error).message,
+      });
+    }
+  }
+}
+
 /**
  * P0 — synchronous intake with deterministic triage (work order 06 §4).
  *
@@ -219,13 +289,16 @@ export async function ingestFile(
   const source = opts.source ?? "folder";
   const filename = path.basename(filePath);
   const now = ports.clock.isoNow();
+  const pipelineDocumentId = newId("doc");
 
   // ── record the receipt FIRST so a crash mid-intake leaves an audit trail ──
   const intakeId = recordIntakeReceived(db, ports, {
+    documentId: pipelineDocumentId,
     source,
     sourceReference: opts.externalId,
     filename,
     receivedPath: filePath,
+    consumeSource: opts.consumeSource === true,
   });
   ports.bus.publish({
     type: "IntakeReceived",
@@ -242,6 +315,7 @@ export async function ingestFile(
       await stableSize(filePath);
     }
     setIntakeState(db, ports, intakeId, "stable");
+    transitionIntakePipeline(db, ports, pipelineDocumentId, "stable", source);
 
     // ── 2. SHA-256 + metadata ──────────────────────────────────────────────
     const buf = await fs.readFile(filePath);
@@ -250,6 +324,7 @@ export async function ingestFile(
     const mimeType = detectMime(filename, buf);
     updateIntakeHashed(db, ports, intakeId, { sha256, mimeType, byteSize: buf.length, ext });
     setIntakeState(db, ports, intakeId, "hashed");
+    transitionIntakePipeline(db, ports, pipelineDocumentId, "hashed", source);
 
     // ── 3. exact duplicate lookup (§4, §7) ─────────────────────────────────
     // Source-level idempotency (Gmail message id, invoice number) is checked
@@ -260,6 +335,7 @@ export async function ingestFile(
         .prepare("SELECT document_id FROM source_events WHERE source=? AND external_id=?")
         .get(source, opts.externalId) as { document_id?: string } | undefined;
       if (seen) {
+        transitionIntakePipeline(db, ports, pipelineDocumentId, "duplicate", source, "external_id seen");
         return await finalizeDuplicate(db, ports, intakeId, filename, sha256, seen.document_id!, source, opts, filePath, "external_id seen");
       }
     }
@@ -268,6 +344,7 @@ export async function ingestFile(
       | { id: string }
       | undefined;
     if (existing) {
+      transitionIntakePipeline(db, ports, pipelineDocumentId, "duplicate", source, "sha256 match");
       return await finalizeDuplicate(db, ports, intakeId, filename, sha256, existing.id, source, opts, filePath, "sha256 match");
     }
 
@@ -275,6 +352,7 @@ export async function ingestFile(
     const text = await cheapText(filePath, ext);
     const result = triage({ filename, mimeType, byteSize: buf.length, bytes: buf, text, source });
     setIntakeState(db, ports, intakeId, "triaged");
+    transitionIntakePipeline(db, ports, pipelineDocumentId, "triaged", source);
     ports.bus.publish({
       type: "IntakeTriaged",
       intake_id: intakeId,
@@ -290,19 +368,26 @@ export async function ingestFile(
 
     // ── 5a. IRRELEVANT → preserve under Irrelevant/<date>/, never analyse ──
     if (result.disposition === "irrelevant") {
+      transitionIntakePipeline(db, ports, pipelineDocumentId, "irrelevant", source, result.reason);
       return await finalizeIrrelevant(db, ports, intakeId, filename, sha256, buf, result, source, opts, filePath, ext, mimeType);
     }
 
     // ── 5b. FAILED → retain source, record reason, never delete ────────────
     if (result.disposition === "failed") {
+      transitionIntakePipeline(db, ports, pipelineDocumentId, "failed", source, result.reason);
       return await finalizeFailed(db, ports, intakeId, filename, source, result.reason);
     }
 
     // ── 5c. ACCEPTED → archive under Raw/<date>/, record document, enqueue ──
-    return await finalizeAccepted(db, ports, intakeId, filename, sha256, buf, result, source, opts, filePath, ext, mimeType, now);
+    return await finalizeAccepted(db, ports, pipelineDocumentId, intakeId, filename, sha256, buf, result, source, opts, filePath, ext, mimeType, now);
   } catch (err) {
     const msg = (err as Error)?.message ?? String(err);
     ports.logger.error("P0 intake failed", { filename, err: msg });
+    try {
+      transitionIntakePipeline(db, ports, pipelineDocumentId, "failed", source, msg);
+    } catch {
+      // Preserve the original intake error when a terminal state was already recorded.
+    }
     // A triage/intake failure never deletes or loses the original (§4). The
     // file stays where it is — visible, retryable, never silently swallowed.
     return await finalizeFailed(db, ports, intakeId, filename, source, msg);
@@ -314,14 +399,30 @@ export async function ingestFile(
 function recordIntakeReceived(
   db: DatabaseSync,
   ports: Ports,
-  info: { source: string; sourceReference?: string; filename: string; receivedPath: string },
+  info: {
+    documentId: string;
+    source: string;
+    sourceReference?: string;
+    filename: string;
+    receivedPath: string;
+    consumeSource: boolean;
+  },
 ): number {
   const now = ports.clock.isoNow();
   const r = db.prepare(
     `INSERT INTO intake_events
-       (kind, filename, source, source_reference, received_path, processing_state, created_at, updated_at)
-     VALUES ('failed', ?, ?, ?, ?, 'received', ?, ?)`,
-  ).run(info.filename, info.source, info.sourceReference ?? null, info.receivedPath, now, now);
+       (kind, filename, source, source_reference, received_path, consume_source, processing_state, created_at, updated_at)
+     VALUES ('failed', ?, ?, ?, ?, ?, 'received', ?, ?)`,
+  ).run(
+    info.filename,
+    info.source,
+    info.sourceReference ?? null,
+    info.receivedPath,
+    info.consumeSource ? 1 : 0,
+    now,
+    now,
+  );
+  transitionIntakePipeline(db, ports, info.documentId, "received", info.source);
   // 'failed' is the safe default until triage upgrades it; a crash between
   // here and the finalizer leaves an honest "this did not complete" row rather
   // than a misleading 'accepted'.
@@ -485,6 +586,7 @@ function finalizeIntakeRow(
 async function finalizeAccepted(
   db: DatabaseSync,
   ports: Ports,
+  documentId: string,
   intakeId: number,
   filename: string,
   sha256: string,
@@ -497,7 +599,7 @@ async function finalizeAccepted(
   mimeType: string,
   now: string,
 ): Promise<IntakeResult> {
-  const id = newId("doc");
+  const id = documentId;
   const rawDir = ports.paths.rawDir(dateKey(ports.clock.now()));
   // Keep the ORIGINAL filename. Raw/ is browsable in Finder; "doc_9f2f5429.pdf"
   // tells a human nothing, "Proton Mail invoice 21145650.pdf" tells them everything.
@@ -520,20 +622,6 @@ async function finalizeAccepted(
   if (opts.externalId) {
     db.prepare("INSERT OR REPLACE INTO source_events(source,external_id,document_id,created_at) VALUES(?,?,?,?)")
       .run(source, opts.externalId, id, now);
-  }
-
-  // Only now, with a verified copy in the vault, is it safe to empty the
-  // inbox. Files pushed via the API are left where they are.
-  if (opts.consumeSource) {
-    try {
-      await fs.unlink(filePath);
-      ports.logger.info("filed", { filename, into: rawPath });
-    } catch (err) {
-      ports.logger.warn("archived but could not clear source", {
-        filename,
-        err: (err as Error)?.message,
-      });
-    }
   }
 
   updateIntakeTriaged(db, ports, intakeId, result);
@@ -1247,6 +1335,106 @@ function inferConverter(ext: string | null): { converter: string; version: strin
   return { converter: "anydoc", version: "anydoc@unknown" };
 }
 
+function writeTypedClaim(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+  field: string,
+  value: unknown,
+  confidence: number,
+): void {
+  if (value === undefined || value === null) return;
+  try {
+    writeClaim(db, ports, {
+      subject: "document",
+      subjectId: documentId,
+      field,
+      value: typeof value === "string" ? value : JSON.stringify(value),
+      source: "rule",
+      confidence,
+      provenanceRef: `typed-extractor:${field}`,
+    });
+  } catch (error) {
+    ports.logger.warn("typed claim not written", { document_id: documentId, field, err: (error as Error).message });
+  }
+}
+
+function persistTypedExtraction(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+  extraction: TypedExtraction,
+): void {
+  const confidence = extraction.confidence;
+  const claims: Array<[string, unknown]> = [
+    ["documentType", extraction.documentType],
+    ["documentNumber", extraction.documentNumber ?? extraction.contractNoteNumber],
+    ["documentDate", extraction.documentDate ?? extraction.tradeDate],
+    ["currency", extraction.currency],
+    ["amount_minor", extraction.amountMinor],
+    ["lineItems", extraction.lineItems],
+    ["trades", extraction.trades],
+    ["financialImpact", impactFor(extraction.documentType, extraction.defaultImpactBucket, extraction.amountMinor ?? 0, extraction.currency ?? "INR")],
+  ];
+  for (const [field, value] of claims) writeTypedClaim(db, ports, documentId, field, value, confidence);
+
+  const parties: Array<{ name?: string; kind: "person" | "organisation"; role: DocumentPartyRole; identifiers?: Record<string, string> }> = [];
+  if (extraction.issuer) parties.push({ name: extraction.issuer.name, kind: "person", role: "issuer", identifiers: { email: extraction.issuer.email ?? "", gstin: extraction.issuer.gstin ?? "" } });
+  if (extraction.client) parties.push({ name: extraction.client.name, kind: "person", role: "owner", identifiers: { pan: extraction.client.pan ?? "", ucc: extraction.client.ucc ?? "" } });
+  if (extraction.vendor) parties.push({ name: extraction.vendor.name, kind: "organisation", role: "counterparty", identifiers: { email: extraction.vendor.email ?? "" } });
+  else if (extraction.broker) parties.push({ name: extraction.broker.name, kind: "organisation", role: "counterparty", identifiers: { pan: extraction.broker.pan ?? "", gstin: extraction.broker.gstin ?? "" } });
+  for (const party of parties) {
+    if (!party.name) continue;
+    const identifiers = Object.fromEntries(Object.entries(party.identifiers ?? {}).filter(([, value]) => value));
+    const entityId = party.kind === "person"
+      ? resolvePerson(db, ports, party.name, identifiers, documentId).id
+      : resolveEntity(db, ports, party.name, party.kind, { identifiers });
+    try {
+      setDocumentParty(db, ports, {
+        documentId,
+        entityId,
+        role: party.role,
+        confidence,
+        provenance: "rule-derived",
+        editedBy: "typed-extractor",
+      });
+    } catch (error) {
+      ports.logger.warn("typed party not written", { document_id: documentId, name: party.name, err: (error as Error).message });
+    }
+  }
+  db.prepare("UPDATE documents SET doc_type=?, extraction_json=COALESCE(extraction_json,?), extraction_version=COALESCE(extraction_version,?), analysed_at=COALESCE(analysed_at,?) WHERE id=?")
+    .run(extraction.documentType, JSON.stringify(extraction), EXTRACTION_VERSION, ports.clock.isoNow(), documentId);
+}
+
+function typedLearningAmbiguities(db: DatabaseSync, documentId: string, extraction: TypedExtraction): LearningAmbiguity[] {
+  const ambiguities: LearningAmbiguity[] = [];
+  const entity = extraction.issuer?.name ?? extraction.client?.name ?? extraction.vendor?.name ?? extraction.broker?.name;
+  if (entity) {
+    ambiguities.push({
+      kind: "new-entity",
+      dedupeKey: `typed:new-entity:${entity.toLowerCase()}`,
+      prompt: `Is ${entity} a new entity in this vault?`,
+      sourceFact: { document_id: documentId, name: entity },
+      predictedRule: { kind: "entity-rule", payload: { match_key: entity.toLowerCase(), value: entity } },
+      noveltyScore: 0.8,
+      why: "The typed extractor found a party not yet confirmed by the user.",
+    });
+  }
+  const seenType = db.prepare("SELECT 1 FROM documents WHERE id<>? AND doc_type=? LIMIT 1").get(documentId, extraction.documentType);
+  if (!seenType) {
+    ambiguities.push({
+      kind: "known-vendor-new-doctype",
+      dedupeKey: `typed:doctype:${entity ?? "unknown"}:${extraction.documentType}`.toLowerCase(),
+      prompt: `Use ${extraction.documentType.replace(/_/g, " ")} for this document?`,
+      sourceFact: { document_id: documentId, document_type: extraction.documentType },
+      predictedRule: { kind: "document-type-rule", payload: { match_key: entity ?? documentId, value: extraction.documentType } },
+      noveltyScore: 0.75,
+      why: "This document type has not previously been confirmed for this party.",
+    });
+  }
+  return ambiguities;
+}
+
 /**
  * P2 — analysis. Claude reads canonical markdown v1 and returns extraction
  * JSON. Then: match against existing transactions (many documents, one rupee)
@@ -1268,16 +1456,26 @@ export async function runAnalyseJob(
     | undefined;
   if (!doc) throw new Error(`document ${documentId} not found`);
 
-  if (!ai.available) {
-    ports.logger.info("analyse: no AI provider, skipping", { document_id: documentId });
-    return;
-  }
   if (!doc.markdown_path || !doc.markdown_chars) {
     ports.logger.warn("analyse: no markdown to analyse", { document_id: documentId });
     return;
   }
 
   const markdown = await fs.readFile(doc.markdown_path, "utf-8");
+  const typed = extractTypedDocument(markdown);
+  persistTypedExtraction(db, ports, documentId, typed);
+  generateLearningQuestions(db, ports, {
+    documentId,
+    pipelineState: "analysing",
+    ambiguities: typedLearningAmbiguities(db, documentId, typed),
+  });
+  if (!ai.available) {
+    ports.logger.info("analyse: deterministic extraction complete; no AI provider", {
+      document_id: documentId,
+      document_type: typed.documentType,
+    });
+    return;
+  }
   const x = await ai.extract(markdown, doc.original_filename);
   const now = ports.clock.isoNow();
 
@@ -1575,9 +1773,23 @@ export class JobWorker {
           // Work order 07 §B1: update the aggregated intake state to reflect
           // the current stage, not just the raw job churn.
           updateIntakeForJob(this.db, this.ports, job.document_id, "processing", "converting");
+          transitionIntakePipeline(
+            this.db,
+            this.ports,
+            job.document_id,
+            "converting",
+            pipelineSource(this.db, job.document_id),
+          );
           await runConvertJob(this.db, this.ports, job.id, job.document_id);
         } else if (job.phase === "analyse") {
           updateIntakeForJob(this.db, this.ports, job.document_id, "processing", "analysing");
+          transitionIntakePipeline(
+            this.db,
+            this.ports,
+            job.document_id,
+            "analysing",
+            pipelineSource(this.db, job.document_id),
+          );
           await runAnalyseJob(this.db, this.ports, this.ai, job.document_id);
           // Best-effort embedding (work order 04 §Track B). Non-blocking:
           // a failure here logs but does not fail the job — the document is
@@ -1592,7 +1804,15 @@ export class JobWorker {
         // Work order 07 §B1: mark the intake as complete after the final phase.
         // The convert→analyse chain means the analyse job is the last one.
         if (job.phase === "analyse") {
+          transitionIntakePipeline(
+            this.db,
+            this.ports,
+            job.document_id,
+            "complete",
+            pipelineSource(this.db, job.document_id),
+          );
           updateIntakeForJob(this.db, this.ports, job.document_id, "complete", null);
+          await removeCompletedSource(this.db, this.ports, job.document_id);
         }
       } catch (err) {
         const msg = (err as Error)?.message ?? String(err);
@@ -1603,6 +1823,14 @@ export class JobWorker {
           this.db
             .prepare("UPDATE jobs SET state='done', last_error=?, finished_at=? WHERE id=?")
             .run(msg, this.ports.clock.isoNow(), job.id);
+          transitionIntakePipeline(
+            this.db,
+            this.ports,
+            job.document_id,
+            "password_needed",
+            pipelineSource(this.db, job.document_id),
+            msg.slice("PASSWORD_NEEDED:".length).trim(),
+          );
           this.ports.logger.warn("job awaiting password", { job: job.id, document_id: job.document_id });
           return;
         }
@@ -1616,6 +1844,14 @@ export class JobWorker {
         // Work order 07 §B3: if the job is permanently failed, mark the intake
         // as failed too so the UI shows a visible error, not indefinite pending.
         if (state === "failed") {
+          transitionIntakePipeline(
+            this.db,
+            this.ports,
+            job.document_id,
+            "failed",
+            pipelineSource(this.db, job.document_id),
+            msg,
+          );
           setIntakeFailedByDoc(this.db, this.ports, job.document_id, msg);
         }
       }

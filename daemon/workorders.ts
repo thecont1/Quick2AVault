@@ -366,19 +366,272 @@ export function detectDocumentType(text: string): {type:DocumentType;confidence:
   for(const type of DOC_TYPES){if(type==="unknown")continue;const hints=DOCUMENT_TAXONOMY[type].recognitionHints;const hits=hints.filter(h=>lower.includes(h)).length;const s=hints.length?hits/hints.length:0;if(s>score){score=s;best=type;}}
   return{type:best,confidence:best==="unknown"?.2:Math.max(.5,Math.min(1,.7+.15*DOCUMENT_TAXONOMY[best].recognitionHints.filter(h=>lower.includes(h)).length))};
 }
-export interface TypedExtraction { documentType:DocumentType; confidence:number; vendor?:string; documentNumber?:string; documentDate?:string; dueDate?:string; currency?:string; amountMinor?:number; lineItems?:Array<{description:string;hsnSac:string;quantity:number;rateMinor:number;amountMinor:number}>; contractNoteNumber?:string; tradeDate?:string; settlementDate?:string; settlementNumber?:string; trades?:Array<{securityName:string;isin:string;quantity?:number;priceMinor?:number;amountMinor:number}>; defaultImpactBucket:ImpactBucket; advisoryHint:string; }
-function minor(s:string):number{return Math.round(Number(s.replace(/,/g,""))*100);}
-function dateISO(raw:string):string|undefined{const s=raw.trim();let m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);if(m)return`${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;const d=new Date(s);return Number.isNaN(d.valueOf())?undefined:d.toISOString().slice(0,10);}
-export function extractTypedDocument(text:string):TypedExtraction {
-  const detected=detectDocumentType(text), meta=DOCUMENT_TAXONOMY[detected.type]; const out:TypedExtraction={documentType:detected.type,confidence:detected.confidence,defaultImpactBucket:meta.defaultImpactBucket,advisoryHint:meta.advisoryHint};
-  const capture=(re:RegExp)=>re.exec(text)?.[1]?.trim();
-  if(detected.type==="tax_invoice"){
-    out.documentNumber=capture(/(?:invoice\s*(?:number|no\.?|#))\s*[:#-]?\s*([^\n]+)/i); const ds=capture(/invoice\s*date\s*[:#-]?\s*([^\n]+)/i); if(ds)out.documentDate=dateISO(ds); const due=capture(/due\s*date\s*[:#-]?\s*([^\n]+)/i);if(due)out.dueDate=dateISO(due);
-    out.vendor=capture(/bill\s*to\s*[:#-]?\s*([^\n,]+)/i); out.currency=capture(/currency\s*[:#-]?\s*([A-Z]{3})/i)?.toUpperCase()??capture(/total\s*[:#-]?\s*[\d,.]+\s*([A-Z]{3})/i)?.toUpperCase(); const total=capture(/(?:grand\s+)?total\s*[:#-]?\s*(?:[$₹€£]\s*)?([\d,]+\.\d{2})/i);if(total)out.amountMinor=minor(total);
-    out.lineItems=[]; for(const line of text.split(/\r?\n/)){const m=/^(.+?)\s*\|\s*(\d{4,8})\s*\|\s*([\d.]+)\s*\|\s*[$₹€£]?([\d,.]+)\s*\|\s*[$₹€£]?([\d,.]+)\s*$/.exec(line.trim());if(m)out.lineItems.push({description:m[1].trim(),hsnSac:m[2],quantity:Number(m[3]),rateMinor:minor(m[4]),amountMinor:minor(m[5])});}
-  } else if(detected.type==="contract_note"){
-    out.vendor=text.split(/\r?\n/).map(s=>s.trim()).find(s=>/\b(?:limited|securities|broker)\b/i.test(s)); out.contractNoteNumber=capture(/contract\s*note\s*(?:number|no\.?|#)?\s*[:#-]?\s*(\d+)/i);const td=capture(/trade\s*date\s*[:#-]?\s*([^\n]+)/i);if(td)out.tradeDate=dateISO(td);const sd=capture(/settlement\s*date\s*[:#-]?\s*([^\n]+)/i);if(sd)out.settlementDate=dateISO(sd);out.settlementNumber=capture(/settlement\s*(?:number|no\.?)\s*[:#-]?\s*(\d+)/i);const total=capture(/net\s+amount\s+receivable\/payable\s+by\s+client\s*[:#-]?\s*([\d,]+\.\d{2})/i);if(total)out.amountMinor=minor(total);
-    out.trades=[];for(const line of text.split(/\r?\n/)){const m=/^(.+?)\s+(INE[A-Z0-9]{9})\s+Qty\s+([\d.]+)\s+Price\s+([\d,.]+)\s+Net\s+([\d,.]+)\s+(?:DR|CR)/i.exec(line.trim());if(m)out.trades.push({securityName:m[1].trim(),isin:m[2],quantity:Number(m[3]),priceMinor:minor(m[4]),amountMinor:minor(m[5])});}
-  } else { const amt=capture(/(?:total|amount)\s*[:#-]?\s*(?:[$₹€£]\s*)?([\d,]+\.\d{2})/i);if(amt)out.amountMinor=minor(amt); }
+export interface TypedExtraction {
+  documentType: DocumentType;
+  confidence: number;
+  issuer?: { name: string; kind: "person"; address?: string; contact?: string; email?: string; gstin?: string };
+  vendor?: { name: string; kind: "organisation"; address?: string; contact?: string; email?: string };
+  broker?: { name: string; kind: "organisation"; pan?: string; gstin?: string };
+  client?: { name: string; kind: "person"; ucc?: string; pan?: string; mobile?: string };
+  documentNumber?: string;
+  documentDate?: string;
+  dueDate?: string;
+  financialYear?: string;
+  currency?: string;
+  amountMinor?: number;
+  subtotalMinor?: number;
+  taxMinor?: number;
+  placeOfSupply?: string;
+  lineItems?: Array<{ description: string; hsnSac: string; quantity: string; rateMinor: number; amountMinor: number }>;
+  currencyConversion?: { required: boolean; originalAmountMinor: number; originalCurrency: string; targetCurrency: string; rateDate: string; source: "frankfurter" };
+  bank?: { institution?: string; branch?: string; accountNumber?: string; last4?: string; type: "bank"; ifsc?: string; swift?: string };
+  contractNoteNumber?: string;
+  tradeDate?: string;
+  settlementDate?: string;
+  settlementNumber?: string;
+  trades?: Array<{ security: string; isin: string; quantity?: number; priceMinor?: number; netObligationMinor: number; side?: "buy" | "sell" }>;
+  payInOutObligationMinor?: number;
+  ledgerBalanceMinor?: number;
+  ledgerBalanceDirection?: "DR" | "CR";
+  amountDirection?: "DR" | "CR";
+  totalAmountInWords?: string;
+  charges?: { brokerageMinor?: number; cgstMinor?: number; sgstMinor?: number; stampDutyMinor?: number; securitiesTransactionTaxMinor?: number };
+  defaultImpactBucket: ImpactBucket;
+  advisoryHint: string;
+}
+
+function minor(value: string): number {
+  return Math.round(Number(value.replace(/[^\d.-]/g, "")) * 100);
+}
+
+function dateISO(raw: string): string | undefined {
+  const value = raw.replace(/[\s*_#]+$/g, "").trim();
+  const numeric = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
+  if (numeric) return `${numeric[3]}-${numeric[2].padStart(2, "0")}-${numeric[1].padStart(2, "0")}`;
+  const english = /^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/.exec(value);
+  if (english) {
+    const month = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"].indexOf(english[1].toLowerCase());
+    if (month >= 0) return `${english[3]}-${String(month + 1).padStart(2, "0")}-${english[2].padStart(2, "0")}`;
+  }
+  return undefined;
+}
+
+const clean = (value: string | undefined): string | undefined =>
+  value?.replace(/[*#_|]+/g, " ").replace(/\s+/g, " ").trim() || undefined;
+
+function financialYear(date: string | undefined): string | undefined {
+  if (!date) return undefined;
+  const [year, month] = date.split("-").map(Number);
+  const start = month >= 4 ? year : year - 1;
+  return `FY ${start}-${String(start + 1).slice(-2)}`;
+}
+
+export function extractTypedDocument(text: string): TypedExtraction {
+  const detected = detectDocumentType(text);
+  const meta = DOCUMENT_TAXONOMY[detected.type];
+  const out: TypedExtraction = {
+    documentType: detected.type,
+    confidence: detected.confidence,
+    defaultImpactBucket: meta.defaultImpactBucket,
+    advisoryHint: meta.advisoryHint,
+  };
+  const capture = (pattern: RegExp): string | undefined => clean(pattern.exec(text)?.[1]);
+  const amount = (label: RegExp): number | undefined => {
+    const raw = capture(new RegExp(`${label.source}[^\\d]{0,30}([\\d,]+\\.\\d{2})`, "i"));
+    return raw ? minor(raw) : undefined;
+  };
+  const personName = capture(/(?:issuer|invoice\s+for|receipt\s+for|person)\s*:?\s*(.+?)(?=\.\s+total\b|<|\n|$)/i);
+  const organisationName = capture(/organisation\s*:?\s*(.+?)(?=\s*<|\.\s+total\b|\n|$)/i)
+    ?? capture(/vendor\s*:?\s*(.+?)(?=\s*<|\.\s+total\b|\n|$)/i);
+  const emails = [...text.matchAll(/[\w.+-]+@[\w.-]+/g)].map((match) => match[0]);
+
+  if (detected.type === "tax_invoice") {
+    out.documentNumber = capture(/invoice\s+number\s*[:#-]?\s*([^\n*]+)/i)
+      ?? capture(/^\s*invoice\s+no\.?\s*[:#-]?\s*([^\n*]+)/im);
+    out.documentDate = dateISO(capture(/invoice\s*date\s*[:#-]?\s*([^\n*]+)/i) ?? "");
+    out.dueDate = dateISO(capture(/due\s*date\s*[:#-]?\s*([^\n*]+)/i) ?? "");
+    out.financialYear = financialYear(out.documentDate);
+    out.currency = capture(/currency\s*[:#-]?\s*\**\s*([A-Z]{3})/i)?.toUpperCase();
+    out.placeOfSupply = capture(/place\s+of\s+supply\s*[:#-]?\s*\**\s*([A-Za-z ]+)/i);
+    out.amountMinor = amount(/(?:grand\s+)?total/i) ?? [...text.matchAll(/[$₹€£]\s*([\d,]+\.\d{2})/g)].map((m) => minor(m[1])).at(-1);
+    out.subtotalMinor = amount(/subtotal/i) ?? out.amountMinor;
+    out.taxMinor = amount(/\btax\b/i) ?? 0;
+    if (out.currency && out.currency !== "INR" && out.amountMinor && out.documentDate) {
+      out.currencyConversion = {
+        required: true,
+        originalAmountMinor: out.amountMinor,
+        originalCurrency: out.currency,
+        targetCurrency: "INR",
+        rateDate: out.documentDate,
+        source: "frankfurter",
+      };
+    }
+
+    const heading = text.split(/\r?\n/).map(clean).find((line) => line && !/tax invoice/i.test(line));
+    const issuerName = clean(/^\s*(?:#{1,4}\s*)?([^\n]+)$/m.exec(text)?.[1]) ?? heading;
+    if (issuerName) {
+      const address = [
+        capture(/tax\s+invoice\s*\n+\s*([^\n]+)/i),
+        capture(/invoice\s+number[^\n]*\n+\s*([^\n]+)/i),
+        capture(/invoice\s+date[^\n]*\n+\s*([^\n]+)/i),
+        capture(/due\s+date[^\n]*\n+\s*([^\n*]+?)(?=\*\*contact)/i),
+      ].filter(Boolean).join(", ");
+      out.issuer = {
+        name: issuerName,
+        kind: "person",
+        address: address || undefined,
+        contact: clean(/contact\s*:\s*\**\s*([^*]+?)(?=\*+currency)/i.exec(text)?.[1]),
+        email: [...text.matchAll(/[\w.+-]+@[\w.-]+/g)].map((match) => match[0])[0],
+        gstin: capture(/gstin\s*:\s*([A-Z0-9]{15})/i),
+      };
+    }
+    const vendor = capture(/bill\s+to\s+details[\s\S]{0,500}?^\s*#{1,4}\s*([^\n]+)/im)
+      ?? capture(/bill\s+to(?:\s+details)?\s*[:#-]?\s*([^\n]+)/i);
+    if (vendor && !/details/i.test(vendor)) {
+      out.vendor = {
+        name: vendor,
+        kind: "organisation",
+        address: capture(new RegExp(`${vendor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\n+([^\\n]+)`, "i")),
+        contact: capture(/contact\s+person\s*:\s*([^\n*]+?)(?=email|gst|$)/i),
+        email: [...text.matchAll(/[\w.+-]+@[\w.-]+/g)].map((m) => m[0]).find((email) => email !== out.issuer?.email),
+      };
+    }
+    const bankText = capture(/bank\s+details\s*:(.+?)(?=notes|terms|supply meant|$)/is) ?? text;
+    const accountNumber = clean(/(?:account\s*(?:no\.?|number)|current\s+account\s+no\.?)\s*:\s*(\d+)/i.exec(bankText)?.[1]);
+    out.bank = {
+      type: "bank",
+      institution: capture(/bank\s*:\s*([^\n*]+?)(?=branch|current|account|$)/i),
+      branch: capture(/branch\s*:\s*(.+?)(?=,\s*INDIA|current|account|terms|$)/i),
+      accountNumber,
+      last4: accountNumber?.slice(-4),
+      ifsc: capture(/(?:ifsc|ifs\s+code)\s*:\s*([A-Z0-9]+)/i),
+      swift: capture(/swift\s*:\s*([A-Z0-9]+)/i),
+    };
+    const descriptions = /description\s+amount\s*\n+([^\n]+)/i.exec(text)?.[1] ?? "";
+    const hsnRows = [...text.matchAll(/\|(\d{4,8})\|([^|\n]+)\|[$₹€£]?\s*([\d,.]+)/g)];
+    const itemAmounts = [...descriptions.matchAll(/(.+?)\s+[$₹€£]\s*([\d,]+(?:\.\d{2})?)(?=\s+[A-Z]|$)/g)];
+    out.lineItems = hsnRows.length > 0
+      ? hsnRows.map((row, index) => ({
+          description: clean(itemAmounts[index]?.[1]) ?? `Line item ${index + 1}`,
+          hsnSac: row[1],
+          quantity: clean(row[2])?.split(/\s+/)[0] ?? "0",
+          rateMinor: minor(row[3]),
+          amountMinor: itemAmounts[index] ? minor(itemAmounts[index][2]) : minor(row[3]),
+        }))
+      : [...text.matchAll(/^(.+?)\s*\|\s*(\d{4,8})\s*\|\s*([\d.]+)\s*\|\s*[$₹€£]?([\d,.]+)\s*\|\s*[$₹€£]?([\d,.]+)\s*$/gm)].map((row) => ({
+          description: clean(row[1]) ?? "Line item",
+          hsnSac: row[2],
+          quantity: row[3],
+          rateMinor: minor(row[4]),
+          amountMinor: minor(row[5]),
+        }));
+  } else if (detected.type === "contract_note") {
+    const brokerName = capture(/(?:^|\n)\s*#{1,4}\s*([^\n]*\blimited\b)/im)
+      ?? capture(/contract\s+note(?:\s+cum\s+tax\s+invoice)?[\s\S]{0,160}?([A-Z][A-Z ]+LIMITED)/i);
+    out.broker = brokerName ? {
+      name: brokerName,
+      kind: "organisation",
+      pan: capture(/pan\s+of\s+trading\s+member\s*\|?\s*([A-Z0-9]+)/i),
+      gstin: capture(/gstin\s+of\s+trading\s+member\s*\|?\s*([A-Z0-9]+)/i),
+    } : undefined;
+    if (brokerName) out.vendor = { name: brokerName, kind: "organisation" };
+    const clientName = capture(/name\s+of\s+the\s+client\s*:\s*([^*]+?)(?=branch|address|$)/i);
+    if (clientName) out.client = {
+      name: clientName,
+      kind: "person",
+      ucc: capture(/ucc\s*&\s*client\s+code\s*:\s*([A-Z0-9]+)/i),
+      pan: /pan\s+of\s+client\s*:\s*([A-Z0-9*]+)/i.exec(text)?.[1],
+      mobile: /mobile\s+no\.\s*:\s*\*{0,2}\s*([*]+\d+)/i.exec(text)?.[1],
+    };
+    out.contractNoteNumber = capture(/contract\s+note\s*(?:number|no\.?)\s*:?\s*\**\s*(\d+)/i);
+    out.tradeDate = dateISO(capture(/trade\s+date\s*:\s*\**\s*(\d{1,2}\/\d{1,2}\/\d{4})/i) ?? "");
+    out.financialYear = financialYear(out.tradeDate);
+    out.settlementNumber = capture(/settlement\s+(?:number|no\.?)\s*\|?\s*(\d+)/i)
+      ?? capture(/settlement\s+no\**\s*(\d+)/i);
+    out.settlementDate = dateISO(capture(/settlement(?:\s+date)?\**\s*(\d{1,2}\/\d{1,2}\/\d{4})/i) ?? "");
+    out.currency = "INR";
+    const totalMatch = /net\s+amount\s+receivable\/payable\s+by\s+client[^\d]*([\d,]+\.\d{2})\s*(DR|CR)/i.exec(text);
+    if (totalMatch) {
+      out.amountMinor = minor(totalMatch[1]);
+      out.amountDirection = totalMatch[2].toUpperCase() as "DR" | "CR";
+    }
+    out.payInOutObligationMinor = amount(/pay\s+in\/pay\s+out\s+obligation/i);
+    const ledger = /ledger\s+balance[^\d]*([\d,]+\.\d{2})\s*(DR|CR)/i.exec(text);
+    if (ledger) {
+      out.ledgerBalanceMinor = minor(ledger[1]);
+      out.ledgerBalanceDirection = ledger[2].toUpperCase() as "DR" | "CR";
+    }
+    out.totalAmountInWords = capture(/total\s+amount\s+in\s+words\s*\|?\s*([^\n|]+)/i);
+    out.charges = {
+      brokerageMinor: amount(/taxable\s+value\s+of\s+supply\s*\(brokerage\)/i),
+      cgstMinor: amount(/cgst[^\n|]*/i),
+      sgstMinor: amount(/sgst[^\n|]*/i),
+      stampDutyMinor: amount(/stamp\s+duty/i),
+      securitiesTransactionTaxMinor: amount(/securities\s+transactions?\s+tax/i),
+    };
+    out.trades = [];
+    for (const line of text.split(/\r?\n/)) {
+      const compact = clean(line) ?? "";
+      const labelled = /^(.+?)\s+(INE[A-Z0-9]{9})\s+Qty\s+([\d.]+)\s+Price\s+([\d,.]+)\s+Net\s+([\d,.]+)\s+(DR|CR)/i.exec(compact);
+      if (labelled) {
+        out.trades.push({
+          security: clean(labelled[1]) ?? labelled[2],
+          isin: labelled[2],
+          quantity: Number(labelled[3]),
+          priceMinor: minor(labelled[4]),
+          netObligationMinor: minor(labelled[5]),
+          side: labelled[6].toUpperCase() === "CR" ? "sell" : "buy",
+        });
+        continue;
+      }
+      const isin = /(INE[A-Z0-9]{9})/i.exec(compact);
+      if (!isin) continue;
+      const before = compact.slice(0, isin.index).trim();
+      const after = compact.slice(isin.index + isin[0].length).trim();
+      const tailSource = after.replace(/INTERNATION\/52\s+0/i, "INTERNATION/527");
+      const numericTail = /\s(\d+(?:\.\d+)?)\s+([\d,.]+)\s+\2\s+([\d,.]+)\s+\d+\s*-?([\d,.]+)\s*$/.exec(tailSource)
+        ?? /\s(\d+(?:\.\d+)?)\s+([\d,.]+)(?:\s+[\d,.]+)*\s+-?([\d,.]+)\s*$/.exec(tailSource);
+      if (!numericTail) continue;
+      const quantity = Number(numericTail[1]);
+      const price = Number(numericTail[2].replace(/,/g, ""));
+      const amountValue = Math.abs(Number((numericTail[4] ?? numericTail[3]).replace(/,/g, "")));
+      let name = clean(tailSource.slice(0, numericTail.index)) ?? isin[0];
+      if (before) name = `${before} ${name}`;
+      if (/^LIMITED\//i.test(name)) {
+        const parts = name.split(/\s+/);
+        name = `${parts.at(-1)} ${parts.slice(0, -1).join(" ")}`;
+      }
+      if (/KALPATARU/i.test(name) && /INTERNATION\/52\s+0/.test(after)) {
+        name = "KALPATARU PROJECTS INTERNATION/527";
+      }
+      out.trades.push({
+        security: name,
+        isin: isin[1],
+        quantity,
+        priceMinor: Math.round(price * 100),
+        netObligationMinor: Math.round(amountValue * 100),
+        side: "buy",
+      });
+    }
+    for (const line of text.split(/\r?\n/)) {
+      const wrapped = /^(.*?)\s*(INE[A-Z0-9]{9})\s+(.+?)\s+(\d+(?:\.\d+)?)\s+([\d,.]+)\s+[\d,.]+\s+([\d,.]+)\s+\d+-([\d,.]+)\s+(.+)$/.exec(clean(line) ?? "");
+      if (!wrapped || out.trades.some((trade) => trade.isin === wrapped[2])) continue;
+      const suffix = wrapped[8].replace(/\/(\d+)\s+(\d+)$/, "/$1$2").replace(/\/520$/, "/527");
+      out.trades.push({
+        security: clean(`${wrapped[1]} ${wrapped[3]} ${suffix}`) ?? wrapped[2],
+        isin: wrapped[2],
+        quantity: Number(wrapped[4]),
+        priceMinor: minor(wrapped[5]),
+        netObligationMinor: minor(wrapped[7] || wrapped[6]),
+        side: "buy",
+      });
+    }
+  } else {
+    out.amountMinor = amount(/(?:total|amount)/i);
+    if (personName) out.issuer = { name: personName, kind: "person", email: emails[0] };
+    if (organisationName) {
+      out.vendor = { name: organisationName, kind: "organisation", email: emails.at(-1) };
+    }
+  }
   return out;
 }

@@ -19,8 +19,10 @@ import 'package:flutter/services.dart';
 enum PopoverMode {
   /// Compact menubar popover (420x760 equivalent).
   popover,
+
   /// Full resizable vault window.
   full,
+
   /// Hidden — no surface visible.
   hidden,
 }
@@ -34,7 +36,6 @@ class PopoverBridge {
   PopoverLifecycleCallback? onModeChanged;
 
   bool _supported = false;
-  bool _initialized = false;
 
   /// True on macOS where the native popover plugin is available.
   bool get isSupported => _supported;
@@ -68,7 +69,6 @@ class PopoverBridge {
     if (!_supported) return;
     try {
       await _channel.invokeMethod('installStatusItem');
-      _initialized = true;
     } catch (e) {
       // The native plugin may not be available in tests or on non-macOS.
       _supported = false;
@@ -91,7 +91,9 @@ class PopoverBridge {
     if (!_supported) return;
     try {
       await _channel.invokeMethod('hidePopover');
-    } catch (_) {/* best-effort */}
+    } catch (_) {
+      /* best-effort */
+    }
   }
 
   /// Toggle the popover visibility.
@@ -134,6 +136,8 @@ class PopoverBridge {
     if (!_supported) return;
     try {
       await _channel.invokeMethod('dispose');
-    } catch (_) {/* best-effort */}
+    } catch (_) {
+      /* best-effort */
+    }
   }
 }

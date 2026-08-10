@@ -110,6 +110,7 @@ const FUZZY_FLOOR = 0.34;
 /** Upper bound (exclusive) — at/above this, token-sort (ledger.ts) already matched silently. */
 const FUZZY_CEIL = 1.0;
 
+
 export interface PersonResolution {
   id: string;
   /** How the id was reached, for logging and for the acceptance tests. */
@@ -363,6 +364,7 @@ export function resolvePerson(
     return { id: deterministic.id, matched_via: deterministic.via, asked: false, conflict: false };
   }
 
+
   // ── 4. fuzzy band ──────────────────────────────────────────────────────────
   const candidates = (
     db.prepare("SELECT id, display_name, status FROM entities WHERE kind='person'").all() as PersonRow[]
@@ -458,6 +460,51 @@ export function unidentifiedPerson(db: DatabaseSync, ports: Ports): string {
     ).run(UNIDENTIFIED_PERSON_ID, ports.clock.isoNow());
   }
   return UNIDENTIFIED_PERSON_ID;
+}
+
+/** Deliberately merge two person candidates after a user-confirmed identity lesson. */
+export function mergePeople(
+  db: DatabaseSync,
+  ports: Ports,
+  fromId: string,
+  intoId: string,
+): { merged: true; into: string } {
+  if (fromId === intoId) throw new Error("cannot merge a person into themselves");
+  const from = db.prepare("SELECT id, kind, display_name FROM entities WHERE id=?").get(fromId) as
+    | { id: string; kind: string; display_name: string }
+    | undefined;
+  const into = db.prepare("SELECT id, kind, display_name FROM entities WHERE id=?").get(intoId) as
+    | { id: string; kind: string; display_name: string }
+    | undefined;
+  if (!from || !into) throw new Error("person not found");
+  if (from.kind !== "person" || into.kind !== "person") throw new Error("both entities must be people");
+
+  const now = ports.clock.isoNow();
+  db.exec("BEGIN");
+  try {
+    db.prepare("UPDATE OR IGNORE document_parties SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
+    db.prepare("UPDATE OR IGNORE entity_aliases SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
+    db.prepare(
+      `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at, last_seen_at)
+       VALUES (?, 'person', ?, ?, 'name_variant', 'user-merge', 'confirmed', ?, ?)
+       ON CONFLICT(kind, normalised) DO UPDATE SET
+         entity_id=excluded.entity_id, status='confirmed', last_seen_at=excluded.last_seen_at`,
+    ).run(into.id, from.display_name, normaliseName(from.display_name), now, now);
+    db.prepare(
+      `UPDATE entities SET
+         is_member = MAX(is_member, (SELECT is_member FROM entities WHERE id=?)),
+         is_owner  = MAX(is_owner, (SELECT is_owner FROM entities WHERE id=?)),
+         updated_at=?
+       WHERE id=?`,
+    ).run(from.id, from.id, now, into.id);
+    db.prepare("DELETE FROM entities WHERE id=?").run(from.id);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  ports.logger.info("people merged", { from: from.display_name, into: into.display_name });
+  return { merged: true, into: into.display_name };
 }
 
 function createCandidate(

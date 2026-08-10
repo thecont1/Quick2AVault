@@ -17,22 +17,12 @@ import 'api.dart';
 import 'menubar.dart';
 import 'window_store.dart';
 import 'theme.dart';
-import 'widgets/hero_row.dart';
-import 'widgets/txn_card.dart';
-import 'widgets/evidence_panel.dart';
-import 'widgets/feed_rail.dart';
 import 'widgets/drop_target.dart';
 import 'widgets/popup_view.dart';
-import 'widgets/setup_view.dart';
 import 'widgets/period_bar.dart';
 import 'widgets/vault_tabs.dart';
-import 'widgets/intake_queue_view.dart';
 import 'widgets/ledger_tab.dart';
-import 'widgets/treemap.dart';
-import 'widgets/people_view.dart';
 import 'widgets/review_browser.dart';
-import 'widgets/review_view.dart';
-import 'widgets/irrelevant_view.dart';
 import 'features/adapters.dart';
 import 'features/intake/view.dart' as wo_intake;
 import 'features/intake/state.dart' as wo_intake_state;
@@ -97,11 +87,6 @@ class _VaultHomeState extends State<VaultHome> {
 
   /// Popup (menubar panel) vs the full resizable window.
   bool _fullWindow = false;
-
-  /// Which Review surface is showing: false = document browser (default),
-  /// true = the Learning-Mode question queue. Reset on tab change, so returning
-  /// to Review always lands on the browser.
-  bool _reviewQueue = false;
 
   /// Which surface the full window is showing.
   ///
@@ -355,6 +340,32 @@ class _VaultHomeState extends State<VaultHome> {
     }
   }
 
+  Future<void> _handleLearningAction(String action) async {
+    final split = action.indexOf(':');
+    if (split < 0) return;
+    final verb = action.substring(0, split);
+    final id = int.tryParse(action.substring(split + 1));
+    if (id == null) return;
+    if (verb == 'confirm') {
+      await _api.answerLearning(id, 'yes');
+    } else if (verb == 'later') {
+      await _api.dismissLearning(id);
+    } else {
+      setState(() {
+        _tab = VaultTab.review;
+        _learningDrawerOpen = false;
+      });
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _learningQuestions = _learningQuestions
+          .where((question) => question.id != '$id')
+          .toList();
+      _reviewCount = _learningQuestions.length;
+    });
+  }
+
   /// Open the full window on a given tab.
   ///
   /// The popup's Settings and Review buttons route through here. Setting the
@@ -394,6 +405,35 @@ class _VaultHomeState extends State<VaultHome> {
           _connected = true;
           if (e.type != 'Ready') _feed.insert(0, e);
           if (_feed.length > 60) _feed.removeLast();
+          if (e.type == 'learning.question') {
+            final id = '${e.data['questionId'] ?? ''}';
+            if (!_learningQuestions.any((question) => question.id == id)) {
+              _learningQuestions = [
+                wo_learning.LearningPrompt(
+                  id: id,
+                  prompt: '${e.data['prompt'] ?? ''}',
+                  why: '${e.data['why'] ?? ''}',
+                  trigger: '${(e.data['trigger'] as Map?)?['kind'] ?? ''}',
+                  novelty:
+                      ((e.data['trigger'] as Map?)?['noveltyScore'] as num?)
+                          ?.toDouble() ??
+                      1,
+                ),
+                ..._learningQuestions,
+              ];
+              _reviewCount = _learningQuestions.length;
+            }
+          } else if (e.type == 'learning.answer') {
+            final id = '${e.data['questionId'] ?? ''}';
+            _learningQuestions = _learningQuestions
+                .where((question) => question.id != id)
+                .toList();
+            _reviewCount = _learningQuestions.length;
+          } else if (e.type == 'PipelineStateChanged' &&
+              e.data['to_state'] == 'received') {
+            _intakeArrivals += 1;
+            _selectedIntakeId = '${e.data['document_id'] ?? ''}';
+          }
         });
         // Verified against the daemon's actual emissions (probe: drop a
         // fixture, read the SSE stream). The daemon emits nine types; these
@@ -414,6 +454,8 @@ class _VaultHomeState extends State<VaultHome> {
           // promotes an irrelevant item into the ledger.
           'IntakeAccepted', 'IntakeIrrelevant', 'IntakeDuplicate',
           'IntakeFailed', 'IntakeRestored',
+          'PipelineStateChanged', 'learning.question', 'learning.answer',
+          'learning.rule.applied',
         };
         // 'Ready' is the daemon's hello — it arrives on every (re)connect.
         // Refreshing on it is how the app recovers after the daemon restarts:
@@ -582,10 +624,6 @@ class _VaultHomeState extends State<VaultHome> {
               current: _tab,
               onChanged: (t) => setState(() {
                 _tab = t;
-                // Leaving Review discards the queue sub-view, so coming back
-                // always lands on the document browser rather than resuming a
-                // question list the user had already navigated away from.
-                if (t != VaultTab.review) _reviewQueue = false;
               }),
               reviewCount: _reviewCount,
               // Charts is declared but unbuilt. Shown disabled rather than
@@ -611,6 +649,7 @@ class _VaultHomeState extends State<VaultHome> {
                           child: wo_learning_view.LearningPanel(
                             enabled: _learningOn,
                             questions: _learningQuestions,
+                            onAction: _handleLearningAction,
                             onOpenReview: () => setState(() {
                               _tab = VaultTab.review;
                               _learningDrawerOpen = false;
@@ -630,51 +669,25 @@ class _VaultHomeState extends State<VaultHome> {
   /// The body for the selected tab.
   ///
   /// Every surface is built from state the shell already holds, so switching
-  /// tabs never refetches and never loses the selected transaction. Only the
-  /// ledger keeps the feed rail — the other surfaces are not event streams and
-  /// the rail would just steal width.
+  /// tabs never refetches and never loses the selected transaction. Pipeline
+  /// events remain subscribed for Intake and Learning, but Ledger deliberately
+  /// has no live-intake rail.
   Widget _tabBody() => switch (_tab) {
-    VaultTab.ledger => Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          flex: 3,
-          child: LedgerTab(
-            snapshot: _snap,
-            treemap: _treemap,
-            txns: _txns,
-            selectedId: _selectedId,
-            card: _card,
-            onSelect: _select,
-            api: _api,
-            onSearchHit: _openSearchHit,
-            onEdited: _refresh,
-          ),
-        ),
-        FeedRail(events: _feed, connected: _connected),
-      ],
+    VaultTab.ledger => LedgerTab(
+      snapshot: _snap,
+      treemap: _treemap,
+      txns: _txns,
+      selectedId: _selectedId,
+      card: _card,
+      onSelect: _select,
+      api: _api,
+      onSearchHit: _openSearchHit,
+      onEdited: _refresh,
     ),
-    // Review has two surfaces: the document browser (default — inspect what
-    // the vault understood) and the Learning-Mode queue (teach it). The
-    // queue used to BE the Review tab, which meant there was no way to look
-    // at a document at all.
-    VaultTab.review =>
-      _reviewQueue
-          ? ReviewView(
-              api: _api,
-              // In tab mode "close" means "back to the browser", not "leave
-              // the tab" — the tab bar handles that.
-              onClose: () => setState(() => _reviewQueue = false),
-              // The badge must drop the moment a question is answered, not on
-              // the next poll — otherwise the count lies about work already
-              // done.
-              onChanged: _refresh,
-            )
-          : ReviewBrowser(
-              api: _api,
-              pendingQuestions: _reviewCount,
-              onOpenQueue: () => setState(() => _reviewQueue = true),
-            ),
+    VaultTab.review => ReviewBrowser(
+      api: _api,
+      initialDocumentId: _selectedIntakeId,
+    ),
     VaultTab.people => wo_people.EntityDesk(entities: _entities),
     // Work order 07 §G — Intake tab: the unified intake queue.
     // Shows every incoming file with its state. Encrypted PDFs show an
@@ -813,47 +826,6 @@ class _StatusDot extends StatelessWidget {
       ],
     );
   }
-}
-
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-  @override
-  Widget build(BuildContext context) => Text(
-    text.toUpperCase(),
-    style: const TextStyle(
-      fontSize: 10.5,
-      letterSpacing: 1.1,
-      fontWeight: FontWeight.w600,
-      color: VaultColors.dim,
-    ),
-  );
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(vertical: 44),
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      border: Border.all(color: VaultColors.line),
-      color: VaultColors.panel,
-    ),
-    child: const Column(
-      children: [
-        Text(
-          'No transactions yet',
-          style: TextStyle(color: VaultColors.dim, fontSize: 13.5),
-        ),
-        SizedBox(height: 6),
-        Text(
-          'Drop a document anywhere in this window',
-          style: TextStyle(color: VaultColors.faint, fontSize: 12),
-        ),
-      ],
-    ),
-  );
 }
 
 class _WaitingForDaemon extends StatelessWidget {

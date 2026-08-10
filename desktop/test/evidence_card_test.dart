@@ -19,25 +19,24 @@ VaultDoc _doc(
   String? source = 'drop',
   String? analysedAt = '2026-08-01T10:00:00.000Z',
   int mdChars = 1200,
-}) =>
-    VaultDoc(
-      id: id,
-      filename: name,
-      ext: ext,
-      byteSize: 51200,
-      docType: type,
-      source: source,
-      receivedAt: '2026-08-01T09:00:00Z',
-      analysedAt: analysedAt,
-      markdownChars: mdChars,
-    );
+}) => VaultDoc(
+  id: id,
+  filename: name,
+  ext: ext,
+  byteSize: 51200,
+  docType: type,
+  source: source,
+  receivedAt: '2026-08-01T09:00:00Z',
+  analysedAt: analysedAt,
+  markdownChars: mdChars,
+);
 
 class _FakeApi extends VaultApi {
   final List<VaultDoc> docs;
   final DocumentDetail detail;
 
   _FakeApi({required this.docs, required this.detail})
-      : super(baseUrl: 'http://127.0.0.1:1', token: 'test');
+    : super(baseUrl: 'http://127.0.0.1:1', token: 'test');
 
   @override
   Future<List<VaultDoc>> documents({int limit = 200}) async => docs;
@@ -54,8 +53,8 @@ class _FakeApi extends VaultApi {
 }
 
 Widget _host(VaultApi api) => MaterialApp(
-      home: Scaffold(body: ReviewBrowser(api: api, pendingQuestions: 0, onOpenQueue: null)),
-    );
+  home: Scaffold(body: ReviewBrowser(api: api)),
+);
 
 DocumentDetail _detail({
   Map<String, EffectiveValue>? effective,
@@ -68,23 +67,34 @@ DocumentDetail _detail({
   Set<String> editableFields = const {},
   int? subtotalMinor,
   int? taxMinor,
-}) =>
-    DocumentDetail(
-      document: {'id': 'doc_1', 'original_filename': 'invoice_001.pdf'},
-      extraction: extractionNull ? null : (extraction ?? {'amount_minor': 59785, 'currency': 'USD'}),
-      effective: effective ?? {
-        'amount_minor': const EffectiveValue(value: '59785', source: 'ai', status: 'proposed'),
-        'currency': const EffectiveValue(value: 'USD', source: 'ai', status: 'proposed'),
+}) => DocumentDetail(
+  document: {'id': 'doc_1', 'original_filename': 'invoice_001.pdf'},
+  extraction: extractionNull
+      ? null
+      : (extraction ?? {'amount_minor': 59785, 'currency': 'USD'}),
+  effective:
+      effective ??
+      {
+        'amount_minor': const EffectiveValue(
+          value: '59785',
+          source: 'ai',
+          status: 'proposed',
+        ),
+        'currency': const EffectiveValue(
+          value: 'USD',
+          source: 'ai',
+          status: 'proposed',
+        ),
       },
-      claims: const {},
-      referenceIds: referenceIds ?? {},
-      lineItems: lineItems,
-      parties: parties,
-      transactions: transactions,
-      editableFields: editableFields,
-      subtotalMinor: subtotalMinor,
-      taxMinor: taxMinor,
-    );
+  claims: const {},
+  referenceIds: referenceIds ?? {},
+  lineItems: lineItems,
+  parties: parties,
+  transactions: transactions,
+  editableFields: editableFields,
+  subtotalMinor: subtotalMinor,
+  taxMinor: taxMinor,
+);
 
 void main() {
   testWidgets('renders amount with source currency', (tester) async {
@@ -104,7 +114,9 @@ void main() {
     expect(find.textContaining('USD 597.85'), findsOneWidget);
   });
 
-  testWidgets('shows "currency uncertain" when currency is null', (tester) async {
+  testWidgets('shows "currency uncertain" when currency is null', (
+    tester,
+  ) async {
     tester.view.physicalSize = _testSurface;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -112,7 +124,11 @@ void main() {
       docs: [_doc('doc_1', 'invoice_001.pdf')],
       detail: _detail(
         effective: {
-          'amount_minor': const EffectiveValue(value: '59785', source: 'ai', status: 'proposed'),
+          'amount_minor': const EffectiveValue(
+            value: '59785',
+            source: 'ai',
+            status: 'proposed',
+          ),
         },
         extraction: {'amount_minor': 59785},
       ),
@@ -132,9 +148,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     final api = _FakeApi(
       docs: [_doc('doc_1', 'invoice_001.pdf')],
-      detail: _detail(
-        referenceIds: {'invoice_no': 'INV/2026-27/03'},
-      ),
+      detail: _detail(referenceIds: {'invoice_no': 'INV/2026-27/03'}),
     );
 
     await tester.pumpWidget(_host(api));
@@ -226,7 +240,11 @@ void main() {
       docs: [_doc('doc_1', 'invoice_001.pdf')],
       detail: _detail(
         parties: [
-          {'kind': 'organisation', 'display_name': 'Acme Corp', 'role': 'counterparty'},
+          {
+            'kind': 'organisation',
+            'display_name': 'Acme Corp',
+            'role': 'counterparty',
+          },
         ],
       ),
     );

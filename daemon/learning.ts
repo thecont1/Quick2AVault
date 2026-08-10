@@ -131,6 +131,15 @@ export function answer(
 
   db.prepare("UPDATE training_reviews SET answer=?, answered_at=?, rule_id=? WHERE id=?")
     .run(chosen, now, ruleId, reviewId);
+  if (ruleId !== null) {
+    ports.bus.publish({ type: "learning.rule.applied", ruleId, at: now });
+  }
+  ports.bus.publish({
+    type: "learning.answer",
+    questionId: String(reviewId),
+    answeredAt: now,
+    answer: chosen,
+  });
   return { rule_id: ruleId };
 }
 

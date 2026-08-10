@@ -109,6 +109,23 @@ await check("a failed job marks the intake as failed with last_error", async () 
   db.prepare(
     `INSERT INTO intake_events (kind, filename, source, document_id, processing_state, created_at) VALUES ('accepted','test.pdf','folder',?,'queued','2026-08-10T00:00:00Z')`,
   ).run(docId);
+  // A directly-seeded analyse job still needs a legal canonical history. Real
+  // intake writes these events itself; this fixture bypasses intake on purpose.
+  for (const [fromState, toState] of [
+    [null, "received"],
+    ["received", "stable"],
+    ["stable", "hashed"],
+    ["hashed", "triaged"],
+    ["triaged", "converting"],
+  ] as const) {
+    db.prepare(
+      `INSERT INTO pipeline_events(document_id,from_state,to_state,timestamp,source,payload_json)
+       VALUES(?,?,?,?,?,?)`,
+    ).run(docId, fromState, toState, "2026-08-10T00:00:00Z", "intake-state-smoke", "{}");
+  }
+  db.prepare(
+    "INSERT INTO document_pipeline(document_id,state,updated_at) VALUES(?, 'converting', ?)",
+  ).run(docId, "2026-08-10T00:00:00Z");
 
   // Enqueue a job that will fail (no markdown_path → runConvertJob may throw
   // or runAnalyseJob will skip; we force a failure by enqueuing analyse on

@@ -1,7 +1,12 @@
 /** WO09/WO10 backend contract regression coverage. */
 import * as assert from "node:assert";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { openDatabase } from "./schema.js";
-import { createEventBus, createLogger } from "./adapters.js";
+import { createEventBus, createLogger, createPaths } from "./adapters.js";
+import { nullAiProvider } from "./ai-provider.js";
+import { ingestFile, JobWorker } from "./pipeline.js";
 import type { Ports } from "./ports.js";
 import { writeClaim, winningClaim, setDocumentParty } from "./claims.js";
 import {
@@ -43,6 +48,47 @@ await check("canonical pipeline persists every ordered transition and terminal p
   for (const state of ["failed","duplicate","irrelevant","password_needed"] as const) assert.equal(sourceActionFor(state), "archive-copy-retain-source");
   assert.throws(() => transitionPipeline(db,{documentId:"other",toState:"complete",source:"x",timestamp:ports.clock.isoNow()}),/illegal/);
   db.close();
+});
+
+await check("production intake keeps a watched source until complete and records the canonical path", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "q2v-delayed-source-"));
+  try {
+    const db = openDatabase(path.join(root, "vault.db"));
+    const drop = path.join(root, "Drop");
+    await fs.mkdir(drop, { recursive: true });
+    const source = path.join(drop, "invoice.txt");
+    await fs.writeFile(source, "Invoice\nTotal: INR 100.00\n");
+    const productionPorts: Ports = {
+      ...ports,
+      paths: createPaths(path.join(root, "vault")),
+      converter: {
+        async toMarkdown(file) {
+          return { markdown: await fs.readFile(file, "utf8"), converter: "test", converterVersion: "1" };
+        },
+      },
+    };
+
+    const intake = await ingestFile(db, productionPorts, source, {
+      source: "folder",
+      consumeSource: true,
+      checkStable: false,
+    });
+    assert.equal(intake.disposition, "accepted");
+    assert.equal(await fs.stat(source).then(() => true, () => false), true, "accepted source was removed before analysis completed");
+
+    const worker = new JobWorker(db, productionPorts, nullAiProvider);
+    await worker.tick();
+    assert.equal(await fs.stat(source).then(() => true, () => false), true, "conversion removed the source before analysis completed");
+    await worker.tick();
+    assert.equal(await fs.stat(source).then(() => true, () => false), false, "complete pipeline did not remove watched source");
+    assert.deepEqual(
+      pipelineEventsFor(db, intake.document_id!).map((event) => event.toState),
+      ["received", "stable", "hashed", "triaged", "converting", "analysing", "complete"],
+    );
+    db.close();
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 await check("claims preserve user confirmation on reanalysis and parties are role/kind safe", () => {

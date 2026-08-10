@@ -52,6 +52,7 @@ import {
   applyPersonCorrection,
   classifyIdentifier,
   isGenericMailbox,
+  mergePeople,
   normaliseIdentifier,
   UNIDENTIFIED_PERSON_ID,
 } from "./identity.js";
@@ -1571,37 +1572,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           return send(res, 409, { error: "both entities must be people" });
         }
 
-        const now = ports.clock.isoNow();
-        db.exec("BEGIN");
-        try {
-          db.prepare("UPDATE OR IGNORE document_parties SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
-          db.prepare("UPDATE OR IGNORE entity_aliases SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
-          // The absorbed spelling becomes an alias, so the same variant on a
-          // future document resolves without asking again. Normalised with
-          // normaliseName — a bare toLowerCase leaves punctuation in the key
-          // and the resolver would never find this alias again.
-          db.prepare(
-            `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at, last_seen_at)
-             VALUES (?, 'person', ?, ?, 'name_variant', 'user-merge', 'confirmed', ?, ?)
-             ON CONFLICT(kind, normalised) DO UPDATE SET status='confirmed', last_seen_at=excluded.last_seen_at`,
-          ).run(into.id, from.display_name, normaliseName(from.display_name), now, now);
-          // Merging into a non-member keeps membership (and ownership) if
-          // either side had it.
-          db.prepare(
-            `UPDATE entities SET
-               is_member = MAX(is_member, (SELECT is_member FROM entities WHERE id=?)),
-               is_owner  = MAX(is_owner,  (SELECT is_owner  FROM entities WHERE id=?)),
-               updated_at=?
-             WHERE id=?`,
-          ).run(from.id, from.id, now, into.id);
-          db.prepare("DELETE FROM entities WHERE id=?").run(from.id);
-          db.exec("COMMIT");
-        } catch (e) {
-          db.exec("ROLLBACK");
-          throw e;
-        }
-        ports.logger.info("people merged", { from: from.display_name, into: into.display_name });
-        return send(res, 200, { merged: true, into: into.display_name });
+        return send(res, 200, mergePeople(db, ports, from.id, into.id));
       }
 
       // Every spelling the vault knows for one person, typed and with

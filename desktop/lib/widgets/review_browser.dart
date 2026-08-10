@@ -26,19 +26,9 @@ import 'magnified_document.dart';
 
 class ReviewBrowser extends StatefulWidget {
   final VaultApi api;
+  final String? initialDocumentId;
 
-  /// Learning-Mode questions, passed through so the queue stays reachable.
-  final int pendingQuestions;
-
-  /// Opens the Learning-Mode queue (the old Review surface).
-  final VoidCallback? onOpenQueue;
-
-  const ReviewBrowser({
-    super.key,
-    required this.api,
-    this.pendingQuestions = 0,
-    this.onOpenQueue,
-  });
+  const ReviewBrowser({super.key, required this.api, this.initialDocumentId});
 
   @override
   State<ReviewBrowser> createState() => _ReviewBrowserState();
@@ -67,6 +57,15 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
     _load();
   }
 
+  @override
+  void didUpdateWidget(covariant ReviewBrowser oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final requested = widget.initialDocumentId;
+    if (requested == null || requested == oldWidget.initialDocumentId) return;
+    final match = _docs.where((doc) => doc.id == requested).firstOrNull;
+    if (match != null && match.id != _selected?.id) _select(match);
+  }
+
   Future<void> _load() async {
     try {
       final docs = await widget.api.documents();
@@ -75,8 +74,12 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
         _docs = docs;
         _loading = false;
         _error = null;
-        // Select the newest by default so the pane is never empty on open.
-        _selected ??= docs.isEmpty ? null : docs.first;
+        // A cross-tab jump selects its document; otherwise select newest.
+        _selected ??=
+            docs
+                .where((doc) => doc.id == widget.initialDocumentId)
+                .firstOrNull ??
+            (docs.isEmpty ? null : docs.first);
         // Same rule as _select(): a non-image document has only a markdown
         // view. Without this the FIRST document (auto-selected, never clicked)
         // would open on the image pane regardless of its format.
@@ -164,10 +167,12 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
     if (_query.trim().isEmpty) return _docs;
     final q = _query.toLowerCase();
     return _docs
-        .where((d) =>
-            d.filename.toLowerCase().contains(q) ||
-            (d.docType ?? '').toLowerCase().contains(q) ||
-            (d.source ?? '').toLowerCase().contains(q))
+        .where(
+          (d) =>
+              d.filename.toLowerCase().contains(q) ||
+              (d.docType ?? '').toLowerCase().contains(q) ||
+              (d.source ?? '').toLowerCase().contains(q),
+        )
         .toList();
   }
 
@@ -190,8 +195,6 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
         _Header(
           total: _docs.length,
           shown: _visible.length,
-          pendingQuestions: widget.pendingQuestions,
-          onOpenQueue: widget.onOpenQueue,
           onSearch: (v) => setState(() => _query = v),
         ),
         const Divider(height: 1, color: VaultColors.line),
@@ -211,8 +214,10 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
               Expanded(
                 child: _selected == null
                     ? const Center(
-                        child: Text('No document selected',
-                            style: TextStyle(color: VaultColors.faint)),
+                        child: Text(
+                          'No document selected',
+                          style: TextStyle(color: VaultColors.faint),
+                        ),
                       )
                     : _Detail(
                         api: widget.api,
@@ -243,73 +248,65 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
 class _Header extends StatelessWidget {
   final int total;
   final int shown;
-  final int pendingQuestions;
-  final VoidCallback? onOpenQueue;
   final ValueChanged<String> onSearch;
 
   const _Header({
     required this.total,
     required this.shown,
-    required this.pendingQuestions,
-    required this.onOpenQueue,
     required this.onSearch,
   });
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-        child: Row(
-          children: [
-            // Flexible, not bare Text: with the "N to teach" button present the
-            // fixed title + count + 220px search field overflowed the row at
-            // narrow widths (caught by the queue-reachable test, which is the
-            // only case that renders all four children at once).
-            const Flexible(
-              child: Text('Document Review',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      color: VaultColors.ink)),
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+    child: Row(
+      children: [
+        // Flexible, not bare Text: with the "N to teach" button present the
+        // fixed title + count + 220px search field overflowed the row at
+        // narrow widths (caught by the queue-reachable test, which is the
+        // only case that renders all four children at once).
+        const Flexible(
+          child: Text(
+            'Document Review',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: VaultColors.ink,
             ),
-            const SizedBox(width: 12),
-            // State the filter honestly: "12 of 137" beats a bare count when a
-            // search is active, because a shrinking list otherwise looks like
-            // documents went missing.
-            Flexible(
-              child: Text(
-                shown == total ? '$total documents' : '$shown of $total',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12, color: VaultColors.faint),
-              ),
-            ),
-            const Spacer(),
-            if (pendingQuestions > 0 && onOpenQueue != null)
-              Padding(
-                padding: const EdgeInsets.only(right: 12),
-                child: TextButton(
-                  onPressed: onOpenQueue,
-                  child: Text('$pendingQuestions to teach'),
-                ),
-              ),
-            SizedBox(
-              width: 220,
-              child: TextField(
-                onChanged: onSearch,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  hintText: 'Search',
-                  prefixIcon: Icon(Icons.search, size: 16),
-                  border: OutlineInputBorder(),
-                ),
-                style: const TextStyle(fontSize: 13),
-              ),
-            ),
-          ],
+          ),
         ),
-      );
+        const SizedBox(width: 12),
+        // State the filter honestly: "12 of 137" beats a bare count when a
+        // search is active, because a shrinking list otherwise looks like
+        // documents went missing.
+        Flexible(
+          child: Text(
+            shown == total ? '$total documents' : '$shown of $total',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, color: VaultColors.faint),
+          ),
+        ),
+        const Spacer(),
+
+        SizedBox(
+          width: 220,
+          child: TextField(
+            onChanged: onSearch,
+            decoration: const InputDecoration(
+              isDense: true,
+              hintText: 'Search',
+              prefixIcon: Icon(Icons.search, size: 16),
+              border: OutlineInputBorder(),
+            ),
+            style: const TextStyle(fontSize: 13),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _DocList extends StatelessWidget {
@@ -327,8 +324,10 @@ class _DocList extends StatelessWidget {
   Widget build(BuildContext context) {
     if (docs.isEmpty) {
       return const Center(
-        child: Text('Nothing matches',
-            style: TextStyle(color: VaultColors.faint, fontSize: 13)),
+        child: Text(
+          'Nothing matches',
+          style: TextStyle(color: VaultColors.faint, fontSize: 13),
+        ),
       );
     }
     return ListView.builder(
@@ -365,7 +364,9 @@ class _DocList extends StatelessWidget {
                           if (d.source != null) d.source!,
                         ].join(' · '),
                         style: const TextStyle(
-                            fontSize: 11, color: VaultColors.faint),
+                          fontSize: 11,
+                          color: VaultColors.faint,
+                        ),
                       ),
                     ],
                   ),
@@ -374,11 +375,13 @@ class _DocList extends StatelessWidget {
                 // unanalysed document contributes nothing to any total.
                 Tooltip(
                   message: d.analysed ? 'Analysed' : 'Not analysed yet',
-                  child: Icon(Icons.circle,
-                      size: 8,
-                      color: d.analysed
-                          ? const Color(0xFF16663C)
-                          : VaultColors.lineBright),
+                  child: Icon(
+                    Icons.circle,
+                    size: 8,
+                    color: d.analysed
+                        ? const Color(0xFF16663C)
+                        : VaultColors.lineBright,
+                  ),
                 ),
               ],
             ),
@@ -402,7 +405,12 @@ class _EvidenceCard extends StatefulWidget {
   final VaultDoc doc;
   final VoidCallback? onChanged;
 
-  const _EvidenceCard({super.key, required this.api, required this.doc, this.onChanged});
+  const _EvidenceCard({
+    super.key,
+    required this.api,
+    required this.doc,
+    this.onChanged,
+  });
 
   @override
   State<_EvidenceCard> createState() => _EvidenceCardState();
@@ -479,137 +487,190 @@ class _EvidenceCardState extends State<_EvidenceCard> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: VaultColors.line),
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // The amount, never detached from its currency context (§A.3).
-        if (amountMinor != null)
-          Row(crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic, children: [
-            Text(
-              money(amountMinor, currency),
-              style: moneyStyle.copyWith(
-                fontSize: 17,
-                color: currency == null ? VaultColors.warn : VaultColors.ink,
-              ),
-            ),
-            const SizedBox(width: 8),
-            if (currency == null)
-              const Flexible(
-                child: Text('currency uncertain — set it below',
-                    style: TextStyle(fontSize: 11, color: VaultColors.warn)),
-              )
-            else
-              _ProvBadge(source: d['currency']!.source),
-            const Spacer(),
-            for (final t in d.transactions)
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: Text(
-                  '${t.direction} · ${t.sourceAmount} · linked by ${t.linkedBy ?? "ai"}',
-                  style: const TextStyle(
-                      fontSize: 10.5, fontFamily: VaultType.mono, color: VaultColors.faint),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // The amount, never detached from its currency context (§A.3).
+          if (amountMinor != null)
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  money(amountMinor, currency),
+                  style: moneyStyle.copyWith(
+                    fontSize: 17,
+                    color: currency == null
+                        ? VaultColors.warn
+                        : VaultColors.ink,
+                  ),
                 ),
-              ),
-          ]),
-        if (amountMinor != null) const SizedBox(height: 8),
+                const SizedBox(width: 8),
+                if (currency == null)
+                  const Flexible(
+                    child: Text(
+                      'currency uncertain — set it below',
+                      style: TextStyle(fontSize: 11, color: VaultColors.warn),
+                    ),
+                  )
+                else
+                  _ProvBadge(source: d['currency']!.source),
+                const Spacer(),
+                for (final t in d.transactions)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: Text(
+                      '${t.direction} · ${t.sourceAmount} · linked by ${t.linkedBy ?? "ai"}',
+                      style: const TextStyle(
+                        fontSize: 10.5,
+                        fontFamily: VaultType.mono,
+                        color: VaultColors.faint,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          if (amountMinor != null) const SizedBox(height: 8),
 
-        // Invoice identity row: number, dates, bill-to.
-        Wrap(spacing: 18, runSpacing: 4, children: [
-          if (d.referenceIds['invoice_no'] != null)
-            _Fact(label: 'invoice', value: '${d.referenceIds['invoice_no']}'),
-          if (d['document_date'] != null)
-            _Fact(label: 'date', value: d['document_date']!.value),
-          if (d['posted_at'] != null)
-            _Fact(label: 'due / settled', value: d['posted_at']!.value),
-          if (orgs.isNotEmpty)
-            _Fact(label: 'bill-to / counterparty', value: orgs.first['display_name'] as String),
-          for (final p in people)
-            _Fact(label: 'person (${p['role']})', value: p['display_name'] as String),
-        ]),
+          // Invoice identity row: number, dates, bill-to.
+          Wrap(
+            spacing: 18,
+            runSpacing: 4,
+            children: [
+              if (d.referenceIds['invoice_no'] != null)
+                _Fact(
+                  label: 'invoice',
+                  value: '${d.referenceIds['invoice_no']}',
+                ),
+              if (d['document_date'] != null)
+                _Fact(label: 'date', value: d['document_date']!.value),
+              if (d['posted_at'] != null)
+                _Fact(label: 'due / settled', value: d['posted_at']!.value),
+              if (orgs.isNotEmpty)
+                _Fact(
+                  label: 'bill-to / counterparty',
+                  value: orgs.first['display_name'] as String,
+                ),
+              for (final p in people)
+                _Fact(
+                  label: 'person (${p['role']})',
+                  value: p['display_name'] as String,
+                ),
+            ],
+          ),
 
-        // Itemised bill, when the document prints one (§A.4.5).
-        if (d.lineItems.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          const Divider(height: 1, color: VaultColors.line),
-          const SizedBox(height: 6),
-          for (final li in d.lineItems)
-            Row(children: [
-              Expanded(
-                child: Text('${li['description']}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11.5, color: VaultColors.dim)),
+          // Itemised bill, when the document prints one (§A.4.5).
+          if (d.lineItems.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Divider(height: 1, color: VaultColors.line),
+            const SizedBox(height: 6),
+            for (final li in d.lineItems)
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${li['description']}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        color: VaultColors.dim,
+                      ),
+                    ),
+                  ),
+                  if (li['amount_minor'] != null)
+                    Text(
+                      money((li['amount_minor'] as num).toInt(), currency),
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        fontFamily: VaultType.mono,
+                        color: VaultColors.dim,
+                      ),
+                    ),
+                ],
               ),
-              if (li['amount_minor'] != null)
-                Text(money((li['amount_minor'] as num).toInt(), currency),
-                    style: const TextStyle(
-                        fontSize: 11.5, fontFamily: VaultType.mono, color: VaultColors.dim)),
-            ]),
-          if (d.subtotalMinor != null || d.taxMinor != null) ...[
-            const SizedBox(height: 4),
-            Row(children: [
-              const Spacer(),
-              if (d.subtotalMinor != null)
-                Text('subtotal ${money(d.subtotalMinor!, currency)}   ',
-                    style: const TextStyle(fontSize: 10.5, color: VaultColors.faint)),
-              if (d.taxMinor != null)
-                Text('tax ${money(d.taxMinor!, currency)}',
-                    style: const TextStyle(fontSize: 10.5, color: VaultColors.faint)),
-            ]),
+            if (d.subtotalMinor != null || d.taxMinor != null) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Spacer(),
+                  if (d.subtotalMinor != null)
+                    Text(
+                      'subtotal ${money(d.subtotalMinor!, currency)}   ',
+                      style: const TextStyle(
+                        fontSize: 10.5,
+                        color: VaultColors.faint,
+                      ),
+                    ),
+                  if (d.taxMinor != null)
+                    Text(
+                      'tax ${money(d.taxMinor!, currency)}',
+                      style: const TextStyle(
+                        fontSize: 10.5,
+                        color: VaultColors.faint,
+                      ),
+                    ),
+                ],
+              ),
+            ],
           ],
+
+          const SizedBox(height: 6),
+          const Divider(height: 1, color: VaultColors.line),
+          const SizedBox(height: 4),
+
+          // Correctable fields, document-scope (§Track C). Editing the person
+          // relinks THIS document and teaches the identity resolver; it never
+          // rewrites the original or its markdown.
+          EditableField(
+            label: 'person',
+            field: 'person',
+            subjectType: 'documents',
+            subjectId: widget.doc.id,
+            api: widget.api,
+            value:
+                d['person']?.value ??
+                (people.isEmpty
+                    ? null
+                    : people.first['display_name'] as String),
+            claim: _claimOf('person'),
+            editable: d.editableFields.contains('person'),
+            onSaved: (_) {
+              _load();
+              widget.onChanged?.call();
+            },
+          ),
+          EditableField(
+            label: 'currency',
+            field: 'currency',
+            subjectType: 'documents',
+            subjectId: widget.doc.id,
+            api: widget.api,
+            value: currency,
+            claim: _claimOf('currency'),
+            editable: d.editableFields.contains('currency'),
+            onSaved: (_) {
+              _load();
+              widget.onChanged?.call();
+            },
+          ),
+          EditableField(
+            label: 'amount (minor)',
+            field: 'amount_minor',
+            subjectType: 'documents',
+            subjectId: widget.doc.id,
+            api: widget.api,
+            numeric: true,
+            value: d['amount_minor']?.value,
+            claim: _claimOf('amount_minor'),
+            editable: d.editableFields.contains('amount_minor'),
+            onSaved: (_) {
+              _load();
+              widget.onChanged?.call();
+            },
+          ),
         ],
-
-        const SizedBox(height: 6),
-        const Divider(height: 1, color: VaultColors.line),
-        const SizedBox(height: 4),
-
-        // Correctable fields, document-scope (§Track C). Editing the person
-        // relinks THIS document and teaches the identity resolver; it never
-        // rewrites the original or its markdown.
-        EditableField(
-          label: 'person',
-          field: 'person',
-          subjectType: 'documents',
-          subjectId: widget.doc.id,
-          api: widget.api,
-          value: d['person']?.value ??
-              (people.isEmpty ? null : people.first['display_name'] as String),
-          claim: _claimOf('person'),
-          editable: d.editableFields.contains('person'),
-          onSaved: (_) {
-            _load();
-            widget.onChanged?.call();
-          },
-        ),
-        EditableField(
-          label: 'currency',
-          field: 'currency',
-          subjectType: 'documents',
-          subjectId: widget.doc.id,
-          api: widget.api,
-          value: currency,
-          claim: _claimOf('currency'),
-          editable: d.editableFields.contains('currency'),
-          onSaved: (_) {
-            _load();
-            widget.onChanged?.call();
-          },
-        ),
-        EditableField(
-          label: 'amount (minor)',
-          field: 'amount_minor',
-          subjectType: 'documents',
-          subjectId: widget.doc.id,
-          api: widget.api,
-          numeric: true,
-          value: d['amount_minor']?.value,
-          claim: _claimOf('amount_minor'),
-          editable: d.editableFields.contains('amount_minor'),
-          onSaved: (_) {
-            _load();
-            widget.onChanged?.call();
-          },
-        ),
-      ]),
+      ),
     );
   }
 }
@@ -621,13 +682,23 @@ class _Fact extends StatelessWidget {
   const _Fact({required this.label, required this.value});
 
   @override
-  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
-        Text('$label  ',
-            style: const TextStyle(
-                fontSize: 10.5, fontFamily: VaultType.mono, color: VaultColors.faint)),
-        Text(value,
-            style: const TextStyle(fontSize: 11.5, color: VaultColors.ink)),
-      ]);
+  Widget build(BuildContext context) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(
+        '$label  ',
+        style: const TextStyle(
+          fontSize: 10.5,
+          fontFamily: VaultType.mono,
+          color: VaultColors.faint,
+        ),
+      ),
+      Text(
+        value,
+        style: const TextStyle(fontSize: 11.5, color: VaultColors.ink),
+      ),
+    ],
+  );
 }
 
 /// A tiny provenance chip — who said so: ai | rule | user | import.
@@ -644,9 +715,19 @@ class _ProvBadge extends StatelessWidget {
     };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-      decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(3)),
-      child: Text(source,
-          style: TextStyle(fontSize: 9, fontFamily: VaultType.mono, color: fg, height: 1.3)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(
+        source,
+        style: TextStyle(
+          fontSize: 9,
+          fontFamily: VaultType.mono,
+          color: fg,
+          height: 1.3,
+        ),
+      ),
     );
   }
 }
@@ -680,93 +761,93 @@ class _Detail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(doc.filename,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                              color: VaultColors.ink)),
-                      Text(
-                        '${doc.receivedAt.split('T').first} · '
-                        '${doc.analysed ? 'analysed' : 'awaiting analysis'}',
-                        style: const TextStyle(
-                            fontSize: 11, color: VaultColors.faint),
-                      ),
-                    ],
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    doc.filename,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: VaultColors.ink,
+                    ),
                   ),
-                ),
-                _Toggle(
-                  showMarkdown: showMarkdown,
-                  // A non-image document has exactly one view, so there is
-                  // nothing to toggle between — the control is omitted rather
-                  // than shown with a permanently-dead half.
-                  hasPageImage: doc.hasPageImage,
-                  markdownAvailable: doc.hasMarkdown,
-                  onToggle: onToggle,
-                ),
-              ],
-            ),
-          ),
-          if (doc.docType == 'bank_statement' || doc.docType == 'card_statement')
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-              child: StatementCard(api: api, documentId: doc.id),
-            ),
-          // The evidence summary: what the vault read, with source currency
-          // and provenance (work order 05 §A.3). Keyed by document so
-          // switching documents or toggling Document/Markdown never shows a
-          // stale document's figures.
-          //
-          // No flex factor: the card takes only its intrinsic height (capped at
-          // 220px by the ConstrainedBox), and the Expanded document pane below
-          // gets ALL the remaining space. With a shared flex: 1 the two split
-          // the remaining height 50/50, leaving the document pane too small to
-          // read — the document must fit to height, the card must not steal
-          // that space.
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 220),
-            child: SingleChildScrollView(
-              child: _EvidenceCard(
-                key: ValueKey('evidence-${doc.id}'),
-                api: api,
-                doc: doc,
-                onChanged: onChanged,
+                  Text(
+                    '${doc.receivedAt.split('T').first} · '
+                    '${doc.analysed ? 'analysed' : 'awaiting analysis'}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: VaultColors.faint,
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-              child: showMarkdown
-                  ? _MarkdownPane(
-                      markdown: markdown, loading: markdownLoading)
-                  : _DocumentPane(api: api, doc: doc, page: page),
+            _Toggle(
+              showMarkdown: showMarkdown,
+              // A non-image document has exactly one view, so there is
+              // nothing to toggle between — the control is omitted rather
+              // than shown with a permanently-dead half.
+              hasPageImage: doc.hasPageImage,
+              markdownAvailable: doc.hasMarkdown,
+              onToggle: onToggle,
             ),
+          ],
+        ),
+      ),
+      if (doc.docType == 'bank_statement' || doc.docType == 'card_statement')
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+          child: StatementCard(api: api, documentId: doc.id),
+        ),
+      // The evidence summary: what the vault read, with source currency
+      // and provenance (work order 05 §A.3). Keyed by document so
+      // switching documents or toggling Document/Markdown never shows a
+      // stale document's figures.
+      //
+      // No flex factor: the card takes only its intrinsic height (capped at
+      // 220px by the ConstrainedBox), and the Expanded document pane below
+      // gets ALL the remaining space. With a shared flex: 1 the two split
+      // the remaining height 50/50, leaving the document pane too small to
+      // read — the document must fit to height, the card must not steal
+      // that space.
+      ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 220),
+        child: SingleChildScrollView(
+          child: _EvidenceCard(
+            key: ValueKey('evidence-${doc.id}'),
+            api: api,
+            doc: doc,
+            onChanged: onChanged,
           ),
-          // The pager sits BELOW the document, not above: it is navigation for
-          // what you are looking at, and putting it under the image keeps the
-          // document top-aligned with the metadata beside it.
-          if (!showMarkdown && pageInfo.showPager)
-            _Pager(
-              page: page,
-              pages: pageInfo.pages,
-              onPage: onPage,
-            )
-          else
-            const SizedBox(height: 12),
-        ],
-      );
+        ),
+      ),
+      Expanded(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+          child: showMarkdown
+              ? _MarkdownPane(markdown: markdown, loading: markdownLoading)
+              : _DocumentPane(api: api, doc: doc, page: page),
+        ),
+      ),
+      // The pager sits BELOW the document, not above: it is navigation for
+      // what you are looking at, and putting it under the image keeps the
+      // document top-aligned with the metadata beside it.
+      if (!showMarkdown && pageInfo.showPager)
+        _Pager(page: page, pages: pageInfo.pages, onPage: onPage)
+      else
+        const SizedBox(height: 12),
+    ],
+  );
 }
 
 class _Toggle extends StatelessWidget {
@@ -790,8 +871,10 @@ class _Toggle extends StatelessWidget {
     if (!hasPageImage) {
       return const Padding(
         padding: EdgeInsets.only(left: 6),
-        child: Text('Markdown only',
-            style: TextStyle(fontSize: 11, color: VaultColors.faint)),
+        child: Text(
+          'Markdown only',
+          style: TextStyle(fontSize: 11, color: VaultColors.faint),
+        ),
       );
     }
 
@@ -831,34 +914,34 @@ class _Seg extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Semantics(
-        button: true,
-        selected: selected,
-        enabled: enabled,
-        label: label,
-        child: InkWell(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-            decoration: BoxDecoration(
-              color: selected ? VaultColors.accent : VaultColors.controlSubtle,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            margin: const EdgeInsets.only(left: 6),
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                color: !enabled
-                    ? VaultColors.faint.withValues(alpha: 0.45)
-                    : selected
-                        ? const Color(0xFFFFFFFF)
-                        : VaultColors.dim,
-              ),
-            ),
+    button: true,
+    selected: selected,
+    enabled: enabled,
+    label: label,
+    child: InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: selected ? VaultColors.accent : VaultColors.controlSubtle,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        margin: const EdgeInsets.only(left: 6),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+            color: !enabled
+                ? VaultColors.faint.withValues(alpha: 0.45)
+                : selected
+                ? const Color(0xFFFFFFFF)
+                : VaultColors.dim,
           ),
         ),
-      );
+      ),
+    ),
+  );
 }
 
 /// Page navigation for a multi-page document.
@@ -870,48 +953,44 @@ class _Pager extends StatelessWidget {
   final int pages;
   final ValueChanged<int> onPage;
 
-  const _Pager({
-    required this.page,
-    required this.pages,
-    required this.onPage,
-  });
+  const _Pager({required this.page, required this.pages, required this.onPage});
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            IconButton(
-              // Disabled at the boundary rather than wrapping: silently jumping
-              // from page 1 to page 5 reads as a glitch.
-              onPressed: page > 1 ? () => onPage(page - 1) : null,
-              icon: const Icon(Icons.chevron_left, size: 18),
-              tooltip: 'Previous page',
-              visualDensity: VisualDensity.compact,
-            ),
-            // State both numbers: "2 / 5" tells you where you are AND how much
-            // is left, which a bare "2" does not.
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
-              child: Text(
-                '$page / $pages',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: VaultColors.dim,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              ),
-            ),
-            IconButton(
-              onPressed: page < pages ? () => onPage(page + 1) : null,
-              icon: const Icon(Icons.chevron_right, size: 18),
-              tooltip: 'Next page',
-              visualDensity: VisualDensity.compact,
-            ),
-          ],
+    padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        IconButton(
+          // Disabled at the boundary rather than wrapping: silently jumping
+          // from page 1 to page 5 reads as a glitch.
+          onPressed: page > 1 ? () => onPage(page - 1) : null,
+          icon: const Icon(Icons.chevron_left, size: 18),
+          tooltip: 'Previous page',
+          visualDensity: VisualDensity.compact,
         ),
-      );
+        // State both numbers: "2 / 5" tells you where you are AND how much
+        // is left, which a bare "2" does not.
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Text(
+            '$page / $pages',
+            style: const TextStyle(
+              fontSize: 12,
+              color: VaultColors.dim,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ),
+        IconButton(
+          onPressed: page < pages ? () => onPage(page + 1) : null,
+          icon: const Icon(Icons.chevron_right, size: 18),
+          tooltip: 'Next page',
+          visualDensity: VisualDensity.compact,
+        ),
+      ],
+    ),
+  );
 }
 
 class _DocumentPane extends StatelessWidget {
@@ -931,9 +1010,11 @@ class _DocumentPane extends StatelessWidget {
     // straight to markdown, and the toggle offers no way back. Assert rather
     // than render a fallback, so a future caller that breaks that invariant
     // fails loudly in tests instead of showing a silently-empty pane.
-    assert(doc.hasPageImage,
-        'the image pane received ${doc.ext} — non-image documents are '
-        'markdown-only and must not reach here');
+    assert(
+      doc.hasPageImage,
+      'the image pane received ${doc.ext} — non-image documents are '
+      'markdown-only and must not reach here',
+    );
 
     return Container(
       decoration: BoxDecoration(
@@ -956,8 +1037,10 @@ class _DocumentPane extends StatelessWidget {
           headers: api.imageHeaders,
         ),
         fallback: const Center(
-          child: Text('Could not load this document',
-              style: TextStyle(fontSize: 13, color: VaultColors.dim)),
+          child: Text(
+            'Could not load this document',
+            style: TextStyle(fontSize: 13, color: VaultColors.dim),
+          ),
         ),
       ),
     );
@@ -977,8 +1060,10 @@ class _MarkdownPane extends StatelessWidget {
     }
     if (markdown == null || markdown!.isEmpty) {
       return const Center(
-        child: Text('Not converted yet',
-            style: TextStyle(fontSize: 13, color: VaultColors.faint)),
+        child: Text(
+          'Not converted yet',
+          style: TextStyle(fontSize: 13, color: VaultColors.faint),
+        ),
       );
     }
     return Container(
