@@ -7,10 +7,11 @@
 //
 // Implementation notes, because the coordinate maths is the whole difficulty:
 //
-//   * The image is laid out with BoxFit.contain, so it is letterboxed inside
-//     its box. Pointer coordinates are in BOX space; the lens must sample in
-//     IMAGE space. Mapping between the two is what makes the lens track the
-//     thing under the cursor rather than drifting toward the edges.
+//   * The image is laid out with BoxFit.fitHeight, so it fills the box height
+//     and may overflow horizontally. Pointer coordinates are in BOX space; the
+//     lens must sample in IMAGE space. Mapping between the two is what makes
+//     the lens track the thing under the cursor rather than drifting toward
+//     the edges.
 //   * The lens is clamped so it never straddles the box edge, which would show
 //     a half-empty circle at the margins.
 //   * Nothing rebuilds during pointer movement except the lens itself: the
@@ -23,8 +24,9 @@ import '../theme.dart';
 /// How much the lens enlarges. Matches the React app's PREVIEW_ZOOM.
 const double kLensZoom = 3.0;
 
-/// Lens radius in logical pixels. Matches the React app's LENS_RADIUS.
-const double kLensRadius = 80.0;
+/// Lens radius in logical pixels. 1.5x the React app's LENS_RADIUS (80) so
+/// fine print is easier to read without opening Preview.app.
+const double kLensRadius = 120.0;
 
 class MagnifiedDocument extends StatefulWidget {
   /// The image to display and magnify.
@@ -109,20 +111,20 @@ class _MagnifiedDocumentState extends State<MagnifiedDocument> {
     super.dispose();
   }
 
-  /// The rect the image actually occupies inside [box] under BoxFit.contain.
+  /// The rect the image actually occupies inside [box] under BoxFit.fitHeight.
   ///
   /// This is the crux: without it the lens samples container coordinates and
   /// the magnified region drifts away from the cursor wherever the image is
-  /// letterboxed.
+  /// letterboxed. With fitHeight the image fills the box height and may overflow
+  /// horizontally — the rect is centred and clipped, matching what the user sees.
   Rect _imageRect(Size box) {
     final img = _intrinsic;
     if (img == null || img.isEmpty) return Rect.fromLTWH(0, 0, box.width, box.height);
-    final scale = (box.width / img.width) < (box.height / img.height)
-        ? box.width / img.width
-        : box.height / img.height;
+    // fitHeight: scale to fill height, overflow width.
+    final scale = box.height / img.height;
     final w = img.width * scale;
-    final h = img.height * scale;
-    return Rect.fromLTWH((box.width - w) / 2, (box.height - h) / 2, w, h);
+    final h = box.height;
+    return Rect.fromLTWH((box.width - w) / 2, 0, w, h);
   }
 
   @override
@@ -146,7 +148,7 @@ class _MagnifiedDocumentState extends State<MagnifiedDocument> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              Image(image: widget.image, fit: BoxFit.contain),
+              Image(image: widget.image, fit: BoxFit.fitHeight),
               if (canZoom)
                 ValueListenableBuilder<Offset?>(
                   valueListenable: _pos,

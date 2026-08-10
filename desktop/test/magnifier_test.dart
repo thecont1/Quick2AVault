@@ -1,10 +1,11 @@
 // The magnifier must magnify what is UNDER THE CURSOR.
 //
 // The bug this guards is subtle and very easy to ship: the pointer arrives in
-// box coordinates, but the image is letterboxed inside that box by
-// BoxFit.contain. Sampling in box space makes the lens track something slightly
-// wrong — the error is zero at the centre and grows toward the edges, so it
-// looks fine in casual testing and is wrong exactly where fine print lives.
+// box coordinates, but the image is laid out inside that box by BoxFit.fitHeight
+// — it fills the height and may overflow horizontally. Sampling in box space
+// makes the lens track something slightly wrong — the error is zero at the
+// centre and grows toward the edges, so it looks fine in casual testing and is
+// wrong exactly where fine print lives.
 //
 // These tests exercise the mapping directly rather than through a golden image,
 // because a screenshot cannot tell you WHICH pixel the lens sampled.
@@ -14,16 +15,15 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:quick2avault_desktop/widgets/magnified_document.dart';
 
-/// Re-implements the widget's letterbox maths so the contract can be asserted
+/// Re-implements the widget's fitHeight maths so the contract can be asserted
 /// independently. If the widget changes, this must be updated deliberately —
 /// that is the point.
 Rect imageRectFor(Size box, Size intrinsic) {
-  final scale = (box.width / intrinsic.width) < (box.height / intrinsic.height)
-      ? box.width / intrinsic.width
-      : box.height / intrinsic.height;
+  // fitHeight: scale to fill height, overflow width.
+  final scale = box.height / intrinsic.height;
   final w = intrinsic.width * scale;
-  final h = intrinsic.height * scale;
-  return Rect.fromLTWH((box.width - w) / 2, (box.height - h) / 2, w, h);
+  final h = box.height;
+  return Rect.fromLTWH((box.width - w) / 2, 0, w, h);
 }
 
 /// Where the lens places the enlarged image, given a pointer position.
@@ -37,7 +37,7 @@ Offset lensOffsetFor(Offset pointer, Rect imageRect) {
 }
 
 void main() {
-  group('letterbox mapping', () {
+  group('fitHeight mapping', () {
     test('a portrait document in a wide box is centred horizontally', () {
       // A4-ish portrait page in a landscape viewport: bars on the left/right.
       final r = imageRectFor(const Size(800, 600), const Size(595, 842));
@@ -47,12 +47,13 @@ void main() {
       expect(r.top, 0);
     });
 
-    test('a landscape document in a tall box is centred vertically', () {
+    test('a landscape document in a tall box fills the height and overflows width', () {
+      // fitHeight: the image fills the box height and extends beyond the sides.
       final r = imageRectFor(const Size(600, 800), const Size(1600, 900));
-      expect(r.width, 600);
-      expect(r.height, closeTo(337.5, 0.1));
-      expect(r.top, closeTo((800 - 337.5) / 2, 0.1));
-      expect(r.left, 0);
+      expect(r.height, 800, reason: 'fills the box height');
+      expect(r.width, closeTo(1422.2, 0.1), reason: 'overflows the 600px box width');
+      expect(r.top, 0);
+      expect(r.left, closeTo((600 - 1422.2) / 2, 0.1), reason: 'centred, clipped by the box');
     });
 
     test('an exactly-matching aspect ratio has no letterbox', () {
@@ -99,11 +100,11 @@ void main() {
           reason: 'the error scales with the zoom — 3x here');
     });
 
-    test('zoom and radius are the values the original app used', () {
-      // Ported deliberately: 3x at 80px reads invoice line items comfortably.
+    test('zoom and radius are the values the app uses', () {
+      // 3x at 120px (1.5x the original 80px) reads invoice line items comfortably.
       // Changing these is a design decision, not an implementation detail.
       expect(kLensZoom, 3.0);
-      expect(kLensRadius, 80.0);
+      expect(kLensRadius, 120.0);
     });
   });
 
