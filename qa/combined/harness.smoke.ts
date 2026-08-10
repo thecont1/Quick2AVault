@@ -182,6 +182,14 @@ await check(
       const identical = await compareVisualCaptures({ goldenDir, captureDir, maxDistance: 0 });
       assert.ok(identical.every((item) => item.status === "passed"));
 
+      await fs.copyFile(path.join(goldenDir, names[1]), path.join(captureDir, names[0]));
+      const structurallyDifferent = await compareVisualCaptures({ goldenDir, captureDir });
+      assert.equal(
+        structurallyDifferent.find((item) => item.name.includes(names[0]))?.status,
+        "failed",
+      );
+      await fs.copyFile(path.join(goldenDir, names[0]), path.join(captureDir, names[0]));
+
       await fs.rm(path.join(captureDir, names[0]));
       const missing = await compareVisualCaptures({ goldenDir, captureDir });
       assert.ok(

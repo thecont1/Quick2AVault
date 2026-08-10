@@ -6,7 +6,7 @@ import { inflateSync } from "node:zlib";
 import type { Assertion } from "./runner.js";
 
 const PNG_SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-const DEFAULT_MAX_DISTANCE = 0.18;
+const DEFAULT_MAX_DISTANCE = 0.025;
 
 type Image = { width: number; height: number; channels: number; pixels: Uint8Array };
 
