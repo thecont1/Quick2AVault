@@ -811,6 +811,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           "documents",
           "entities",
           "jobs",
+          "intake_events",
         ];
         const tx = db.prepare("BEGIN");
         try {
