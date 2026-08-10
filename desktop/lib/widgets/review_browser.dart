@@ -19,10 +19,10 @@
 import 'package:flutter/material.dart';
 
 import '../api.dart';
-import 'editable_field.dart';
-import 'statement_card.dart';
 import '../theme.dart';
 import 'magnified_document.dart';
+import '../features/review/document_detail.dart';
+import '../features/adapters.dart';
 
 class ReviewBrowser extends StatefulWidget {
   final VaultApi api;
@@ -392,347 +392,17 @@ class _DocList extends StatelessWidget {
   }
 }
 
-/// The evidence summary (work order 05 §A.3): what the vault read from this
-/// document — invoice number, dates, bill-to, person, and the amount WITH
-/// its source currency — each value carrying its provenance badge, and the
-/// person/amount/currency correctable in place (document-scope claims).
+/// The right-hand document surface: the locked Glaze detail/fields layout
+/// (WO09/WO10 P4.5, §1.10) composed over the REAL rasterised preview.
 ///
-/// This is the card that makes a USD invoice display as USD 597.85: the
-/// amount rendered here is `effective.amount_minor` + `effective.currency`
-/// straight from the daemon, never a client-side assumption.
-class _EvidenceCard extends StatefulWidget {
-  final VaultApi api;
-  final VaultDoc doc;
-  final VoidCallback? onChanged;
-
-  const _EvidenceCard({
-    super.key,
-    required this.api,
-    required this.doc,
-    this.onChanged,
-  });
-
-  @override
-  State<_EvidenceCard> createState() => _EvidenceCardState();
-}
-
-class _EvidenceCardState extends State<_EvidenceCard> {
-  DocumentDetail? _detail;
-  bool _failed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  @override
-  void didUpdateWidget(_EvidenceCard old) {
-    super.didUpdateWidget(old);
-    if (old.doc.id != widget.doc.id) {
-      _detail = null;
-      _failed = false;
-      _load();
-    }
-  }
-
-  Future<void> _load() async {
-    try {
-      final d = await widget.api.documentDetail(widget.doc.id);
-      if (mounted && widget.doc.id == d.document['id']) {
-        setState(() => _detail = d);
-      }
-    } catch (_) {
-      // The summary is an enhancement over the document pane, not a
-      // precondition for it — a fetch failure costs the card, not the review.
-      if (mounted) setState(() => _failed = true);
-    }
-  }
-
-  FieldClaim? _claimOf(String field) {
-    final c = _detail?.claims[field];
-    if (c == null) return null;
-    return FieldClaim(
-      source: (c['source'] ?? 'ai') as String,
-      status: (c['status'] ?? 'proposed') as String,
-      value: c['value'] as String?,
-      confidence: (c['confidence'] as num?)?.toDouble(),
-      at: c['at'] as String?,
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final d = _detail;
-    if (d == null) {
-      return _failed
-          ? const SizedBox.shrink()
-          : const Padding(
-              padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
-              child: LinearProgressIndicator(minHeight: 2),
-            );
-    }
-    if (d.extraction == null) return const SizedBox.shrink();
-
-    final currency = d['currency']?.value;
-    final amountMinor = int.tryParse(d['amount_minor']?.value ?? '');
-    final people = d.parties.where((p) => p['kind'] == 'person').toList();
-    final orgs = d.parties.where((p) => p['kind'] == 'organisation').toList();
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-      decoration: BoxDecoration(
-        color: VaultColors.panel,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: VaultColors.line),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // The amount, never detached from its currency context (§A.3).
-          if (amountMinor != null)
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Text(
-                  money(amountMinor, currency),
-                  style: moneyStyle.copyWith(
-                    fontSize: 17,
-                    color: currency == null
-                        ? VaultColors.warn
-                        : VaultColors.ink,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (currency == null)
-                  const Flexible(
-                    child: Text(
-                      'currency uncertain — set it below',
-                      style: TextStyle(fontSize: 11, color: VaultColors.warn),
-                    ),
-                  )
-                else
-                  _ProvBadge(source: d['currency']!.source),
-                const Spacer(),
-                for (final t in d.transactions)
-                  Padding(
-                    padding: const EdgeInsets.only(left: 6),
-                    child: Text(
-                      '${t.direction} · ${t.sourceAmount} · linked by ${t.linkedBy ?? "ai"}',
-                      style: const TextStyle(
-                        fontSize: 10.5,
-                        fontFamily: VaultType.mono,
-                        color: VaultColors.faint,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          if (amountMinor != null) const SizedBox(height: 8),
-
-          // Invoice identity row: number, dates, bill-to.
-          Wrap(
-            spacing: 18,
-            runSpacing: 4,
-            children: [
-              if (d.referenceIds['invoice_no'] != null)
-                _Fact(
-                  label: 'invoice',
-                  value: '${d.referenceIds['invoice_no']}',
-                ),
-              if (d['document_date'] != null)
-                _Fact(label: 'date', value: d['document_date']!.value),
-              if (d['posted_at'] != null)
-                _Fact(label: 'due / settled', value: d['posted_at']!.value),
-              if (orgs.isNotEmpty)
-                _Fact(
-                  label: 'bill-to / counterparty',
-                  value: orgs.first['display_name'] as String,
-                ),
-              for (final p in people)
-                _Fact(
-                  label: 'person (${p['role']})',
-                  value: p['display_name'] as String,
-                ),
-            ],
-          ),
-
-          // Itemised bill, when the document prints one (§A.4.5).
-          if (d.lineItems.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            const Divider(height: 1, color: VaultColors.line),
-            const SizedBox(height: 6),
-            for (final li in d.lineItems)
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '${li['description']}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        color: VaultColors.dim,
-                      ),
-                    ),
-                  ),
-                  if (li['amount_minor'] != null)
-                    Text(
-                      money((li['amount_minor'] as num).toInt(), currency),
-                      style: const TextStyle(
-                        fontSize: 11.5,
-                        fontFamily: VaultType.mono,
-                        color: VaultColors.dim,
-                      ),
-                    ),
-                ],
-              ),
-            if (d.subtotalMinor != null || d.taxMinor != null) ...[
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  const Spacer(),
-                  if (d.subtotalMinor != null)
-                    Text(
-                      'subtotal ${money(d.subtotalMinor!, currency)}   ',
-                      style: const TextStyle(
-                        fontSize: 10.5,
-                        color: VaultColors.faint,
-                      ),
-                    ),
-                  if (d.taxMinor != null)
-                    Text(
-                      'tax ${money(d.taxMinor!, currency)}',
-                      style: const TextStyle(
-                        fontSize: 10.5,
-                        color: VaultColors.faint,
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ],
-
-          const SizedBox(height: 6),
-          const Divider(height: 1, color: VaultColors.line),
-          const SizedBox(height: 4),
-
-          // Correctable fields, document-scope (§Track C). Editing the person
-          // relinks THIS document and teaches the identity resolver; it never
-          // rewrites the original or its markdown.
-          EditableField(
-            label: 'person',
-            field: 'person',
-            subjectType: 'documents',
-            subjectId: widget.doc.id,
-            api: widget.api,
-            value:
-                d['person']?.value ??
-                (people.isEmpty
-                    ? null
-                    : people.first['display_name'] as String),
-            claim: _claimOf('person'),
-            editable: d.editableFields.contains('person'),
-            onSaved: (_) {
-              _load();
-              widget.onChanged?.call();
-            },
-          ),
-          EditableField(
-            label: 'currency',
-            field: 'currency',
-            subjectType: 'documents',
-            subjectId: widget.doc.id,
-            api: widget.api,
-            value: currency,
-            claim: _claimOf('currency'),
-            editable: d.editableFields.contains('currency'),
-            onSaved: (_) {
-              _load();
-              widget.onChanged?.call();
-            },
-          ),
-          EditableField(
-            label: 'amount (minor)',
-            field: 'amount_minor',
-            subjectType: 'documents',
-            subjectId: widget.doc.id,
-            api: widget.api,
-            numeric: true,
-            value: d['amount_minor']?.value,
-            claim: _claimOf('amount_minor'),
-            editable: d.editableFields.contains('amount_minor'),
-            onSaved: (_) {
-              _load();
-              widget.onChanged?.call();
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// One immutable fact in the summary strip: "invoice  INV/2026-27/03".
-class _Fact extends StatelessWidget {
-  final String label;
-  final String value;
-  const _Fact({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Text(
-        '$label  ',
-        style: const TextStyle(
-          fontSize: 10.5,
-          fontFamily: VaultType.mono,
-          color: VaultColors.faint,
-        ),
-      ),
-      Text(
-        value,
-        style: const TextStyle(fontSize: 11.5, color: VaultColors.ink),
-      ),
-    ],
-  );
-}
-
-/// A tiny provenance chip — who said so: ai | rule | user | import.
-class _ProvBadge extends StatelessWidget {
-  final String source;
-  const _ProvBadge({required this.source});
-
-  @override
-  Widget build(BuildContext context) {
-    final (bg, fg) = switch (source) {
-      'user' => (const Color(0xFFEAF6EE), const Color(0xFF16663C)),
-      'rule' => (const Color(0xFFEAF2FD), const Color(0xFF1B4F8A)),
-      _ => (const Color(0xFFF7F7FA), VaultColors.faint),
-    };
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(3),
-      ),
-      child: Text(
-        source,
-        style: TextStyle(
-          fontSize: 9,
-          fontFamily: VaultType.mono,
-          color: fg,
-          height: 1.3,
-        ),
-      ),
-    );
-  }
-}
-
-class _Detail extends StatelessWidget {
+/// This mounts [DocumentDetailPanel] — the canonical Glaze component with the
+/// financial-impact panel, per-field provenance rows, parties, domain panels,
+/// identity-reasoning and audit-trail disclosures, and the manage footer — and
+/// feeds it live data via [VaultApiDesktopFeatures.featureDocumentDetail]. The
+/// panel's placeholder preview is replaced with the existing magnifiable page
+/// image / markdown pane through [DocumentDetailPanel.previewBuilder], so the
+/// real document is still readable while the Glaze metadata composes below it.
+class _Detail extends StatefulWidget {
   final VaultApi api;
   final VaultDoc doc;
   final bool showMarkdown;
@@ -743,7 +413,8 @@ class _Detail extends StatelessWidget {
   final ValueChanged<int> onPage;
   final ValueChanged<bool> onToggle;
 
-  /// Called after a claim edit so the shell can refetch ledger/people.
+  /// Called after a claim edit / lifecycle action so the shell can refetch
+  /// ledger/people and (for remove/delete) drop the now-hidden document.
   final VoidCallback? onChanged;
 
   const _Detail({
@@ -760,187 +431,172 @@ class _Detail extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    doc.filename,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: VaultColors.ink,
-                    ),
-                  ),
-                  Text(
-                    '${doc.receivedAt.split('T').first} · '
-                    '${doc.analysed ? 'analysed' : 'awaiting analysis'}',
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: VaultColors.faint,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            _Toggle(
-              showMarkdown: showMarkdown,
-              // A non-image document has exactly one view, so there is
-              // nothing to toggle between — the control is omitted rather
-              // than shown with a permanently-dead half.
-              hasPageImage: doc.hasPageImage,
-              markdownAvailable: doc.hasMarkdown,
-              onToggle: onToggle,
-            ),
-          ],
-        ),
-      ),
-      if (doc.docType == 'bank_statement' || doc.docType == 'card_statement')
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
-          child: StatementCard(api: api, documentId: doc.id),
-        ),
-      // The evidence summary: what the vault read, with source currency
-      // and provenance (work order 05 §A.3). Keyed by document so
-      // switching documents or toggling Document/Markdown never shows a
-      // stale document's figures.
-      //
-      // No flex factor: the card takes only its intrinsic height (capped at
-      // 220px by the ConstrainedBox), and the Expanded document pane below
-      // gets ALL the remaining space. With a shared flex: 1 the two split
-      // the remaining height 50/50, leaving the document pane too small to
-      // read — the document must fit to height, the card must not steal
-      // that space.
-      ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 220),
-        child: SingleChildScrollView(
-          child: _EvidenceCard(
-            key: ValueKey('evidence-${doc.id}'),
-            api: api,
-            doc: doc,
-            onChanged: onChanged,
-          ),
-        ),
-      ),
-      Expanded(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-          child: showMarkdown
-              ? _MarkdownPane(markdown: markdown, loading: markdownLoading)
-              : _DocumentPane(api: api, doc: doc, page: page),
-        ),
-      ),
-      // The pager sits BELOW the document, not above: it is navigation for
-      // what you are looking at, and putting it under the image keeps the
-      // document top-aligned with the metadata beside it.
-      if (!showMarkdown && pageInfo.showPager)
-        _Pager(page: page, pages: pageInfo.pages, onPage: onPage)
-      else
-        const SizedBox(height: 12),
-    ],
-  );
+  State<_Detail> createState() => _DetailState();
 }
 
-class _Toggle extends StatelessWidget {
-  final bool showMarkdown;
-  final bool hasPageImage;
-  final bool markdownAvailable;
-  final ValueChanged<bool> onToggle;
-
-  const _Toggle({
-    required this.showMarkdown,
-    required this.hasPageImage,
-    required this.markdownAvailable,
-    required this.onToggle,
-  });
+class _DetailState extends State<_Detail> {
+  Future<DetailDocument>? _detail;
 
   @override
-  Widget build(BuildContext context) {
-    // Non-image: markdown is the only view. Label it so the pane is not
-    // unexplained, but offer no choice — a two-option control with one dead
-    // option invites clicks that cannot do anything.
-    if (!hasPageImage) {
-      return const Padding(
-        padding: EdgeInsets.only(left: 6),
-        child: Text(
-          'Markdown only',
-          style: TextStyle(fontSize: 11, color: VaultColors.faint),
-        ),
-      );
-    }
+  void initState() {
+    super.initState();
+    _detail = widget.api.featureDocumentDetail(widget.doc);
+  }
 
-    return Row(
+  @override
+  void didUpdateWidget(_Detail old) {
+    super.didUpdateWidget(old);
+    // Reload the Glaze detail when the selected document changes. The preview
+    // panes react to showMarkdown/page directly, so those do NOT trigger a
+    // refetch — only a new document id does.
+    if (old.doc.id != widget.doc.id) {
+      _detail = widget.api.featureDocumentDetail(widget.doc);
+    }
+  }
+
+  Future<void> _reload() async {
+    setState(() {
+      _detail = widget.api.featureDocumentDetail(widget.doc);
+    });
+    widget.onChanged?.call();
+  }
+
+  /// The real preview injected into the Glaze panel: the magnifiable page image
+  /// or the markdown pane, plus the pager, exactly as the standalone browser
+  /// rendered them. Honours the shell's Document/Markdown toggle.
+  Widget _preview(BuildContext context, bool markdown) {
+    final wantMarkdown = markdown || !widget.doc.hasPageImage;
+    // Keep the shell's toggle state in sync with the panel's internal tab so a
+    // markdown fetch is triggered when the user switches inside the panel.
+    if (wantMarkdown != widget.showMarkdown) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onToggle(wantMarkdown);
+      });
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _Seg(
-          label: 'Document',
-          selected: !showMarkdown,
-          onTap: () => onToggle(false),
+        SizedBox(
+          height: 320,
+          child: wantMarkdown
+              ? _MarkdownPane(
+                  markdown: widget.markdown,
+                  loading: widget.markdownLoading,
+                )
+              : _DocumentPane(
+                  api: widget.api,
+                  doc: widget.doc,
+                  page: widget.page,
+                ),
         ),
-        _Seg(
-          label: 'Markdown',
-          // Disabled rather than hidden when there is no text: the toggle
-          // vanishing as you move between documents is more confusing than a
-          // greyed control that explains itself.
-          selected: showMarkdown,
-          enabled: markdownAvailable,
-          onTap: markdownAvailable ? () => onToggle(true) : null,
-        ),
+        if (!wantMarkdown && widget.pageInfo.showPager)
+          _Pager(
+            page: widget.page,
+            pages: widget.pageInfo.pages,
+            onPage: widget.onPage,
+          ),
       ],
     );
   }
-}
 
-class _Seg extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final bool enabled;
-  final VoidCallback? onTap;
+  Future<void> _fieldChanged(String field, Object? value) async {
+    try {
+      await widget.api.writeClaim(
+        subjectType: 'documents',
+        subjectId: widget.doc.id,
+        field: field,
+        value: value,
+      );
+      await _reload();
+    } on ClaimRefusedException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    }
+  }
 
-  const _Seg({
-    required this.label,
-    required this.selected,
-    this.enabled = true,
-    this.onTap,
-  });
+  Future<void> _partyChanged(
+    DocumentPartyRole role,
+    String? entityId,
+  ) async {
+    if (entityId == null) return;
+    try {
+      await widget.api.setDocumentParty(
+        documentId: widget.doc.id,
+        role: role.apiValue,
+        entityId: entityId,
+      );
+      await _reload();
+    } on ClaimRefusedException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text(e.message)),
+        );
+      }
+    }
+  }
+
+  Future<void> _action(DocumentManageAction action) async {
+    switch (action) {
+      case DocumentManageAction.openOriginal:
+        // The daemon serves the original bytes; opening externally is a future
+        // platform-channel concern. Surface the resolvable URL for now so the
+        // action is honest rather than silent.
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            SnackBar(
+              content: Text(
+                'Original: ${widget.api.documentFileUrl(widget.doc.id)}',
+              ),
+            ),
+          );
+        }
+      case DocumentManageAction.openMarkdown:
+        widget.onToggle(true);
+      case DocumentManageAction.reprocess:
+        await widget.api.reprocessDocument(widget.doc.id);
+        await _reload();
+      case DocumentManageAction.removeFromActive:
+        await widget.api.removeFromActive(widget.doc.id);
+        widget.onChanged?.call();
+      case DocumentManageAction.deletePermanently:
+        await widget.api.deleteDocument(widget.doc.id);
+        widget.onChanged?.call();
+    }
+  }
 
   @override
-  Widget build(BuildContext context) => Semantics(
-    button: true,
-    selected: selected,
-    enabled: enabled,
-    label: label,
-    child: InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-        decoration: BoxDecoration(
-          color: selected ? VaultColors.accent : VaultColors.controlSubtle,
-          borderRadius: BorderRadius.circular(6),
-        ),
-        margin: const EdgeInsets.only(left: 6),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-            color: !enabled
-                ? VaultColors.faint.withValues(alpha: 0.45)
-                : selected
-                ? const Color(0xFFFFFFFF)
-                : VaultColors.dim,
+  Widget build(BuildContext context) => FutureBuilder<DetailDocument>(
+    future: _detail,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) {
+        return const Center(child: CircularProgressIndicator.adaptive());
+      }
+      if (snapshot.hasError || !snapshot.hasData) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              'Could not load this document’s details.',
+              style: const TextStyle(color: VaultColors.dim),
+            ),
           ),
-        ),
-      ),
-    ),
+        );
+      }
+      return DocumentDetailPanel(
+        key: ValueKey('glaze-detail-${widget.doc.id}'),
+        document: snapshot.data!,
+        documentAvailable: widget.doc.hasPageImage,
+        markdownAvailable: widget.doc.hasMarkdown,
+        initialMarkdown: widget.showMarkdown,
+        previewBuilder: _preview,
+        onFieldChanged: (_, field, value) => _fieldChanged(field, value),
+        onPartyChanged: (_, role, entityId) => _partyChanged(role, entityId),
+        onAction: (_, action) => _action(action),
+      );
+    },
   );
 }
 

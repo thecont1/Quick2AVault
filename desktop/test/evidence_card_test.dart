@@ -45,6 +45,10 @@ class _FakeApi extends VaultApi {
   Future<DocumentDetail> documentDetail(String id) async => detail;
 
   @override
+  Future<List<AuditEntry>> audit(String subjectId, {int limit = 50}) async =>
+      const [];
+
+  @override
   Future<String?> documentMarkdown(String id) async => '# Markdown';
 
   @override
@@ -55,6 +59,17 @@ class _FakeApi extends VaultApi {
 Widget _host(VaultApi api) => MaterialApp(
   home: Scaffold(body: ReviewBrowser(api: api)),
 );
+
+Future<void> _reveal(WidgetTester tester, Finder finder) async {
+  final detailScroll = find
+      .descendant(
+        of: find.byKey(const ValueKey('document-detail-doc_1')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+  await tester.scrollUntilVisible(finder, 250, scrollable: detailScroll);
+  await tester.pumpAndSettle();
+}
 
 DocumentDetail _detail({
   Map<String, EffectiveValue>? effective,
@@ -137,9 +152,9 @@ void main() {
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
-    // Two widgets contain "currency uncertain": the amount text and the hint.
-    // Check the hint specifically.
-    expect(find.text('currency uncertain — set it below'), findsOneWidget);
+    // The Glaze impact headline must preserve uncertainty instead of silently
+    // treating an unlabelled amount as rupees.
+    expect(find.textContaining('597.85 (currency uncertain)'), findsOneWidget);
   });
 
   testWidgets('shows invoice number from reference_ids', (tester) async {
@@ -153,6 +168,7 @@ void main() {
 
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
+    await _reveal(tester, find.textContaining('INV/2026-27/03'));
 
     expect(find.textContaining('INV/2026-27/03'), findsOneWidget);
   });
@@ -175,11 +191,13 @@ void main() {
 
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
+    await _reveal(tester, find.textContaining('Consulting services'));
 
     expect(find.textContaining('Consulting services'), findsOneWidget);
     expect(find.textContaining('Travel expenses'), findsOneWidget);
-    expect(find.textContaining('subtotal'), findsOneWidget);
-    expect(find.textContaining('tax'), findsOneWidget);
+    await _reveal(tester, find.text('Subtotal'));
+    expect(find.text('Subtotal'), findsOneWidget);
+    expect(find.text('Tax'), findsOneWidget);
   });
 
   testWidgets('shows linked transactions', (tester) async {
@@ -205,10 +223,10 @@ void main() {
 
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
+    await _reveal(tester, find.text('Linked transaction (out)'));
 
-    expect(find.textContaining('out'), findsOneWidget);
-    expect(find.text('USD 597.85'), findsOneWidget);
-    expect(find.textContaining('linked by'), findsOneWidget);
+    expect(find.text('Linked transaction (out)'), findsOneWidget);
+    expect(find.textContaining('USD 597.85 · linked by ai'), findsOneWidget);
   });
 
   testWidgets('shows person from parties', (tester) async {
@@ -226,10 +244,10 @@ void main() {
 
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
+    await _reveal(tester, find.text('Arun Kamath'));
 
-    // "Arun Kamath" appears both as a party fact and in the editable person field.
-    // Check the party fact label specifically.
-    expect(find.textContaining('person (bill_to)'), findsOneWidget);
+    expect(find.text('Arun Kamath'), findsOneWidget);
+    expect(find.text('Counterparty'), findsOneWidget);
   });
 
   testWidgets('shows organisation from parties', (tester) async {
@@ -251,11 +269,14 @@ void main() {
 
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
+    await _reveal(tester, find.text('Acme Corp'));
 
-    expect(find.textContaining('Acme Corp'), findsOneWidget);
+    expect(find.text('Acme Corp'), findsOneWidget);
   });
 
-  testWidgets('hides evidence card when extraction is null', (tester) async {
+  testWidgets('keeps resolved claims reviewable when extraction is null', (
+    tester,
+  ) async {
     tester.view.physicalSize = _testSurface;
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -267,7 +288,9 @@ void main() {
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
-    // No amount text should be visible since extraction is null.
-    expect(find.textContaining('USD 597.85'), findsNothing);
+    // Effective claims may be user-confirmed or rule-derived independently of
+    // the latest extraction row. The wired Glaze panel must not hide them.
+    expect(find.textContaining('USD 597.85'), findsOneWidget);
+    expect(find.text('Financial impact'), findsOneWidget);
   });
 }

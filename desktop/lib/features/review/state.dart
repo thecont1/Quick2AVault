@@ -10,10 +10,13 @@ enum DetailType {
   const DetailType(this.apiValue);
   final String apiValue;
 
-  factory DetailType.fromApi(String? value) => DetailType.values.firstWhere(
-    (type) => type.apiValue == value,
-    orElse: () => DetailType.unknown,
-  );
+  factory DetailType.fromApi(String? value) => switch (value) {
+    'merchant_invoice' || 'invoice' => DetailType.taxInvoice,
+    final value => DetailType.values.firstWhere(
+      (type) => type.apiValue == value,
+      orElse: () => DetailType.unknown,
+    ),
+  };
 }
 
 enum ClaimProvenance {

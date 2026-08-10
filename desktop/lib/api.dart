@@ -2178,6 +2178,94 @@ class VaultApi {
         .toList(),
   );
 
+  /// ── WO09/WO10 P4.5: document parties + lifecycle (Glaze detail panel) ──────
+
+  /// Bind an entity to a document in a role (owner | counterparty | issuer |
+  /// source_of_funds). Writes a document-scoped party row on the daemon; the
+  /// old value is preserved in the audit trail. Throws [ClaimRefusedException]
+  /// on a 409 (e.g. a cross-kind role violation the daemon guards).
+  Future<void> setDocumentParty({
+    required String documentId,
+    required String role,
+    required String entityId,
+    double confidence = 1,
+  }) async {
+    final path = '/v1/documents/$documentId/parties';
+    final res = await _client
+        .put(
+          Uri.parse('$baseUrl$path'),
+          headers: {..._headers, 'content-type': 'application/json'},
+          body: jsonEncode({
+            'role': role,
+            'entity_id': entityId,
+            'confidence': confidence,
+            'edited_by': 'user',
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    if (res.statusCode == 409) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      throw ClaimRefusedException(
+        j['error'] as String? ?? 'refused',
+        j['message'] as String? ?? 'the vault refused this party edit',
+      );
+    }
+    if (res.statusCode != 200) {
+      throw Exception('PUT $path -> ${res.statusCode}');
+    }
+  }
+
+  /// Re-run analysis on a document (Glaze footer "Reprocess"). Idempotent on the
+  /// ledger: re-analysis upserts the same transaction rather than creating a
+  /// second economic event. Reactivates a soft-removed document.
+  Future<void> reprocessDocument(String id) async {
+    final path = '/v1/documents/$id/reprocess';
+    final res = await _client
+        .post(Uri.parse('$baseUrl$path'), headers: _headers)
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    if (res.statusCode != 200) {
+      throw Exception('POST $path -> ${res.statusCode}');
+    }
+  }
+
+  /// Soft-remove a document from the active vault (Glaze footer "Remove from
+  /// active"). The original file and every extracted claim are preserved; the
+  /// document is hidden from Review. Reversible via [reprocessDocument].
+  Future<void> removeFromActive(String id) async {
+    final path = '/v1/documents/$id/remove-from-active';
+    final res = await _client
+        .post(Uri.parse('$baseUrl$path'), headers: _headers)
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    if (res.statusCode != 200) {
+      throw Exception('POST $path -> ${res.statusCode}');
+    }
+  }
+
+  /// Permanently delete a document (Glaze footer "Delete permanently"). Unlinks
+  /// the raw + markdown bytes from disk and tombstones the row so the sha256
+  /// dedupe guard still rejects a re-drop. Not reversible.
+  Future<void> deleteDocument(String id) async {
+    final path = '/v1/documents/$id';
+    final res = await _client
+        .delete(Uri.parse('$baseUrl$path'), headers: _headers)
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    if (res.statusCode != 200) {
+      throw Exception('DELETE $path -> ${res.statusCode}');
+    }
+  }
+
   /// ── settings, reset, people editing ───────────────────────────────────────
 
   /// Wipe the vault. [scope] is 'ledger' (documents/transactions/learnings,

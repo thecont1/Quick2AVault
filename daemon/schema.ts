@@ -22,7 +22,7 @@ export type ClaimSubject = "document" | "transaction" | "entity" | "document_par
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -83,10 +83,23 @@ CREATE TABLE IF NOT EXISTS documents (
   -- the daemon needs to pass it to the converter; the vault.db is already
   -- the crown jewels, so encrypting this column with a key that also lives
   -- in the daemon would be theatre. Null = no password / not encrypted.
-  password            TEXT
+  password            TEXT,
+  -- ── WO09/WO10 P4.5: document lifecycle for the Glaze manage footer ──
+  -- 'active'  → in the vault, shown in Review and counted in the ledger.
+  -- 'removed' → soft-removed ("Remove from active"): the ORIGINAL FILE and
+  --             all extracted claims are preserved on disk and in the db, but
+  --             the document is hidden from Review and its transactions are
+  --             excluded. Reversible by reprocess/restore.
+  -- 'deleted' → permanently deleted: raw bytes and markdown removed from disk,
+  --             the row tombstoned so the sha256 dedupe guard still holds.
+  -- Kept as a column (not a table) because every list/detail query must be
+  -- able to filter on it cheaply; NOT NULL DEFAULT keeps pre-v13 rows active.
+  lifecycle           TEXT NOT NULL DEFAULT 'active'
+                        CHECK (lifecycle IN ('active','removed','deleted'))
 );
 CREATE INDEX IF NOT EXISTS idx_documents_sha ON documents(sha256);
 CREATE INDEX IF NOT EXISTS idx_documents_received ON documents(received_at);
+CREATE INDEX IF NOT EXISTS idx_documents_lifecycle ON documents(lifecycle);
 
 -- ── Entities: ONE table, FOUR kinds. Merges are kind-scoped (anti-pollution) ─
 CREATE TABLE IF NOT EXISTS entities (
@@ -1093,6 +1106,18 @@ export function migrate(db: DatabaseSync): void {
     if (reviewCols.size && !reviewCols.has(name)) db.exec(`ALTER TABLE training_reviews ADD COLUMN ${name} ${decl}`);
   }
   if (reviewCols.size) db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_training_dedupe ON training_reviews(dedupe_key) WHERE dedupe_key IS NOT NULL");
+
+  // ── v12 → v13: document lifecycle (WO09/WO10 P4.5 manage footer) ─────────
+  // Adds a soft-delete/remove state so the Glaze detail footer's "Remove from
+  // active" and "Delete permanently" have durable backing. Pre-v13 rows are
+  // 'active'. SQLite cannot add a CHECK constraint to an existing column via
+  // ALTER, so the added column carries the default and the CHECK is enforced
+  // on fresh databases by the DDL above; the value set is guarded in code.
+  const docColsV13 = columnsOf(db, "documents");
+  if (docColsV13.size && !docColsV13.has("lifecycle")) {
+    db.exec("ALTER TABLE documents ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'active'");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_documents_lifecycle ON documents(lifecycle)");
+  }
 }
 
 /**

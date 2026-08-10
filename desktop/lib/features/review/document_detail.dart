@@ -15,6 +15,16 @@ class DocumentDetailPanel extends StatefulWidget {
   final DetailPartyChanged? onPartyChanged;
   final DocumentActionCallback? onAction;
   final VoidCallback? onTeachNow;
+  final bool documentAvailable;
+  final bool markdownAvailable;
+  final bool initialMarkdown;
+
+  /// Optional real preview. When provided, it REPLACES the built-in placeholder
+  /// preview blocks — the runtime Review surface injects the live rasterised
+  /// PDF/image magnifier and the fetched-markdown pane here, so the Glaze layout
+  /// composes over the real document rather than a grey stand-in. The bool is
+  /// the panel's current Document/Markdown tab state (true = markdown).
+  final Widget Function(BuildContext context, bool markdown)? previewBuilder;
 
   const DocumentDetailPanel({
     super.key,
@@ -24,6 +34,10 @@ class DocumentDetailPanel extends StatefulWidget {
     this.onPartyChanged,
     this.onAction,
     this.onTeachNow,
+    this.documentAvailable = true,
+    this.markdownAvailable = true,
+    this.initialMarkdown = false,
+    this.previewBuilder,
   });
 
   @override
@@ -31,12 +45,16 @@ class DocumentDetailPanel extends StatefulWidget {
 }
 
 class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
-  bool _markdown = false;
+  late bool _markdown;
   late ImpactBucket _bucket;
 
   @override
   void initState() {
     super.initState();
+    _markdown = widget.initialMarkdown && widget.markdownAvailable;
+    if (!widget.documentAvailable && widget.markdownAvailable) {
+      _markdown = true;
+    }
     _bucket = widget.document.bucket;
   }
 
@@ -46,7 +64,10 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
     if (oldWidget.document.id != widget.document.id ||
         oldWidget.document.bucket != widget.document.bucket) {
       _bucket = widget.document.bucket;
-      _markdown = false;
+      _markdown = widget.initialMarkdown && widget.markdownAvailable;
+      if (!widget.documentAvailable && widget.markdownAvailable) {
+        _markdown = true;
+      }
     }
   }
 
@@ -130,10 +151,14 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
         const SizedBox(height: 10),
         _DocTabs(
           markdown: _markdown,
+          documentAvailable: widget.documentAvailable,
+          markdownAvailable: widget.markdownAvailable,
           onChanged: (value) => setState(() => _markdown = value),
         ),
         const SizedBox(height: 14),
-        if (_markdown)
+        if (widget.previewBuilder != null)
+          widget.previewBuilder!(context, _markdown)
+        else if (_markdown)
           _MarkdownPreview(markdown: document.markdown)
         else
           _DocumentPreview(filename: document.filename),
@@ -294,18 +319,38 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
 
 class _DocTabs extends StatelessWidget {
   final bool markdown;
+  final bool documentAvailable;
+  final bool markdownAvailable;
   final ValueChanged<bool> onChanged;
 
-  const _DocTabs({required this.markdown, required this.onChanged});
+  const _DocTabs({
+    required this.markdown,
+    required this.documentAvailable,
+    required this.markdownAvailable,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) => SegmentedButton<bool>(
-    segments: const [
-      ButtonSegment(value: false, label: Text('Document')),
-      ButtonSegment(value: true, label: Text('Markdown')),
+    segments: [
+      ButtonSegment(
+        value: false,
+        enabled: documentAvailable,
+        label: const Text('Document'),
+      ),
+      ButtonSegment(
+        value: true,
+        enabled: markdownAvailable,
+        label: const Text('Markdown'),
+      ),
     ],
     selected: {markdown},
-    onSelectionChanged: (values) => onChanged(values.first),
+    onSelectionChanged: (values) {
+      final value = values.first;
+      if ((value && markdownAvailable) || (!value && documentAvailable)) {
+        onChanged(value);
+      }
+    },
   );
 }
 

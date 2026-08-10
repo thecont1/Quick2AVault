@@ -55,6 +55,31 @@ class _FakeApi extends VaultApi {
   Future<List<VaultDoc>> documents({int limit = 200}) async => docs;
 
   @override
+  Future<DocumentDetail> documentDetail(String id) async {
+    final doc = docs.firstWhere((candidate) => candidate.id == id);
+    return DocumentDetail(
+      document: {'id': id, 'original_filename': doc.filename},
+      extraction: const {},
+      effective: {
+        'document_type': EffectiveValue(
+          value: doc.docType ?? 'unknown',
+          source: 'ai',
+          status: 'proposed',
+        ),
+      },
+      referenceIds: const {},
+      lineItems: const [],
+      parties: const [],
+      transactions: const [],
+      editableFields: const {},
+    );
+  }
+
+  @override
+  Future<List<AuditEntry>> audit(String subjectId, {int limit = 50}) async =>
+      const [];
+
+  @override
   Future<String?> documentMarkdown(String id) async {
     markdownCalls++;
     return markdown;
@@ -220,11 +245,12 @@ void main() {
     expect(find.textContaining('Closing balance: 41,000'), findsOneWidget);
   });
 
-  testWidgets('a document with no page image offers no view toggle at all', (
+  testWidgets('a text-only document keeps the fixed tabs and opens Markdown', (
     tester,
   ) async {
-    // Not a disabled half — no choice. A two-option control with one dead
-    // option invites clicks that cannot do anything.
+    // The locked Glaze header always exposes Document / Markdown. For an email
+    // the impossible Document view is disabled internally and Markdown is the
+    // selected, rendered surface.
     final api = _FakeApi(
       docs: [_doc('d1', 'alert.eml', ext: '.eml')],
       markdown: '# Alert',
@@ -232,8 +258,10 @@ void main() {
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
-    expect(find.text('Document'), findsNothing);
-    expect(find.text('Markdown only'), findsOneWidget);
+    expect(find.text('Document'), findsOneWidget);
+    expect(find.text('Markdown'), findsOneWidget);
+    expect(find.textContaining('# Alert'), findsOneWidget);
+    expect(api.pageInfoCalls, 0);
   });
 
   testWidgets(
@@ -252,19 +280,25 @@ void main() {
       await tester.pumpWidget(_host(api));
       await tester.pumpAndSettle();
 
-      // Starts on the image, with a full toggle.
+      // Starts on the image, with the fixed Glaze tabs and no text fetch.
       expect(find.text('Document'), findsOneWidget);
+      expect(find.text('Markdown'), findsOneWidget);
+      expect(api.markdownCalls, 0);
 
       await tester.tap(find.text('alert.eml'));
       await tester.pumpAndSettle();
-      expect(find.text('Markdown only'), findsOneWidget);
-      expect(find.text('Document'), findsNothing);
+      expect(find.text('Document'), findsOneWidget);
+      expect(find.text('Markdown'), findsOneWidget);
+      expect(find.textContaining('# Alert'), findsOneWidget);
+      expect(api.markdownCalls, 1);
 
-      // ...and back again.
+      // ...and back again: page view is restored and stale email text disappears.
       await tester.tap(find.text('receipt.png').first);
       await tester.pumpAndSettle();
       expect(find.text('Document'), findsOneWidget);
-      expect(find.text('Markdown only'), findsNothing);
+      expect(find.text('Markdown'), findsOneWidget);
+      expect(find.textContaining('# Alert'), findsNothing);
+      expect(api.markdownCalls, 1);
     },
   );
 
@@ -281,7 +315,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(api.markdownCalls, 1);
-    expect(find.text('Markdown only'), findsOneWidget);
+    expect(find.text('Document'), findsOneWidget);
+    expect(find.text('Markdown'), findsOneWidget);
+    expect(find.textContaining('# First'), findsOneWidget);
   });
 
   testWidgets('a single-page document shows no pager', (tester) async {

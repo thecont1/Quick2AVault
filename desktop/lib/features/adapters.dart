@@ -91,6 +91,49 @@ extension VaultApiDesktopFeatures on VaultApi {
         ),
       );
     }
+    for (final entry in detail.referenceIds.entries) {
+      fields.add(
+        feature_review.DetailField(
+          id: 'reference_${entry.key}',
+          label: _fieldLabel(entry.key),
+          value: entry.value.toString(),
+          editable: false,
+        ),
+      );
+    }
+    if (detail.subtotalMinor case final subtotal?) {
+      fields.add(
+        feature_review.DetailField(
+          id: 'subtotal_minor',
+          label: 'Subtotal',
+          value: money(subtotal, currency.isEmpty ? null : currency),
+          editable: false,
+        ),
+      );
+    }
+    if (detail.taxMinor case final tax?) {
+      fields.add(
+        feature_review.DetailField(
+          id: 'tax_minor',
+          label: 'Tax',
+          value: money(tax, currency.isEmpty ? null : currency),
+          editable: false,
+        ),
+      );
+    }
+    for (final transaction in detail.transactions) {
+      fields.add(
+        feature_review.DetailField(
+          id: 'transaction_${transaction.id}',
+          label: 'Linked transaction (${transaction.direction})',
+          value: '${transaction.sourceAmount} · linked by ${transaction.linkedBy ?? 'unknown'}',
+          provenance: feature_review.ClaimProvenance.fromApi(
+            transaction.linkedBy,
+          ),
+          editable: false,
+        ),
+      );
+    }
     return feature_review.DetailDocument(
       id: summary.id,
       filename: summary.filename,

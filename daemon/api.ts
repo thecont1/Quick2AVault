@@ -34,7 +34,7 @@ import {
   type DocumentPartyRole,
   type ResolvedTransaction,
 } from "./claims.js";
-import { rebuildSearchIndex, searchDocuments } from "./search.js";
+import { rebuildSearchIndex, searchDocuments, removeFromIndex } from "./search.js";
 import {
   backfillEmbeddings,
   hybridSearch,
@@ -454,6 +454,88 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       {
         const em=/^\/v1\/documents\/([^/]+)\/pipeline-events$/.exec(p);
         if(em&&req.method==="GET"){const documentId=decodeURIComponent(em[1]);return send(res,200,{document_id:documentId,events:pipelineEventsFor(db,documentId)});}
+      }
+
+      // ── WO09/WO10 P4.5: document lifecycle (Glaze manage footer) ──────────
+      //
+      // Three verbs behind the detail footer's "Reprocess", "Remove from
+      // active" and "Delete permanently". Each is deliberately conservative:
+      //   reprocess         re-enqueues the analyse phase; the JobWorker drains
+      //                     it and idempotency (transaction_documents unique on
+      //                     document_id+evidence_role) guarantees no second
+      //                     economic event. If markdown was never produced it
+      //                     re-runs convert first. Reactivates a removed doc.
+      //   remove-from-active soft state only: the original file and every claim
+      //                     stay on disk; the doc is hidden from Review and its
+      //                     search index entry is dropped. Fully reversible.
+      //   DELETE            permanent: raw + markdown bytes are unlinked from
+      //                     disk and the row is tombstoned as 'deleted' so the
+      //                     sha256 dedupe guard still rejects a re-drop.
+      {
+        const rm = /^\/v1\/documents\/([^/]+)\/reprocess$/.exec(p);
+        if (rm && req.method === "POST") {
+          const documentId = decodeURIComponent(rm[1]);
+          const doc = db
+            .prepare("SELECT id, markdown_path, markdown_chars, lifecycle FROM documents WHERE id=?")
+            .get(documentId) as
+            | { id: string; markdown_path: string | null; markdown_chars: number | null; lifecycle: string }
+            | undefined;
+          if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
+          if (doc.lifecycle === "deleted") return send(res, 409, { error: "document_deleted", document_id: documentId });
+          // A reprocess reactivates a soft-removed document — the user asked to
+          // read it again, which implies bringing it back into the vault.
+          if (doc.lifecycle !== "active") {
+            db.prepare("UPDATE documents SET lifecycle='active' WHERE id=?").run(documentId);
+          }
+          const phase = doc.markdown_path && doc.markdown_chars ? "analyse" : "convert";
+          enqueue(db, ports, documentId, phase);
+          return send(res, 200, { reprocessing: true, document_id: documentId, phase });
+        }
+      }
+      {
+        const rm = /^\/v1\/documents\/([^/]+)\/remove-from-active$/.exec(p);
+        if (rm && req.method === "POST") {
+          const documentId = decodeURIComponent(rm[1]);
+          const doc = db
+            .prepare("SELECT id, lifecycle FROM documents WHERE id=?")
+            .get(documentId) as { id: string; lifecycle: string } | undefined;
+          if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
+          if (doc.lifecycle === "deleted") return send(res, 409, { error: "document_deleted", document_id: documentId });
+          db.prepare("UPDATE documents SET lifecycle='removed' WHERE id=?").run(documentId);
+          try { removeFromIndex(db, documentId); } catch { /* index optional */ }
+          return send(res, 200, { removed: true, document_id: documentId });
+        }
+      }
+      {
+        const dm = /^\/v1\/documents\/([^/]+)$/.exec(p);
+        if (dm && req.method === "DELETE") {
+          const documentId = decodeURIComponent(dm[1]);
+          const doc = db
+            .prepare("SELECT id, raw_path, markdown_path, lifecycle FROM documents WHERE id=?")
+            .get(documentId) as
+            | { id: string; raw_path: string | null; markdown_path: string | null; lifecycle: string }
+            | undefined;
+          if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
+          if (doc.lifecycle === "deleted") return send(res, 200, { deleted: true, document_id: documentId, already: true });
+          // Unlink the on-disk bytes, but confine every path to the vault root
+          // first — the same arbitrary-file guard the /file route uses.
+          const vaultRoot = path.resolve(opts.vaultDir);
+          for (const candidate of [doc.raw_path, doc.markdown_path]) {
+            if (!candidate) continue;
+            const resolved = path.resolve(candidate);
+            if (resolved === vaultRoot || resolved.startsWith(vaultRoot + path.sep)) {
+              try { await fsp.unlink(resolved); } catch { /* already gone */ }
+            }
+          }
+          // Tombstone rather than DROP: the sha256 UNIQUE guard must keep
+          // rejecting a re-drop of the same bytes, and the audit trail stays
+          // intact. Clear the disk pointers so nothing tries to read them.
+          db.prepare(
+            "UPDATE documents SET lifecycle='deleted', raw_path='', markdown_path=NULL, markdown_chars=NULL WHERE id=?",
+          ).run(documentId);
+          try { removeFromIndex(db, documentId); } catch { /* index optional */ }
+          return send(res, 200, { deleted: true, document_id: documentId });
+        }
       }
 
       // ── claims: the inline-editing surface (work order 03 §P2) ───────────
@@ -1850,7 +1932,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               .prepare(
                 `SELECT id, original_filename, ext, byte_size, doc_type, source, sha256,
                         markdown_chars, received_at, converted_at, analysed_at
-                 FROM documents ORDER BY received_at DESC LIMIT ?`,
+                 FROM documents WHERE lifecycle='active' ORDER BY received_at DESC LIMIT ?`,
               )
               .all(Number(url.searchParams.get("limit") ?? 100)),
           });
