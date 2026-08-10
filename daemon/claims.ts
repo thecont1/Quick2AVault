@@ -65,6 +65,15 @@ export const DOCUMENT_FIELDS = new Set([
   // document-scoped (claims.ts) and the identity resolver relinks parties
   // only for confirmed corrections (identity.ts applyPersonCorrection).
   "person",
+  "documentType",
+  "documentNumber",
+  "documentDate",
+  "financialYear",
+  "category",
+  "currencyConversion",
+  "financialImpact",
+  "lineItems",
+  "trades",
 ]);
 
 /** Fields a user may correct on a TRANSACTION (what the ledger holds). */
@@ -82,14 +91,18 @@ export const TRANSACTION_FIELDS = new Set([
 ]);
 
 /** Fields a user may correct on an ENTITY (who someone is). */
-export const ENTITY_FIELDS = new Set(["display_name", "kind", "identifiers"]);
+export const ENTITY_FIELDS = new Set(["display_name", "kind", "identifiers", "relationship"]);
+/** Claims whose subject is a document party key: `${documentId}:${entityId}:${role}`. */
+export const DOCUMENT_PARTY_FIELDS = new Set(["counterparty", "issuer", "owner", "sourceOfFunds", "relationship"]);
 
 export function allowedFields(subject: ClaimSubject): Set<string> {
   return subject === "document"
     ? DOCUMENT_FIELDS
     : subject === "transaction"
       ? TRANSACTION_FIELDS
-      : ENTITY_FIELDS;
+      : subject === "entity"
+        ? ENTITY_FIELDS
+        : DOCUMENT_PARTY_FIELDS;
 }
 
 const AUTHORITY: Record<ClaimSource, number> = { user: 3, rule: 2, import: 1, ai: 0 };
@@ -104,6 +117,9 @@ export interface Claim {
   confidence: number | null;
   status: ClaimStatus;
   created_at: string;
+  provenance_ref?: string | null;
+  edited_at?: string | null;
+  edited_by?: string | null;
 }
 
 /**
@@ -189,6 +205,9 @@ export function writeClaim(
     source: ClaimSource;
     confidence?: number;
     status?: ClaimStatus;
+    provenanceRef?: string;
+    editedAt?: string;
+    editedBy?: string;
   },
 ): { claim_id: number; superseded: number; previous: string | null } {
   const { subject, subjectId, field, value, source } = input;
@@ -219,7 +238,10 @@ export function writeClaim(
     );
   }
 
-  const now = ports.clock.isoNow();
+  if (input.confidence !== undefined && (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1)) {
+    throw new ClaimRefused("confidence must be between 0 and 1", "invalid_confidence");
+  }
+  const now = input.editedAt ?? ports.clock.isoNow();
   const status: ClaimStatus = input.status ?? (source === "user" ? "confirmed" : "proposed");
 
   // Supersede everything this claim outranks OR ties with, so the losing rows
@@ -245,16 +267,69 @@ export function writeClaim(
 
   const info = db
     .prepare(
-      `INSERT INTO field_claims (subject_type, subject_id, field, value, source, confidence, status, created_at)
-       VALUES (?,?,?,?,?,?,?,?)`,
+      `INSERT INTO field_claims (subject_type, subject_id, field, value, source, confidence, provenance_ref, edited_at, edited_by, status, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     )
-    .run(subject, subjectId, field, value, source, input.confidence ?? (source === "user" ? 1.0 : null), status, now);
+    .run(subject, subjectId, field, value, source, input.confidence ?? (source === "user" ? 1.0 : null), input.provenanceRef ?? null, now, input.editedBy ?? (source === "user" ? "user" : "daemon"), status, now);
+
+  // Passive learning is independent of the questioning master switch. A
+  // correction is durable evidence even when the user has disabled prompts.
+  if (source === "user") {
+    const matchKey = `${subject}:${subjectId}:${field}`;
+    db.prepare(
+      `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
+       VALUES('field_correction',?,?,?,'passive-correction',1,0,?)
+       ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET
+         value=excluded.value, source='passive-correction', confidence=1, created_at=excluded.created_at`,
+    ).run(matchKey, subject, value ?? "", now);
+  }
 
   return {
     claim_id: Number(info.lastInsertRowid),
     superseded: Number(sup.changes ?? 0),
     previous: current?.value ?? null,
   };
+}
+
+export type DocumentPartyRole = "owner" | "counterparty" | "issuer" | "source_of_funds";
+export type PartyProvenance = "ai-derived" | "user-confirmed" | "rule-derived";
+
+export function documentPartyClaimId(documentId: string, entityId: string, role: DocumentPartyRole): string {
+  return `${documentId}:${entityId}:${role}`;
+}
+
+/**
+ * Replace one role assignment without allowing an entity to occupy two roles
+ * on a document. The database protects the latter too; the checks here return
+ * actionable errors and protect old databases before their migration runs.
+ */
+export function setDocumentParty(
+  db: DatabaseSync,
+  ports: Ports,
+  input: { documentId: string; entityId: string; role: DocumentPartyRole; confidence?: number; provenance?: PartyProvenance; editedBy?: string },
+): void {
+  if (!Number.isFinite(input.confidence ?? 1) || (input.confidence ?? 1) < 0 || (input.confidence ?? 1) > 1) {
+    throw new ClaimRefused("confidence must be between 0 and 1", "invalid_confidence");
+  }
+  const entity = db.prepare("SELECT kind FROM entities WHERE id=?").get(input.entityId) as { kind: string } | undefined;
+  if (!entity) throw new ClaimRefused("entity not found", "entity_not_found");
+  if (entity.kind === "instrument" || (input.role === "source_of_funds" && entity.kind !== "account") || (input.role === "owner" && entity.kind !== "person")) {
+    throw new ClaimRefused("entity kind is not valid for this document-party role", "invalid_party_role", { role: input.role, kind: entity.kind });
+  }
+  const currentRole = db.prepare("SELECT role FROM document_parties WHERE document_id=? AND entity_id=?").get(input.documentId, input.entityId) as { role: string } | undefined;
+  if (currentRole && currentRole.role !== input.role) {
+    throw new ClaimRefused("an entity cannot have two roles on one document", "entity_already_has_role", { existing_role: currentRole.role });
+  }
+  if (input.role === "owner") db.prepare("DELETE FROM document_parties WHERE document_id=? AND role='owner'").run(input.documentId);
+  db.prepare(
+    `INSERT INTO document_parties(document_id,entity_id,role,confidence,provenance) VALUES(?,?,?,?,?)
+     ON CONFLICT(document_id,entity_id,role) DO UPDATE SET confidence=excluded.confidence, provenance=excluded.provenance`,
+  ).run(input.documentId, input.entityId, input.role, input.confidence ?? 1, input.provenance ?? "user-confirmed");
+  writeClaim(db, ports, {
+    subject: "document_party", subjectId: documentPartyClaimId(input.documentId, input.entityId, input.role),
+    field: input.role === "source_of_funds" ? "sourceOfFunds" : input.role,
+    value: input.entityId, source: "user", confidence: input.confidence ?? 1, editedBy: input.editedBy,
+  });
 }
 
 export function audit(

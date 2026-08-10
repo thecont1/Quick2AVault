@@ -18,11 +18,11 @@ export type Direction = "out" | "in" | "transfer";
 export type TxnStatus = "evidenced" | "awaiting_settlement" | "no_invoice" | "scheduled";
 
 /** Which thing a field_claim is about (work order 03 §P2). */
-export type ClaimSubject = "document" | "transaction" | "entity";
+export type ClaimSubject = "document" | "transaction" | "entity" | "document_party";
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 12;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -147,7 +147,11 @@ CREATE TABLE IF NOT EXISTS document_parties (
   document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   entity_id   TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
   role        TEXT NOT NULL CHECK (role IN ('owner','counterparty','issuer','source_of_funds')),
-  PRIMARY KEY (document_id, entity_id, role)
+  confidence  REAL NOT NULL DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
+  provenance  TEXT NOT NULL DEFAULT 'ai-derived'
+              CHECK (provenance IN ('ai-derived','user-confirmed','rule-derived')),
+  PRIMARY KEY (document_id, entity_id, role),
+  UNIQUE (document_id, entity_id)
 );
 
 -- ── Transactions: the centre of gravity ────────────────────────────────────
@@ -274,12 +278,15 @@ CREATE INDEX IF NOT EXISTS idx_stmt_lines_status ON statement_lines(status);
 -- document, many transactions).
 CREATE TABLE IF NOT EXISTS field_claims (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  subject_type TEXT NOT NULL CHECK (subject_type IN ('document','transaction','entity')),
+  subject_type TEXT NOT NULL CHECK (subject_type IN ('document','transaction','entity','document_party')),
   subject_id   TEXT NOT NULL,
   field        TEXT NOT NULL,
   value        TEXT,
   source       TEXT NOT NULL CHECK (source IN ('ai','user','rule','import')),
   confidence   REAL,
+  provenance_ref TEXT,
+  edited_at    TEXT,
+  edited_by    TEXT,
   status       TEXT NOT NULL DEFAULT 'proposed'
                CHECK (status IN ('proposed','confirmed','rejected','superseded')),
   created_at   TEXT NOT NULL
@@ -463,10 +470,53 @@ CREATE TABLE IF NOT EXISTS training_reviews (
   answered_at TEXT,
   dismissed   INTEGER NOT NULL DEFAULT 0,
   rule_id     INTEGER REFERENCES learned_rules(id),
+  dedupe_key  TEXT,
+  novelty_score REAL,
+  predicted_rule TEXT,
+  why TEXT,
+  backoff_until TEXT,
   created_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_training_open
   ON training_reviews(answered_at, dismissed);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_training_dedupe ON training_reviews(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+-- WO09/WO10 canonical event stream. Kept separate from legacy intake_events
+-- so existing clients can retain their old phase names during migration.
+CREATE TABLE IF NOT EXISTS document_pipeline (
+  document_id TEXT PRIMARY KEY,
+  state TEXT NOT NULL CHECK (state IN ('received','stable','hashed','triaged','converting','analysing','complete','failed','duplicate','irrelevant','password_needed')),
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pipeline_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id TEXT NOT NULL,
+  from_state TEXT,
+  to_state TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
+  source TEXT NOT NULL,
+  reason TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS idx_pipeline_events_document ON pipeline_events(document_id, id);
+
+CREATE TABLE IF NOT EXISTS rate_cache (
+  base_currency TEXT NOT NULL,
+  quote_currency TEXT NOT NULL,
+  rate_date TEXT NOT NULL,
+  rate REAL NOT NULL,
+  source TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY(base_currency, quote_currency, rate_date, source)
+);
+
+CREATE TABLE IF NOT EXISTS value_registry (
+  field TEXT NOT NULL,
+  value TEXT NOT NULL,
+  normalised TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(field, normalised)
+);
 `;
 
 export function openDatabase(dbPath: string): DatabaseSync {
@@ -979,6 +1029,68 @@ export function migrate(db: DatabaseSync): void {
       }
     }
   }
+
+  // ── v10 → v11: WO09 provenance + role-safe document parties ────────────
+  // SQLite cannot widen the field_claims subject CHECK in place. Rebuild it
+  // once, preserving every historical claim and giving pre-WO09 claims the
+  // conservative ai-derived provenance defaults.
+  const claimColsV11 = columnsOf(db, "field_claims");
+  if (claimColsV11.size && !claimColsV11.has("provenance_ref")) {
+    db.exec("BEGIN");
+    try {
+      db.exec(`
+        CREATE TABLE field_claims_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          subject_type TEXT NOT NULL CHECK (subject_type IN ('document','transaction','entity','document_party')),
+          subject_id TEXT NOT NULL, field TEXT NOT NULL, value TEXT,
+          source TEXT NOT NULL CHECK (source IN ('ai','user','rule','import')),
+          confidence REAL, provenance_ref TEXT, edited_at TEXT, edited_by TEXT,
+          status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','confirmed','rejected','superseded')),
+          created_at TEXT NOT NULL
+        );
+        INSERT INTO field_claims_new (id,subject_type,subject_id,field,value,source,confidence,status,created_at)
+          SELECT id, CASE WHEN subject_type IN ('document','transaction','entity') THEN subject_type ELSE 'document' END,
+                 subject_id,field,value,source,confidence,status,created_at FROM field_claims;
+        DROP TABLE field_claims;
+        ALTER TABLE field_claims_new RENAME TO field_claims;
+        CREATE INDEX IF NOT EXISTS idx_claims_subject ON field_claims(subject_type, subject_id, field);
+        CREATE INDEX IF NOT EXISTS idx_claims_live ON field_claims(subject_type, subject_id, field, status);
+      `);
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+  }
+
+  const partyColsV11 = columnsOf(db, "document_parties");
+  if (partyColsV11.size && !partyColsV11.has("provenance")) {
+    db.exec("BEGIN");
+    try {
+      // Historical databases can contain one entity in more than one role.
+      // Preserve the oldest role rather than inventing an assignment that a
+      // user never made; later edits can deliberately re-role it.
+      db.exec(`
+        CREATE TABLE document_parties_new (
+          document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+          role TEXT NOT NULL CHECK (role IN ('owner','counterparty','issuer','source_of_funds')),
+          confidence REAL NOT NULL DEFAULT 0.5 CHECK(confidence>=0 AND confidence<=1),
+          provenance TEXT NOT NULL DEFAULT 'ai-derived' CHECK(provenance IN ('ai-derived','user-confirmed','rule-derived')),
+          PRIMARY KEY(document_id,entity_id,role), UNIQUE(document_id,entity_id)
+        );
+        INSERT INTO document_parties_new(document_id,entity_id,role)
+          SELECT document_id,entity_id,MIN(role) FROM document_parties GROUP BY document_id,entity_id;
+        DROP TABLE document_parties;
+        ALTER TABLE document_parties_new RENAME TO document_parties;
+      `);
+      db.exec("COMMIT");
+    } catch (error) { db.exec("ROLLBACK"); throw error; }
+  }
+
+  // ── v11 → v12: learning metadata and durable canonical pipeline tables ─
+  const reviewCols = columnsOf(db, "training_reviews");
+  for (const [name, decl] of [["dedupe_key", "TEXT"], ["novelty_score", "REAL"], ["predicted_rule", "TEXT"], ["why", "TEXT"], ["backoff_until", "TEXT"]] as const) {
+    if (reviewCols.size && !reviewCols.has(name)) db.exec(`ALTER TABLE training_reviews ADD COLUMN ${name} ${decl}`);
+  }
+  if (reviewCols.size) db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_training_dedupe ON training_reviews(dedupe_key) WHERE dedupe_key IS NOT NULL");
 }
 
 /**

@@ -30,6 +30,8 @@ import {
   resolveTransaction,
   winningClaim,
   writeClaim,
+  setDocumentParty,
+  type DocumentPartyRole,
   type ResolvedTransaction,
 } from "./claims.js";
 import { rebuildSearchIndex, searchDocuments } from "./search.js";
@@ -53,6 +55,14 @@ import {
   normaliseIdentifier,
   UNIDENTIFIED_PERSON_ID,
 } from "./identity.js";
+import {
+  DOC_TYPES,
+  IMPACT_BUCKETS,
+  createRegistryValue,
+  listVocabulary,
+  pipelineEventsFor,
+  type Vocabulary,
+} from "./workorders.js";
 
 export interface ApiOptions {
   port: number;
@@ -404,6 +414,47 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, { linked: true, transaction_id: b.transaction_id, document_id: b.document_id });
       }
 
+      // ── WO09/WO10 selectable vocabularies + role-scoped parties ─────────
+      if (p === "/v1/vocabularies" && req.method === "GET") {
+        return send(res, 200, {
+          entities: listVocabulary(db, "entities"), accounts: listVocabulary(db, "accounts"),
+          categories: listVocabulary(db, "categories"), impact_buckets: [...IMPACT_BUCKETS], document_types: [...DOC_TYPES],
+        });
+      }
+      {
+        const vm = /^\/v1\/vocabularies\/([^/]+)$/.exec(p);
+        if (vm && req.method === "GET") {
+          const name = decodeURIComponent(vm[1]);
+          const map: Record<string, Vocabulary> = { entities:"entities",accounts:"accounts",categories:"categories",impactBuckets:"impactBuckets",impact_buckets:"impactBuckets",docTypes:"docTypes",document_types:"docTypes",settings:"settings" };
+          const vocabulary = map[name]; if (!vocabulary) return send(res,404,{error:"unknown_vocabulary"});
+          return send(res,200,{vocabulary,values:listVocabulary(db,vocabulary,url.searchParams.get("kind")??undefined)});
+        }
+        if (vm && req.method === "POST") {
+          const name=decodeURIComponent(vm[1]); const b=await readJson(req); const value=typeof b.value==="string"?b.value:"";
+          if(!value)return send(res,400,{error:"value required"});
+          return send(res,200,createRegistryValue(db,ports,name,value));
+        }
+      }
+      {
+        const pm = /^\/v1\/documents\/([^/]+)\/parties$/.exec(p);
+        if (pm && req.method === "GET") {
+          const documentId=decodeURIComponent(pm[1]);
+          return send(res,200,{document_id:documentId,parties:db.prepare(`SELECT dp.*,e.kind,e.display_name FROM document_parties dp JOIN entities e ON e.id=dp.entity_id WHERE dp.document_id=? ORDER BY dp.role,e.display_name`).all(documentId)});
+        }
+        if (pm && req.method === "PUT") {
+          const documentId=decodeURIComponent(pm[1]); const b=await readJson(req);
+          const role=String(b.role??"") as DocumentPartyRole, entityId=String(b.entity_id??"");
+          if(!["owner","counterparty","issuer","source_of_funds"].includes(role)||!entityId)return send(res,400,{error:"valid role and entity_id required"});
+          try{setDocumentParty(db,ports,{documentId,entityId,role,confidence:typeof b.confidence==="number"?b.confidence:1,editedBy:typeof b.edited_by==="string"?b.edited_by:undefined});}
+          catch(err){if(err instanceof ClaimRefused)return send(res,409,{error:err.code,message:err.message,...err.detail});throw err;}
+          return send(res,200,{updated:true,document_id:documentId,entity_id:entityId,role});
+        }
+      }
+      {
+        const em=/^\/v1\/documents\/([^/]+)\/pipeline-events$/.exec(p);
+        if(em&&req.method==="GET"){const documentId=decodeURIComponent(em[1]);return send(res,200,{document_id:documentId,events:pipelineEventsFor(db,documentId)});}
+      }
+
       // ── claims: the inline-editing surface (work order 03 §P2) ───────────
       //
       // Editing writes a CLAIM, never a direct column update. The stored value
@@ -443,6 +494,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                     source: c.source,
                     status: c.status,
                     confidence: c.confidence,
+                    provenance: c.source === "user" ? "user-confirmed" : c.source === "rule" ? "rule-derived" : "ai-derived",
+                    provenance_ref: c.provenance_ref ?? null,
+                    edited_at: c.edited_at ?? c.created_at,
+                    edited_by: c.edited_by ?? null,
                     at: c.created_at,
                   },
                 ]),
@@ -450,7 +505,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             });
           }
 
-          if (req.method === "PATCH") {
+          if (req.method === "PATCH" || req.method === "PUT") {
             const b = (await readJson(req)) as Record<string, unknown>;
             const field = typeof b.field === "string" ? b.field : "";
             if (!field) return send(res, 400, { error: "field required" });

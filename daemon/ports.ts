@@ -150,7 +150,12 @@ export type DomainEvent =
       new_disposition: "accepted" | "irrelevant" | "failed";
       document_id: string | null;
       at: string;
-    };
+    }
+  // WO09 adaptive-learning event stream. These are domain events, not a
+  // polling API; SSE clients receive them immediately.
+  | { type: "learning.question"; questionId: string; askedAt: string; trigger: Record<string, unknown>; prompt: string; sourceFact: Record<string, unknown>; predictedRule: Record<string, unknown>; dedupeKey: string; why: string }
+  | { type: "learning.answer"; questionId: string; answeredAt: string; answer: string }
+  | { type: "learning.rule.applied"; ruleId: number; documentId?: string; at: string };
 
 export interface EventBus {
   publish(e: DomainEvent): void;
