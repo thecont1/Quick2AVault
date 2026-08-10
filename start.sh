@@ -108,8 +108,10 @@ Run './start.sh --stop' first, or set Q2AV_PORT to something else."
 }
 
 build_app() {
-  green "building the desktop app (~60s)…"
+  green "cleaning previous build artifacts…"
   command -v flutter >/dev/null || die "flutter not on PATH. Set FLUTTER_BIN=/path/to/flutter/bin"
+  ( cd desktop && flutter clean >/dev/null ) || die "flutter clean failed"
+  green "building the desktop app (~60s)…"
   # Q2AV_START_FULL is a QA aid, not the product default: the menubar popup is
   # the intended entry point. Only bake it in when --full was asked for.
   ( cd desktop && flutter build macos --release \
@@ -121,6 +123,11 @@ build_app() {
   # grepping the executable: --dart-define values are compiled into the AOT
   # snapshot (App.framework), not the launcher binary.
   printf '%s\n%s\n' "$(mode)" "$TOKEN" > "$MODE_FILE"
+  # Print build identity so you can verify you're not looking at a stale binary.
+  local sha ts
+  sha="$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  green "build complete: $sha  $ts"
 }
 
 # Rebuild when the binary is missing, older than the Dart sources, or built
@@ -172,7 +179,6 @@ case "${1:-}" in
   --daemon) ensure_token; start_daemon; echo; status; exit 0 ;;
   --rebuild)
     ensure_token
-    rm -rf "$APP"
     start_daemon
     build_app
     start_app
