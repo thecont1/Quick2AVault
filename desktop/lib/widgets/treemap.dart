@@ -262,10 +262,6 @@ class TreemapBand extends StatelessWidget {
   final List<TreemapNode> nodes;
   final int totalMinor;
 
-  /// Categories listed in the legend. Beyond this the tail is summarised so
-  /// the popup does not become a scrolling list of 1% slivers.
-  static const int maxLegend = 4;
-
   const TreemapBand({super.key, required this.nodes, required this.totalMinor});
 
   @override
@@ -273,16 +269,12 @@ class TreemapBand extends StatelessWidget {
     if (nodes.isEmpty || totalMinor <= 0) return const SizedBox.shrink();
 
     final ranked = [...nodes]..sort((a, b) => b.amountMinor.compareTo(a.amountMinor));
-    final legend = ranked.take(maxLegend).toList();
-    final rest = ranked.skip(maxLegend).toList();
-    final restMinor = rest.fold<int>(0, (s, n) => s + n.amountMinor);
 
     return Semantics(
       label: 'Spending by category, ${_inr(totalMinor)} total across '
           '${ranked.length} categories',
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        // The bar. Every category gets a segment, including the tail — the
-        // legend truncates, the DATA never does.
+        // The bar. Every category gets a segment — the data is never truncated.
         ClipRRect(
           borderRadius: BorderRadius.circular(4),
           child: SizedBox(
@@ -313,20 +305,15 @@ class TreemapBand extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-        for (var i = 0; i < legend.length; i++)
+        // Every category gets a legend row — even small ones. The user
+        // explicitly wants to see all spending categories, not just the top
+        // few, because a small category can still be important.
+        for (var i = 0; i < ranked.length; i++)
           _BandRow(
             swatch: treemapFill(i, ranked.length),
-            label: legend[i].label,
-            amountMinor: legend[i].amountMinor,
-            share: legend[i].amountMinor / totalMinor,
-          ),
-        if (rest.isNotEmpty)
-          _BandRow(
-            swatch: treemapFill(ranked.length - 1, ranked.length),
-            label: '${rest.length} more',
-            amountMinor: restMinor,
-            share: restMinor / totalMinor,
-            muted: true,
+            label: ranked[i].label,
+            amountMinor: ranked[i].amountMinor,
+            share: ranked[i].amountMinor / totalMinor,
           ),
       ]),
     );

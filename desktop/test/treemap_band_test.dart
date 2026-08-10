@@ -109,18 +109,22 @@ void main() {
     expect(find.textContaining('10,944'), findsOneWidget);
   });
 
-  testWidgets('the tail is summarised, never silently dropped', (tester) async {
+  testWidgets('every category appears in the legend, none are summarised', (tester) async {
     await _pumpBand(tester, _nodes, _total);
 
-    // 7 categories, legend shows 4, so 3 must be accounted for explicitly.
-    expect(find.text('3 more'), findsOneWidget);
+    // 7 categories — all 7 must appear by name. No "N more" summary.
+    for (final n in _nodes) {
+      expect(find.text(n.label), findsOneWidget,
+          reason: '${n.label} must be in the legend');
+    }
+    expect(find.textContaining('more'), findsNothing,
+        reason: 'no summarised tail — every category is listed');
 
-    // And the bar still has a segment for all 7 — the legend truncates, the
-    // data does not.
+    // And the bar has a segment for all 7 too.
     expect(_segments(), findsNWidgets(7));
   });
 
-  testWidgets('percentages sum to 100 across bar and tail', (tester) async {
+  testWidgets('percentages sum to 100 across all categories', (tester) async {
     await _pumpBand(tester, _nodes, _total);
     final pcts = tester
         .widgetList<Text>(find.byType(Text))
@@ -128,7 +132,7 @@ void main() {
         .where((s) => s.endsWith('%'))
         .map((s) => int.parse(s.replaceAll('%', '')))
         .toList();
-    expect(pcts.length, 5, reason: '4 legend rows + the summarised tail');
+    expect(pcts.length, 7, reason: 'one percentage per category');
     // Rounding to whole percents, so allow 1 point of slack either way.
     expect(pcts.reduce((a, b) => a + b), closeTo(100, 2));
   });

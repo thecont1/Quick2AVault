@@ -101,6 +101,18 @@ class PopupView extends StatelessWidget {
             onSelect: onBucketChanged ?? (_) {},
           ),
         ),
+        // Spending breakup bar and category list, directly under the Spending
+        // card. No section title — the card above already says "Spending".
+        // The bar shows every category; the legend lists every category, not
+        // just the top few, because even small categories matter.
+        if (treemap.nodes.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: TreemapBand(
+              nodes: treemap.nodes,
+              totalMinor: treemap.totalMinor,
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
           child: _TransferNote(snapshot: snapshot),
@@ -113,20 +125,6 @@ class PopupView extends StatelessWidget {
               : ListView(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
                   children: [
-                    // Where the money went, above the individual transactions —
-                    // the same data as the viewer's treemap, but a single
-                    // proportional band. A squarified treemap needs area to be
-                    // comparable by eye, and 420px of panel does not have it;
-                    // one stacked bar keeps area == money honest at this size.
-                    if (treemap.nodes.isNotEmpty) ...[
-                      const _Label('WHERE IT WENT'),
-                      const SizedBox(height: 8),
-                      TreemapBand(
-                        nodes: treemap.nodes,
-                        totalMinor: treemap.totalMinor,
-                      ),
-                      const SizedBox(height: 14),
-                    ],
                     // RECEIPTS, not RECENT: this list is now the evidence for
                     // whichever hero card is selected, so it must name the
                     // bucket it explains. "Recent" described an ordering; what
