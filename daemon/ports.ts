@@ -49,7 +49,7 @@ export interface Conversion {
 /** P1 conversion port. Implemented by anydoc; swappable for OCR or a stub. */
 export interface Converter {
   /** Convert a file to canonical markdown v1. Never throws — returns null on failure. */
-  toMarkdown(filePath: string, ext: string): Promise<Conversion | null>;
+  toMarkdown(filePath: string, ext: string, password?: string): Promise<Conversion | null>;
 }
 
 /** Domain events published on the bus and streamed to clients over SSE. */

@@ -567,9 +567,14 @@ class IntakeEvent {
       case 'processing': return detail ?? 'Processing';
       case 'complete': return 'Completed';
       case 'failed': return 'Failed';
+      case 'password_needed': return 'Password required';
       default: return processingState;
     }
   }
+
+  /// Work order 07 §G: true when the document is encrypted and waiting for
+  /// the user to provide a password.
+  bool get needsPassword => processingState == 'password_needed';
 
   factory IntakeEvent.fromJson(Map<String, dynamic> j) {
     final raw = (j['created_at'] ?? '') as String;
@@ -1676,6 +1681,21 @@ class VaultApi {
       Uri.parse('$baseUrl/v1/intake/$id/reclassify'),
       headers: _headers,
     );
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  /// Work order 07 §G — submit a password for an encrypted document.
+  /// The intake must be in 'password_needed' state. The daemon stores the
+  /// password on the document and re-enqueues the convert job.
+  Future<Map<String, dynamic>> submitIntakePassword(int id, String password) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/intake/$id/password'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({'password': password}),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('submit password failed: ${res.statusCode} ${res.body}');
+    }
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 

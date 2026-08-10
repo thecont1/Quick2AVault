@@ -26,6 +26,7 @@ import 'widgets/popup_view.dart';
 import 'widgets/setup_view.dart';
 import 'widgets/period_bar.dart';
 import 'widgets/vault_tabs.dart';
+import 'widgets/intake_queue_view.dart';
 import 'widgets/ledger_tab.dart';
 import 'widgets/treemap.dart';
 import 'widgets/people_view.dart';
@@ -572,10 +573,14 @@ class _VaultHomeState extends State<VaultHome> {
               child: PeopleView(api: _api, onClose: null),
             ),
           ),
-        // Work order 06 §9 — Intake tab: the Irrelevant view with Restore.
-        VaultTab.intake => IrrelevantView(
+        // Work order 07 §G — Intake tab: the unified intake queue.
+        // Shows every incoming file with its state. Encrypted PDFs show an
+        // inline password field. Irrelevant items show Restore. Nothing is
+        // held up by a password-needed item — the rest of the queue keeps
+        // processing.
+        VaultTab.intake => IntakeQueueView(
             api: _api,
-            onRestored: _refresh,
+            onChanged: _refresh,
           ),
         VaultTab.settings => Center(
             child: ConstrainedBox(

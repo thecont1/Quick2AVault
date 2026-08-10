@@ -22,7 +22,7 @@ export type ClaimSubject = "document" | "transaction" | "entity";
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -77,7 +77,13 @@ CREATE TABLE IF NOT EXISTS documents (
   converter_version  TEXT,     -- 'anydoc@0.1.6', 'vision-ocr@macOS26.5.2'
   markdown_hash      TEXT,     -- SHA-256 of the markdown the extraction READ
   extraction_model   TEXT,     -- e.g. 'claude-sonnet-5'
-  extracted_at       TEXT      -- distinct from analysed_at: when the OPINION was formed
+  extracted_at       TEXT,     -- distinct from analysed_at: when the OPINION was formed
+  -- ── work order 07 §G: encrypted document password ──
+  -- User-provided password for encrypted PDFs. Stored in plaintext because
+  -- the daemon needs to pass it to the converter; the vault.db is already
+  -- the crown jewels, so encrypting this column with a key that also lives
+  -- in the daemon would be theatre. Null = no password / not encrypted.
+  password            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_documents_sha ON documents(sha256);
 CREATE INDEX IF NOT EXISTS idx_documents_received ON documents(received_at);
@@ -365,9 +371,9 @@ CREATE TABLE IF NOT EXISTS intake_events (
   confidence         TEXT,
   matched_document_id TEXT,
   canonical_path     TEXT,
-  -- received → stable → hashed → triaged → archived → queued → processing → complete | failed
+  -- received → stable → hashed → triaged → archived → queued → processing → complete | failed | password_needed
   processing_state   TEXT NOT NULL DEFAULT 'received'
-                     CHECK (processing_state IN ('received','stable','hashed','triaged','archived','queued','processing','complete','failed')),
+                     CHECK (processing_state IN ('received','stable','hashed','triaged','archived','queued','processing','complete','failed','password_needed')),
   signals_json       TEXT,
   triage_review      INTEGER NOT NULL DEFAULT 0,
   updated_at         TEXT,
@@ -892,6 +898,87 @@ export function migrate(db: DatabaseSync): void {
   addIntakeColV9("last_error", "TEXT");
   addIntakeColV9("retry_count", "INTEGER NOT NULL DEFAULT 0");
   addIntakeColV9("next_retry_at", "TEXT");
+
+  // ── v9 → v10: password_needed state for encrypted PDFs ───────────────────
+  // Widen the processing_state CHECK to accept 'password_needed'. A document
+  // that fails conversion because it's encrypted sits in this state until the
+  // user provides a password. Detected with a rolled-back probe.
+  // Also add a `password` column to documents for user-provided passwords.
+  const docColsV10 = columnsOf(db, "documents");
+  if (docColsV10.size && !docColsV10.has("password")) {
+    db.exec("ALTER TABLE documents ADD COLUMN password TEXT");
+  }
+
+  const intakeColsV10 = columnsOf(db, "intake_events");
+  if (intakeColsV10.size) {
+    let needsRebuildV10 = false;
+    try {
+      db.exec("BEGIN");
+      try {
+        db.prepare(
+          "INSERT INTO intake_events (kind, filename, source, created_at, processing_state) VALUES ('failed','probe','probe','probe','password_needed')",
+        ).run();
+        needsRebuildV10 = false;
+      } catch {
+        needsRebuildV10 = true;
+      } finally {
+        db.exec("ROLLBACK");
+      }
+    } catch {
+      needsRebuildV10 = false;
+    }
+    if (needsRebuildV10) {
+      db.exec("BEGIN");
+      try {
+        // Rebuild with the widened CHECK. Copy all existing columns and data.
+        db.exec(`
+          CREATE TABLE intake_events_new (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind               TEXT NOT NULL CHECK (kind IN ('added','accepted','duplicate','irrelevant','failed')),
+            filename           TEXT NOT NULL,
+            sha256             TEXT,
+            document_id        TEXT,
+            source             TEXT NOT NULL DEFAULT 'folder',
+            detail             TEXT,
+            created_at         TEXT NOT NULL,
+            source_reference   TEXT,
+            original_filename  TEXT,
+            received_path      TEXT,
+            mime_type          TEXT,
+            byte_size          INTEGER,
+            reason_code        TEXT,
+            reason             TEXT,
+            confidence         TEXT,
+            matched_document_id TEXT,
+            canonical_path     TEXT,
+            processing_state   TEXT NOT NULL DEFAULT 'received'
+                               CHECK (processing_state IN ('received','stable','hashed','triaged','archived','queued','processing','complete','failed','password_needed')),
+            signals_json       TEXT,
+            triage_review      INTEGER NOT NULL DEFAULT 0,
+            updated_at         TEXT,
+            stage_started_at   TEXT,
+            heartbeat_at       TEXT,
+            finished_at        TEXT,
+            last_error         TEXT,
+            retry_count        INTEGER NOT NULL DEFAULT 0,
+            next_retry_at      TEXT
+          );
+          INSERT INTO intake_events_new
+            SELECT * FROM intake_events;
+          DROP TABLE intake_events;
+          ALTER TABLE intake_events_new RENAME TO intake_events;
+          CREATE INDEX IF NOT EXISTS idx_intake_created ON intake_events(created_at);
+          CREATE INDEX IF NOT EXISTS idx_intake_kind ON intake_events(kind);
+          CREATE INDEX IF NOT EXISTS idx_intake_sha ON intake_events(sha256);
+          CREATE INDEX IF NOT EXISTS idx_intake_doc ON intake_events(document_id);
+        `);
+        db.exec("COMMIT");
+      } catch (e) {
+        db.exec("ROLLBACK");
+        throw e;
+      }
+    }
+  }
 }
 
 /**

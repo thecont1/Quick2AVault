@@ -7,6 +7,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { createRequire } from "node:module";
+import { execFile } from "node:child_process";
 
 import { toMarkdownBytes } from "@firecrawl/anydoc";
 
@@ -87,7 +88,7 @@ const ANYDOC_VERSION: string = (() => {
 
 export function createAnydocConverter(logger: Logger): Converter {
   return {
-    async toMarkdown(filePath: string, ext: string): Promise<Conversion | null> {
+    async toMarkdown(filePath: string, ext: string, password?: string): Promise<Conversion | null> {
       const e = ext.toLowerCase();
       try {
         if (PLAINTEXT_EXT.has(e)) {
@@ -120,18 +121,77 @@ export function createAnydocConverter(logger: Logger): Converter {
           return null;
         }
         const buf = await fsp.readFile(filePath);
-        const out = await toMarkdownBytes(buf, fmt as never);
-        return {
-          markdown: typeof out === "string" ? out.trim() : String(out ?? "").trim(),
-          converter: "anydoc",
-          converterVersion: `anydoc@${ANYDOC_VERSION}`,
-        };
+        try {
+          const out = await toMarkdownBytes(buf, fmt as never);
+          return {
+            markdown: typeof out === "string" ? out.trim() : String(out ?? "").trim(),
+            converter: "anydoc",
+            converterVersion: `anydoc@${ANYDOC_VERSION}`,
+          };
+        } catch (convErr) {
+          const convMsg = (convErr as Error)?.message ?? String(convErr);
+          const code = (convErr as { code?: string })?.code;
+          // anydoc rejects with ConvertErrorCode 'encrypted' for password-protected PDFs.
+          // When a password is provided, fall back to pdftotext (poppler) which
+          // supports the -upw flag for user passwords.
+          if (code === "encrypted" || /encrypt|password|passwd|protected/i.test(convMsg)) {
+            if (password && e === ".pdf") {
+              const md = await convertPdfWithPassword(filePath, password, logger);
+              if (md !== null) {
+                return {
+                  markdown: md,
+                  converter: "pdftotext",
+                  converterVersion: "pdftotext@poppler",
+                };
+              }
+            }
+            // No password, or pdftotext also failed — rethrow with ENCRYPTED
+            // marker so runConvertJob can set password_needed state.
+            throw new Error(`ENCRYPTED: ${convMsg}`);
+          }
+          throw convErr;
+        }
       } catch (err) {
-        logger.error("converter failed", { filePath, ext: e, err: (err as Error)?.message });
+        const msg = (err as Error)?.message ?? String(err);
+        // Detect encryption errors so the pipeline can mark the intake as
+        // password_needed rather than generically failed.
+        if (msg.startsWith("ENCRYPTED:") || /encrypt|password|passwd|protected/i.test(msg)) {
+          logger.warn("converter: document is encrypted", { filePath, ext: e });
+          throw new Error(`ENCRYPTED: ${msg}`);
+        }
+        logger.error("converter failed", { filePath, ext: e, err: msg });
         return null;
       }
     },
   };
+}
+
+/**
+ * Work order 07 §G — convert an encrypted PDF using pdftotext (poppler)
+ * with a user-provided password. Returns the extracted text as markdown,
+ * or null if the password is wrong or pdftotext is unavailable.
+ */
+async function convertPdfWithPassword(filePath: string, password: string, logger: Logger): Promise<string | null> {
+  return new Promise((resolve) => {
+    execFile(
+      "pdftotext",
+      ["-upw", password, "-layout", filePath, "-"],
+      { maxBuffer: 10 * 1024 * 1024, timeout: 30000 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const msg = (err as Error)?.message ?? String(err);
+          if (/password|incorrect/i.test(msg) || /Command Line Error: Incorrect password/i.test(stderr)) {
+            logger.warn("pdftotext: incorrect password", { filePath });
+          } else {
+            logger.error("pdftotext failed", { filePath, err: msg, stderr: stderr.slice(0, 200) });
+          }
+          resolve(null);
+          return;
+        }
+        resolve(stdout.trim() || null);
+      },
+    );
+  });
 }
 
 /**

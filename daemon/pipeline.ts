@@ -387,7 +387,7 @@ function updateIntakeForJob(
             heartbeat_at=?,
             updated_at=?,
             finished_at=CASE WHEN ?=1 THEN ? ELSE finished_at END
-      WHERE document_id=? AND kind='accepted'`,
+      WHERE document_id=? AND kind IN ('accepted','added')`,
   ).run(state, stageLabel, now, now, now, isTerminal ? 1 : 0, isTerminal ? now : null, documentId);
 }
 
@@ -400,7 +400,7 @@ function setIntakeFailedByDoc(db: DatabaseSync, ports: Ports, documentId: string
   db.prepare(
     `UPDATE intake_events
         SET processing_state='failed', last_error=?, finished_at=?, updated_at=?, heartbeat_at=?
-      WHERE document_id=? AND kind='accepted'`,
+      WHERE document_id=? AND kind IN ('accepted','added')`,
   ).run(error, now, now, now, documentId);
 }
 
@@ -942,15 +942,16 @@ export function enqueue(db: DatabaseSync, ports: Ports, documentId: string, phas
  */
 export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: number, documentId: string): Promise<void> {
   const doc = db
-    .prepare("SELECT id, raw_path, ext, original_filename FROM documents WHERE id=?")
+    .prepare("SELECT id, raw_path, ext, original_filename, password FROM documents WHERE id=?")
     .get(documentId) as
-    | { id: string; raw_path: string; ext: string; original_filename: string }
+    | { id: string; raw_path: string; ext: string; original_filename: string; password: string | null }
     | undefined;
   if (!doc) throw new Error(`document ${documentId} not found`);
 
-  const conv = await ports.converter.toMarkdown(doc.raw_path, doc.ext ?? "");
-  if (conv === null) throw new Error(`conversion returned null for ${doc.ext}`);
-  const md = conv.markdown;
+  try {
+    const conv = await ports.converter.toMarkdown(doc.raw_path, doc.ext ?? "", doc.password ?? undefined);
+    if (conv === null) throw new Error(`conversion returned null for ${doc.ext}`);
+    const md = conv.markdown;
 
   const mdDir = ports.paths.markdownDir(dateKey(ports.clock.now()));
   // Mirror the original filename so Markdown/ is browsable alongside Raw/.
@@ -975,6 +976,24 @@ export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: numbe
   // P2 is queued but only runs when an AI provider is configured; the worker
   // marks it done-with-note otherwise, so the pipeline never wedges.
   enqueue(db, ports, documentId, "analyse");
+  } catch (err) {
+    const msg = (err as Error)?.message ?? String(err);
+    // Detect encryption: mark the intake as password_needed so the UI can
+    // prompt the user for a password. This is not a permanent failure —
+    // the user can provide a password and retry.
+    if (msg.startsWith("ENCRYPTED:") || /encrypt|password|passwd|protected/i.test(msg)) {
+      const now = ports.clock.isoNow();
+      db.prepare(
+        `UPDATE intake_events
+            SET processing_state='password_needed', last_error=?, updated_at=?, heartbeat_at=?
+          WHERE document_id=? AND kind IN ('accepted','added')`,
+      ).run("Document is encrypted — password required", now, now, documentId);
+      // Don't rethrow — the job is not "failed", it's waiting for user input.
+      // But we do need to stop the retry loop, so throw a non-retryable error.
+      throw new Error(`PASSWORD_NEEDED: ${msg}`);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -1577,6 +1596,16 @@ export class JobWorker {
         }
       } catch (err) {
         const msg = (err as Error)?.message ?? String(err);
+        // PASSWORD_NEEDED is not a retryable failure — the intake is already
+        // marked password_needed by runConvertJob. Mark the job as done (not
+        // failed) so the worker doesn't retry it 3 times before giving up.
+        if (msg.startsWith("PASSWORD_NEEDED:")) {
+          this.db
+            .prepare("UPDATE jobs SET state='done', last_error=?, finished_at=? WHERE id=?")
+            .run(msg, this.ports.clock.isoNow(), job.id);
+          this.ports.logger.warn("job awaiting password", { job: job.id, document_id: job.document_id });
+          return;
+        }
         const state = attemptNo >= MAX_JOB_ATTEMPTS ? "failed" : "pending";
         // Clear started_at when going back in the queue, so a requeued job
         // does not look like it has been running since its first attempt.

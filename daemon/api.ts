@@ -12,7 +12,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
-import { ingestFile, restoreIntake, reclassifyIntake } from "./pipeline.js";
+import { ingestFile, restoreIntake, reclassifyIntake, enqueue } from "./pipeline.js";
 import { listPacks, loadPack, fyKeyFor, fyRange, type JurisdictionPack } from "./jurisdiction.js";
 import { buildTreemap } from "./categories/spend-categories.js";
 import { deriveGmailAddress } from "./gmail/gmail-model.js";
@@ -327,6 +327,53 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           } catch (err) {
             return send(res, 404, { error: (err as Error)?.message ?? "intake not found" });
           }
+        }
+      }
+
+      // Work order 07 §G — submit a password for an encrypted document.
+      // The intake must be in 'password_needed' state. The password is stored
+      // on the document row and the convert job is re-enqueued.
+      {
+        const m = /^\/v1\/intake\/(\d+)\/password$/.exec(p);
+        if (m && req.method === "POST") {
+          const id = Number(m[1]);
+          const body = await readJson(req);
+          const password = body?.password;
+          if (typeof password !== "string") {
+            return send(res, 400, { error: "password required" });
+          }
+          // Find the intake event and its document_id.
+          const intake = db
+            .prepare("SELECT document_id, processing_state FROM intake_events WHERE id=?")
+            .get(id) as { document_id: string | null; processing_state: string } | undefined;
+          if (!intake) {
+            return send(res, 404, { error: "intake not found" });
+          }
+          if (!intake.document_id) {
+            return send(res, 409, { error: "intake has no document — password not applicable" });
+          }
+          // Store the password on the document.
+          db.prepare("UPDATE documents SET password=? WHERE id=?")
+            .run(password, intake.document_id);
+          // Update the intake state back to queued so the UI shows progress.
+          const now = ports.clock.isoNow();
+          db.prepare(
+            `UPDATE intake_events
+                SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
+              WHERE id=?`,
+          ).run(now, now, now, id);
+          // Re-enqueue the convert job.
+          enqueue(db, ports, intake.document_id, "convert");
+          ports.logger.info("password submitted, re-enqueuing conversion", {
+            intake_id: id,
+            document_id: intake.document_id,
+          });
+          return send(res, 200, {
+            ok: true,
+            intake_id: id,
+            document_id: intake.document_id,
+            state: "queued",
+          });
         }
       }
 
