@@ -14,7 +14,7 @@ import 'package:quick2avault_desktop/widgets/period_bar.dart';
 Widget _popup({String? authError, Snapshot? snapshot, int reviewCount = 0}) => MaterialApp(
       home: SizedBox(
         width: 420,
-        height: 620,
+        height: 760,
         child: PopupView(
           snapshot: snapshot ?? Snapshot.empty,
           authError: authError,

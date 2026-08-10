@@ -17,7 +17,7 @@ import 'package:flutter/services.dart';
 
 /// The popover mode the app is in.
 enum PopoverMode {
-  /// Compact menubar popover (420x620 equivalent).
+  /// Compact menubar popover (420x760 equivalent).
   popover,
   /// Full resizable vault window.
   full,

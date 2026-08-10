@@ -49,7 +49,7 @@ Widget _popup({
     MaterialApp(
       home: SizedBox(
         width: 420,
-        height: 620,
+        height: 760,
         child: PopupView(
           snapshot: _snap(),
           periods: Periods.empty,

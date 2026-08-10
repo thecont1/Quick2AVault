@@ -5,7 +5,7 @@ import '../theme.dart';
 import 'period_bar.dart';
 import 'treemap.dart';
 
-/// The menubar popup: a calm 420x620 panel. Glance-value only — totals, the
+/// The menubar popup: a calm 420x760 panel. Glance-value only — totals, the
 /// last few transactions, and what needs attention. Anything deeper opens the
 /// full window.
 class PopupView extends StatelessWidget {
@@ -99,20 +99,9 @@ class PopupView extends StatelessWidget {
             snapshot: snapshot,
             selected: bucket,
             onSelect: onBucketChanged ?? (_) {},
+            treemap: treemap,
           ),
         ),
-        // Spending breakup bar and category list, directly under the Spending
-        // card. No section title — the card above already says "Spending".
-        // The bar shows every category; the legend lists every category, not
-        // just the top few, because even small categories matter.
-        if (treemap.nodes.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-            child: TreemapBand(
-              nodes: treemap.nodes,
-              totalMinor: treemap.totalMinor,
-            ),
-          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
           child: _TransferNote(snapshot: snapshot),
@@ -226,10 +215,12 @@ class _MoneyTriple extends StatelessWidget {
   final Snapshot snapshot;
   final String selected;
   final ValueChanged<String> onSelect;
+  final TreemapData treemap;
   const _MoneyTriple({
     required this.snapshot,
     required this.selected,
     required this.onSelect,
+    required this.treemap,
   });
 
   @override
@@ -257,6 +248,17 @@ class _MoneyTriple extends StatelessWidget {
           selected: selected == 'spending',
           onTap: () => onSelect('spending'),
         ),
+        // Spending breakup bar and category list, directly under the Spending
+        // card — between Spending and Investments. No section title; the card
+        // above already says "Spending". Every category is listed, not just
+        // the top few, because even small categories matter.
+        if (treemap.nodes.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          TreemapBand(
+            nodes: treemap.nodes,
+            totalMinor: treemap.totalMinor,
+          ),
+        ],
         const SizedBox(height: 9),
         _MoneyCard(
           label: 'Investments',

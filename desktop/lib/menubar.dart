@@ -19,8 +19,9 @@ import 'package:window_manager/window_manager.dart';
 import 'window_store.dart';
 
 /// Popup geometry — deliberately narrow, like a menubar utility rather than
-/// a document window.
-const kPopupSize = Size(420, 620);
+/// a document window. Tall enough to fit the spending breakup (between the
+/// Spending and Investments cards) plus at least 4 spending receipts.
+const kPopupSize = Size(420, 760);
 const kFullSize = Size(1360, 880);
 
 class MenubarController with TrayListener, WindowListener {

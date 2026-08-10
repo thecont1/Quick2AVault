@@ -34,7 +34,7 @@ Snapshot _snap(int spendMinor, String label) => Snapshot(
 Widget _popup({String? authError, required Snapshot snapshot}) => MaterialApp(
       home: SizedBox(
         width: 420,
-        height: 620,
+        height: 760,
         child: PopupView(
           snapshot: snapshot,
           authError: authError,

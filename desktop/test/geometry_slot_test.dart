@@ -13,6 +13,7 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:quick2avault_desktop/menubar.dart';
 import 'package:quick2avault_desktop/window_store.dart';
 
 late Directory _tmp;
@@ -120,7 +121,7 @@ void main() {
     expect(popupSize, isNull);
     // And the fallback the controller uses in that case is the popup constant,
     // never whatever happens to be in the store.
-    expect(popupSize ?? const Size(420, 620), const Size(420, 620));
+    expect(popupSize ?? kPopupSize, kPopupSize);
   });
 
   test('a full slot holding popup geometry is rejected', () async {
