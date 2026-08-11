@@ -269,6 +269,27 @@ npm test                # runs all daemon/*.smoke.ts in sequence
 npm run app:test        # runs Flutter widget/unit tests
 ```
 
+### Glaze parity testing
+
+The document-detail UI is protected in three layers:
+
+1. **Widget contracts (blocking):** Fixture G/H tests assert the tab header,
+   financial-impact copy, extracted fields and rows, identity/audit sections,
+   and all five document actions.
+2. **Advisory goldens (non-blocking):** 1124×1012 snapshots report pixel drift
+   under `desktop/test/_golden/reports/`; CI records the report but never fails
+   solely on a golden mismatch.
+3. **Manual release smoke:** `docs/release-checklist.md` compares the live app
+   against the four canonical Glaze reference images.
+
+Regenerate canonical panel snapshots deliberately on a development machine:
+
+```bash
+cd desktop && flutter test test/features/document_detail --update-goldens
+```
+
+CI must never run Flutter tests with `--update-goldens`.
+
 ## Development
 
 ```bash

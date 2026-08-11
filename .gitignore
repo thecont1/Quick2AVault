@@ -22,6 +22,7 @@ desktop/build/
 desktop/.dart_tool/
 desktop/macos/Pods/
 desktop/macos/Flutter/ephemeral/
+desktop/test/_golden/reports/
 
 # ── Never commit real financial data or secrets ────────────────────────────
 # Vault contents are the user's actual documents and ledger.

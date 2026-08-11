@@ -1,0 +1,20 @@
+{
+  "id": "fixture-g",
+  "filename": "fixture-G-petasight-tax-invoice.pdf",
+  "amount": "₹1,42,780.00",
+  "type": "tax_invoice",
+  "bucket": "income",
+  "person": "Priya Nair",
+  "vendor": "PetaSight Inc.",
+  "document_type": "Tax Invoice",
+  "document_date": "2026-04-01",
+  "financial_year": "FY 2026-27",
+  "currency_conversion": "1691.31 USD",
+  "advisory_hint": "Recognized revenue",
+  "identity_reasoning": "Issuer GST identity and invoice evidence resolve to PetaSight Inc.",
+  "audit_entries": ["document type confirmed", "issuer resolved", "impact bucket confirmed"],
+  "lines": [
+    {"description": "Data Science consulting services", "code": "998313", "quantity": "1", "rate": "1400 USD", "amount": "1400 USD"},
+    {"description": "Kilo Pass subscription", "code": "998314", "quantity": "1", "rate": "291.31 USD", "amount": "291.31 USD"}
+  ]
+}
