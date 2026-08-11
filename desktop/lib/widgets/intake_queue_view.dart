@@ -73,11 +73,12 @@ class _IntakeQueueViewState extends State<IntakeQueueView> {
         _error = null;
       });
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         setState(() {
           _loading = false;
           _error = VaultError.from(e).message;
         });
+      }
     }
   }
 
