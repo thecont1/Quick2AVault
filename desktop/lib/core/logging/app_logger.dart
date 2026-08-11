@@ -78,3 +78,31 @@ class _ReleaseFilter extends LogFilter {
 /// Top-level provider for the application [Logger].
 final Provider<Logger> appLoggerProvider =
     Provider<Logger>((ref) => createLogger());
+
+/// Global logger instance for use before ProviderScope is available
+/// (e.g., in main() error handlers and FlutterError.onError).
+final Logger appLogger = createLogger();
+
+/// Install central error handlers for uncaught Flutter and async errors.
+///
+/// Call once at app startup, before runApp(). All errors are routed through
+/// [appLogger] with privacy-safe context — no document text, tokens, or
+/// financial values are logged.
+void installErrorHandlers() {
+  // Synchronous errors from the widget tree (build, layout, paint).
+  FlutterError.onError = (FlutterErrorDetails details) {
+    appLogger.e(
+      'Flutter error: ${details.exception}',
+      error: details.exception,
+      stackTrace: details.stack,
+    );
+    // Still call the default handler so the error is visible in debug.
+    FlutterError.presentError(details);
+  };
+
+  // Async errors outside the widget tree (unawaited Futures, zone errors).
+  PlatformDispatcher.instance.onError = (error, stack) {
+    appLogger.e('Uncaught async error: $error', error: error, stackTrace: stack);
+    return true;
+  };
+}

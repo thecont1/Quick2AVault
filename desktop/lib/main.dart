@@ -16,8 +16,8 @@ import 'package:window_manager/window_manager.dart';
 
 // core/providers exports the DI surface (AppConfig, Dio, Logger, services).
 // QAV-FLT-02 provides the boundary; QAV-FLT-03–05 migrate callers onto it.
-// ignore: unused_import
 import 'core/providers.dart';
+import 'core/logging/app_logger.dart';
 import 'api.dart';
 import 'menubar.dart';
 import 'window_store.dart';
@@ -40,6 +40,8 @@ import 'features/settings/state.dart' as wo_settings;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // QAV-FLT-07: route all uncaught errors through the privacy-safe logger.
+  installErrorHandlers();
   await windowManager.ensureInitialized();
   await windowManager.waitUntilReadyToShow(
     const WindowOptions(
@@ -152,8 +154,7 @@ class _VaultHomeState extends State<VaultHome> {
     // flags never fired, and the app just sat at its startup geometry looking
     // like a layout bug rather than a crashed initialiser.
     _initMenubar().catchError((Object e, StackTrace st) {
-      // ignore: avoid_print
-      print('MENUBAR INIT FAILED: $e\n$st');
+      appLogger.e('Menubar init failed', error: e, stackTrace: st);
     });
     _boot();
   }

@@ -8,6 +8,7 @@
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logger/logger.dart';
 
 import '../../api.dart';
 import '../../core/providers.dart';
@@ -21,6 +22,7 @@ class SnapshotNotifier extends AsyncNotifier<Snapshot> {
   @override
   Future<Snapshot> build() async {
     final api = ref.watch(vaultApiProvider);
+    final logger = ref.watch(appLoggerProvider);
     final period = ref.watch(periodSelectionProvider);
     try {
       final snap = await api.snapshot(
@@ -31,9 +33,11 @@ class SnapshotNotifier extends AsyncNotifier<Snapshot> {
       ref.read(connectionStatusProvider.notifier).markConnected();
       return snap;
     } on VaultAuthException {
+      logger.w('Snapshot: auth rejected', error: 'VaultAuthException');
       ref.read(connectionStatusProvider.notifier).markAuthError();
       rethrow;
-    } catch (_) {
+    } catch (e, st) {
+      logger.w('Snapshot: fetch failed', error: e, stackTrace: st);
       ref.read(connectionStatusProvider.notifier).markDegraded(
             period.month ?? period.fy ?? period.quick ?? 'the selected period',
           );

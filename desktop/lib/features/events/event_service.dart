@@ -23,6 +23,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logger/logger.dart';
 
 import '../../api.dart';
 import '../../core/providers.dart';
@@ -50,8 +51,10 @@ enum SseConnectionState {
 class EventService {
   final String baseUrl;
   final String token;
+  final Logger? _logger;
 
-  EventService({required this.baseUrl, required this.token});
+  EventService({required this.baseUrl, required this.token, Logger? logger})
+      : _logger = logger;
 
   HttpClient? _client;
   StreamSubscription<String>? _subscription;
@@ -83,6 +86,7 @@ class EventService {
 
       _reconnectAttempts = 0;
       _connectionStateController.add(SseConnectionState.connected);
+      _logger?.i('SSE connected');
 
       String? type;
       _subscription = res
@@ -127,6 +131,7 @@ class EventService {
     if (_reconnecting || _disposed) return;
     _reconnecting = true;
     _connectionStateController.add(SseConnectionState.reconnecting);
+    _logger?.w('SSE reconnecting (attempt $_reconnectAttempts)');
 
     // Exponential backoff: 2s, 4s, 8s, 16s, capped at 30s.
     final seconds = (1 << (_reconnectAttempts.clamp(0, 4) + 1))
@@ -159,7 +164,12 @@ class EventService {
 /// Provider for the SSE EventService.
 final Provider<EventService> sseServiceProvider = Provider<EventService>((ref) {
   final config = ref.watch(appConfigProvider);
-  final service = EventService(baseUrl: config.baseUrl, token: config.token);
+  final logger = ref.watch(appLoggerProvider);
+  final service = EventService(
+    baseUrl: config.baseUrl,
+    token: config.token,
+    logger: logger,
+  );
   ref.onDispose(service.dispose);
   return service;
 });
