@@ -40,15 +40,27 @@ extension VaultApiDesktopFeatures on VaultApi {
     return rows.map(feature_people.EntitySummary.fromJson).toList();
   }
 
-  Future<feature_settings.AppSettings> featureSettings() async =>
-      feature_settings.AppSettings.fromJson(await settings());
-
-  Future<feature_settings.JurisdictionPack> featureJurisdiction() async {
+  Future<
+    ({
+      feature_settings.AppSettings settings,
+      feature_settings.JurisdictionPack jurisdiction,
+    })
+  >
+  featureSettingsBundle() async {
     final raw = await settings();
-    return feature_settings.JurisdictionPack.fromJson(
-      ((raw['jurisdiction'] ?? const {}) as Map).cast<String, dynamic>(),
+    return (
+      settings: feature_settings.AppSettings.fromJson(raw),
+      jurisdiction: feature_settings.JurisdictionPack.fromJson(
+        ((raw['jurisdiction'] ?? const {}) as Map).cast<String, dynamic>(),
+      ),
     );
   }
+
+  Future<feature_settings.AppSettings> featureSettings() async =>
+      (await featureSettingsBundle()).settings;
+
+  Future<feature_settings.JurisdictionPack> featureJurisdiction() async =>
+      (await featureSettingsBundle()).jurisdiction;
 
   Future<void> saveFeatureSettings(
     feature_settings.AppSettings before,
@@ -57,7 +69,7 @@ extension VaultApiDesktopFeatures on VaultApi {
     if (before.learningEnabled != after.learningEnabled) {
       await toggleLearning(after.learningEnabled);
     }
-    await saveDesktopPreferences(after.toJson());
+    await saveDesktopPreferences(after.toApiJson(before: before));
   }
 
   Future<feature_review.DetailDocument> featureDocumentDetail(
@@ -126,7 +138,8 @@ extension VaultApiDesktopFeatures on VaultApi {
         feature_review.DetailField(
           id: 'transaction_${transaction.id}',
           label: 'Linked transaction (${transaction.direction})',
-          value: '${transaction.sourceAmount} · linked by ${transaction.linkedBy ?? 'unknown'}',
+          value:
+              '${transaction.sourceAmount} · linked by ${transaction.linkedBy ?? 'unknown'}',
           provenance: feature_review.ClaimProvenance.fromApi(
             transaction.linkedBy,
           ),
@@ -142,9 +155,9 @@ extension VaultApiDesktopFeatures on VaultApi {
       bucket: feature_review.ImpactBucket.fromApi(
         detail['impact_bucket']?.value,
       ),
-      confirmed: detail.effective.values.any(
-        (value) => value.status == 'confirmed',
-      ),
+      confirmed:
+          detail.effective.isNotEmpty &&
+          detail.effective.values.every((value) => value.status == 'confirmed'),
       confidence: (detail.extraction?['confidence'] as num?)?.toDouble(),
       advisoryHint: detail.extraction?['advisory_hint']?.toString(),
       lines: detail.lineItems.map(_detailLine).toList(),

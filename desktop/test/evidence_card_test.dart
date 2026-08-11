@@ -60,10 +60,14 @@ Widget _host(VaultApi api) => MaterialApp(
   home: Scaffold(body: ReviewBrowser(api: api)),
 );
 
-Future<void> _reveal(WidgetTester tester, Finder finder) async {
+Future<void> _reveal(
+  WidgetTester tester,
+  Finder finder, {
+  String documentId = 'doc_1',
+}) async {
   final detailScroll = find
       .descendant(
-        of: find.byKey(const ValueKey('document-detail-doc_1')),
+        of: find.byKey(ValueKey('document-detail-$documentId')),
         matching: find.byType(Scrollable),
       )
       .first;
@@ -237,7 +241,12 @@ void main() {
       docs: [_doc('doc_1', 'invoice_001.pdf')],
       detail: _detail(
         parties: [
-          {'kind': 'person', 'display_name': 'Arun Kamath', 'role': 'bill_to'},
+          {
+            'entity_id': 'person_arun',
+            'kind': 'person',
+            'display_name': 'Arun Kamath',
+            'role': 'bill_to',
+          },
         ],
       ),
     );
@@ -259,6 +268,7 @@ void main() {
       detail: _detail(
         parties: [
           {
+            'entity_id': 'org_acme',
             'kind': 'organisation',
             'display_name': 'Acme Corp',
             'role': 'counterparty',

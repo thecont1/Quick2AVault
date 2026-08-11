@@ -23,7 +23,8 @@ import { openDatabase } from "./schema.js";
 import { createApi } from "./api.js";
 import { createLogger, createEventBus, systemClock, createPaths } from "./adapters.js";
 import type { Ports } from "./ports.js";
-import type { MutableAiProvider } from "./ai-provider.js";
+import { nullAiProvider, type MutableAiProvider } from "./ai-provider.js";
+import { JobWorker } from "./pipeline.js";
 
 let pass = 0;
 let fail = 0;
@@ -154,15 +155,26 @@ await check("reprocess of a removed doc returns 200 and reactivates it", async (
   assert.equal(row.lifecycle, "active");
 });
 await check("reprocess enqueues an analyse job for the reactivated document", async () => {
-  // The endpoint's contract is that it re-enqueues the correct phase; draining
-  // the analyse pipeline itself is covered by idempotency.smoke.ts and
-  // statements-pipeline.smoke.ts, so we assert the job was queued, not re-run.
   const job = db
     .prepare("SELECT phase, state FROM jobs WHERE document_id=? ORDER BY id DESC LIMIT 1")
     .get("doc_remove_B") as { phase: string; state: string } | undefined;
   assert.ok(job, "a job row must exist after reprocess");
   assert.equal(job!.phase, "analyse", "a document with markdown reprocesses at the analyse phase");
   assert.equal(job!.state, "pending");
+});
+await check("reprocess drains through the real worker to done", async () => {
+  const worker = new JobWorker(db, ports, nullAiProvider);
+  for (let i = 0; i < 6; i++) {
+    const job = db
+      .prepare("SELECT state FROM jobs WHERE document_id=? ORDER BY id DESC LIMIT 1")
+      .get("doc_remove_B") as { state: string } | undefined;
+    if (job?.state === "done") break;
+    await worker.tick();
+  }
+  const job = db
+    .prepare("SELECT state FROM jobs WHERE document_id=? ORDER BY id DESC LIMIT 1")
+    .get("doc_remove_B") as { state: string } | undefined;
+  assert.equal(job?.state, "done");
 });
 await check("a reactivated document is listed again", async () => {
   const ids = await listIds();

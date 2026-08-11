@@ -1367,19 +1367,19 @@ function persistTypedExtraction(
 ): void {
   const confidence = extraction.confidence;
   const claims: Array<[string, unknown]> = [
-    ["documentType", extraction.documentType],
-    ["documentNumber", extraction.documentNumber ?? extraction.contractNoteNumber],
-    ["documentDate", extraction.documentDate ?? extraction.tradeDate],
+    ["doc_type", extraction.documentType],
+    ["document_number", extraction.documentNumber ?? extraction.contractNoteNumber],
+    ["document_date", extraction.documentDate ?? extraction.tradeDate],
     ["currency", extraction.currency],
     ["amount_minor", extraction.amountMinor],
-    ["lineItems", extraction.lineItems],
+    ["line_items", extraction.lineItems],
     ["trades", extraction.trades],
-    ["financialImpact", impactFor(extraction.documentType, extraction.defaultImpactBucket, extraction.amountMinor ?? 0, extraction.currency ?? "INR")],
+    ["financial_impact", impactFor(extraction.documentType, extraction.defaultImpactBucket, extraction.amountMinor ?? 0, extraction.currency ?? "INR")],
   ];
   for (const [field, value] of claims) writeTypedClaim(db, ports, documentId, field, value, confidence);
 
-  const parties: Array<{ name?: string; kind: "person" | "organisation"; role: DocumentPartyRole; identifiers?: Record<string, string> }> = [];
-  if (extraction.issuer) parties.push({ name: extraction.issuer.name, kind: "person", role: "issuer", identifiers: { email: extraction.issuer.email ?? "", gstin: extraction.issuer.gstin ?? "" } });
+  const parties: Array<{ name?: string; kind: "person" | "organisation" | "account"; role: DocumentPartyRole; identifiers?: Record<string, string> }> = [];
+  if (extraction.issuer) parties.push({ name: extraction.issuer.name, kind: extraction.issuer.kind, role: "issuer", identifiers: { email: extraction.issuer.email ?? "", gstin: extraction.issuer.gstin ?? "" } });
   if (extraction.client) parties.push({ name: extraction.client.name, kind: "person", role: "owner", identifiers: { pan: extraction.client.pan ?? "", ucc: extraction.client.ucc ?? "" } });
   if (extraction.vendor) parties.push({ name: extraction.vendor.name, kind: "organisation", role: "counterparty", identifiers: { email: extraction.vendor.email ?? "" } });
   else if (extraction.broker) parties.push({ name: extraction.broker.name, kind: "organisation", role: "counterparty", identifiers: { pan: extraction.broker.pan ?? "", gstin: extraction.broker.gstin ?? "" } });

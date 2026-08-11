@@ -2086,10 +2086,21 @@ class VaultApi {
   Future<Map<String, dynamic>> saveDesktopPreferences(
     Map<String, dynamic> values,
   ) async {
+    const supported = {
+      'learning_enabled',
+      'question_budget',
+      'watcher_enabled',
+      'scan_on_launch',
+      'move_on_success',
+      'drop_folder',
+    };
+    final payload = Map<String, dynamic>.fromEntries(
+      values.entries.where((entry) => supported.contains(entry.key)),
+    );
     final res = await _client.post(
       Uri.parse('$baseUrl/v1/settings'),
       headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode(values),
+      body: jsonEncode(payload),
     );
     if (res.statusCode != 200) {
       throw Exception(
@@ -2207,7 +2218,9 @@ class VaultApi {
       throw VaultAuthException(res.statusCode, path);
     }
     if (res.statusCode == 409) {
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      final j = res.body.trim().isEmpty
+          ? const <String, dynamic>{}
+          : jsonDecode(res.body) as Map<String, dynamic>;
       throw ClaimRefusedException(
         j['error'] as String? ?? 'refused',
         j['message'] as String? ?? 'the vault refused this party edit',

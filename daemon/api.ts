@@ -62,6 +62,7 @@ import {
   createRegistryValue,
   listVocabulary,
   pipelineEventsFor,
+  transitionPipeline,
   type Vocabulary,
 } from "./workorders.js";
 
@@ -424,16 +425,19 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       }
       {
         const vm = /^\/v1\/vocabularies\/([^/]+)$/.exec(p);
+        const map: Record<string, Vocabulary> = { entities:"entities",accounts:"accounts",categories:"categories",impactBuckets:"impactBuckets",impact_buckets:"impactBuckets",docTypes:"docTypes",document_types:"docTypes",settings:"settings" };
         if (vm && req.method === "GET") {
           const name = decodeURIComponent(vm[1]);
-          const map: Record<string, Vocabulary> = { entities:"entities",accounts:"accounts",categories:"categories",impactBuckets:"impactBuckets",impact_buckets:"impactBuckets",docTypes:"docTypes",document_types:"docTypes",settings:"settings" };
           const vocabulary = map[name]; if (!vocabulary) return send(res,404,{error:"unknown_vocabulary"});
           return send(res,200,{vocabulary,values:listVocabulary(db,vocabulary,url.searchParams.get("kind")??undefined)});
         }
         if (vm && req.method === "POST") {
-          const name=decodeURIComponent(vm[1]); const b=await readJson(req); const value=typeof b.value==="string"?b.value:"";
+          const name=decodeURIComponent(vm[1]); const vocabulary=map[name];
+          if(!vocabulary)return send(res,404,{error:"unknown_vocabulary"});
+          if(vocabulary!=="categories")return send(res,405,{error:"vocabulary_read_only",allow:"GET"});
+          const b=await readJson(req); const value=typeof b.value==="string"?b.value:"";
           if(!value)return send(res,400,{error:"value required"});
-          return send(res,200,createRegistryValue(db,ports,name,value));
+          return send(res,200,createRegistryValue(db,ports,"category",value));
         }
       }
       {
@@ -482,13 +486,34 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             | undefined;
           if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
           if (doc.lifecycle === "deleted") return send(res, 409, { error: "document_deleted", document_id: documentId });
-          // A reprocess reactivates a soft-removed document — the user asked to
-          // read it again, which implies bringing it back into the vault.
-          if (doc.lifecycle !== "active") {
-            db.prepare("UPDATE documents SET lifecycle='active' WHERE id=?").run(documentId);
-          }
           const phase = doc.markdown_path && doc.markdown_chars ? "analyse" : "convert";
-          enqueue(db, ports, documentId, phase);
+          // Reprocess is a new canonical pipeline epoch. Preserve the append-only
+          // event history, but reset the current-state pointer and replay the
+          // legal prefix up to the phase the worker will enter. Weakening the
+          // state machine here would hide illegal transitions everywhere else.
+          db.exec("BEGIN");
+          try {
+            if (doc.lifecycle !== "active") {
+              db.prepare("UPDATE documents SET lifecycle='active' WHERE id=?").run(documentId);
+            }
+            db.prepare("DELETE FROM document_pipeline WHERE document_id=?").run(documentId);
+            const prefix = phase === "analyse"
+              ? ["received", "stable", "hashed", "triaged", "converting"] as const
+              : ["received", "stable", "hashed", "triaged"] as const;
+            for (const toState of prefix) {
+              transitionPipeline(db, {
+                documentId,
+                toState,
+                timestamp: ports.clock.isoNow(),
+                source: "reprocess",
+              });
+            }
+            enqueue(db, ports, documentId, phase);
+            db.exec("COMMIT");
+          } catch (error) {
+            db.exec("ROLLBACK");
+            throw error;
+          }
           return send(res, 200, { reprocessing: true, document_id: documentId, phase });
         }
       }
@@ -690,7 +715,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             });
           }
 
-          return send(res, 405, { error: "method_not_allowed", allow: "GET, PATCH" });
+          return send(res, 405, { error: "method_not_allowed", allow: "GET, PATCH, PUT" });
         }
       }
 
@@ -2241,7 +2266,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 reference_ids: (x.reference_ids as Record<string, string> | undefined) ?? {},
                 subtotal_minor: x.subtotal_minor ?? null,
                 tax_minor: x.tax_minor ?? null,
-                line_items: x.line_items ?? null,
+                line_items: claims.line_items?.value ?? x.line_items ?? null,
+                trades: claims.trades?.value ?? x.trades ?? null,
+                financial_impact: claims.financial_impact?.value ?? x.financial_impact ?? null,
               },
               parties,
               transactions,

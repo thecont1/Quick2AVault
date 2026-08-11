@@ -510,17 +510,14 @@ class _DetailState extends State<_Detail> {
       await _reload();
     } on ClaimRefusedException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text(e.message)),
-        );
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text(e.message)));
       }
     }
   }
 
-  Future<void> _partyChanged(
-    DocumentPartyRole role,
-    String? entityId,
-  ) async {
+  Future<void> _partyChanged(DocumentPartyRole role, String? entityId) async {
     if (entityId == null) return;
     try {
       await widget.api.setDocumentParty(
@@ -531,39 +528,47 @@ class _DetailState extends State<_Detail> {
       await _reload();
     } on ClaimRefusedException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-          SnackBar(content: Text(e.message)),
-        );
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text(e.message)));
       }
     }
   }
 
   Future<void> _action(DocumentManageAction action) async {
-    switch (action) {
-      case DocumentManageAction.openOriginal:
-        // The daemon serves the original bytes; opening externally is a future
-        // platform-channel concern. Surface the resolvable URL for now so the
-        // action is honest rather than silent.
-        if (mounted) {
-          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-            SnackBar(
-              content: Text(
-                'Original: ${widget.api.documentFileUrl(widget.doc.id)}',
+    try {
+      switch (action) {
+        case DocumentManageAction.openOriginal:
+          // The daemon serves the original bytes; opening externally is a future
+          // platform-channel concern. Surface the resolvable URL for now so the
+          // action is honest rather than silent.
+          if (mounted) {
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Original: ${widget.api.documentFileUrl(widget.doc.id)}',
+                ),
               ),
-            ),
-          );
-        }
-      case DocumentManageAction.openMarkdown:
-        widget.onToggle(true);
-      case DocumentManageAction.reprocess:
-        await widget.api.reprocessDocument(widget.doc.id);
-        await _reload();
-      case DocumentManageAction.removeFromActive:
-        await widget.api.removeFromActive(widget.doc.id);
-        widget.onChanged?.call();
-      case DocumentManageAction.deletePermanently:
-        await widget.api.deleteDocument(widget.doc.id);
-        widget.onChanged?.call();
+            );
+          }
+        case DocumentManageAction.openMarkdown:
+          widget.onToggle(true);
+        case DocumentManageAction.reprocess:
+          await widget.api.reprocessDocument(widget.doc.id);
+          await _reload();
+        case DocumentManageAction.removeFromActive:
+          await widget.api.removeFromActive(widget.doc.id);
+          widget.onChanged?.call();
+        case DocumentManageAction.deletePermanently:
+          await widget.api.deleteDocument(widget.doc.id);
+          widget.onChanged?.call();
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text(error.toString())));
+      }
     }
   }
 

@@ -65,14 +65,12 @@ export const DOCUMENT_FIELDS = new Set([
   // document-scoped (claims.ts) and the identity resolver relinks parties
   // only for confirmed corrections (identity.ts applyPersonCorrection).
   "person",
-  "documentType",
-  "documentNumber",
-  "documentDate",
-  "financialYear",
+  "document_number",
+  "financial_year",
   "category",
-  "currencyConversion",
-  "financialImpact",
-  "lineItems",
+  "currency_conversion",
+  "financial_impact",
+  "line_items",
   "trades",
 ]);
 
@@ -320,16 +318,23 @@ export function setDocumentParty(
   if (currentRole && currentRole.role !== input.role) {
     throw new ClaimRefused("an entity cannot have two roles on one document", "entity_already_has_role", { existing_role: currentRole.role });
   }
-  if (input.role === "owner") db.prepare("DELETE FROM document_parties WHERE document_id=? AND role='owner'").run(input.documentId);
-  db.prepare(
-    `INSERT INTO document_parties(document_id,entity_id,role,confidence,provenance) VALUES(?,?,?,?,?)
-     ON CONFLICT(document_id,entity_id,role) DO UPDATE SET confidence=excluded.confidence, provenance=excluded.provenance`,
-  ).run(input.documentId, input.entityId, input.role, input.confidence ?? 1, input.provenance ?? "user-confirmed");
-  writeClaim(db, ports, {
-    subject: "document_party", subjectId: documentPartyClaimId(input.documentId, input.entityId, input.role),
-    field: input.role === "source_of_funds" ? "sourceOfFunds" : input.role,
-    value: input.entityId, source: "user", confidence: input.confidence ?? 1, editedBy: input.editedBy,
-  });
+  db.exec("BEGIN");
+  try {
+    if (input.role === "owner") db.prepare("DELETE FROM document_parties WHERE document_id=? AND role='owner'").run(input.documentId);
+    db.prepare(
+      `INSERT INTO document_parties(document_id,entity_id,role,confidence,provenance) VALUES(?,?,?,?,?)
+       ON CONFLICT(document_id,entity_id,role) DO UPDATE SET confidence=excluded.confidence, provenance=excluded.provenance`,
+    ).run(input.documentId, input.entityId, input.role, input.confidence ?? 1, input.provenance ?? "user-confirmed");
+    writeClaim(db, ports, {
+      subject: "document_party", subjectId: documentPartyClaimId(input.documentId, input.entityId, input.role),
+      field: input.role === "source_of_funds" ? "sourceOfFunds" : input.role,
+      value: input.entityId, source: "user", confidence: input.confidence ?? 1, editedBy: input.editedBy,
+    });
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 export function audit(

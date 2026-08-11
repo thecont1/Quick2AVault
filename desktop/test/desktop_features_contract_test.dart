@@ -58,7 +58,7 @@ void main() {
           entities: const [
             EntitySummary(
               id: 'p1',
-              name: 'Mahesh Shantaram',
+              name: 'Priya Nair',
               kind: EntityKind.person,
             ),
             EntitySummary(

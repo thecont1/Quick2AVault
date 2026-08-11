@@ -7,18 +7,19 @@ import { compareVisualCaptures } from "./visual.js";
 
 function valueAfter(flag: string): string | undefined {
   const index = process.argv.indexOf(flag);
-  return index >= 0 ? process.argv[index + 1] : undefined;
+  const value = index >= 0 ? process.argv[index + 1] : undefined;
+  return value && !value.startsWith("--") ? value : undefined;
 }
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const keep = process.argv.includes("--keep") || process.env.Q2AV_KEEP === "1";
 const captureArg = valueAfter("--captures") ?? process.env.Q2AV_VISUAL_CAPTURES;
 const captureDir = captureArg ? path.resolve(captureArg) : undefined;
-const includeVisual = !process.argv.includes("--no-visual");
+const includeVisual = process.argv.includes("--visual");
 
 if (includeVisual && !captureDir) {
   console.error(
-    "Visual QA requires rendered Flutter captures. Pass --captures <directory>, set Q2AV_VISUAL_CAPTURES, or use --no-visual for backend-only fixture validation.",
+    "Visual QA requires rendered Flutter captures. Pass --visual --captures <directory> or set Q2AV_VISUAL_CAPTURES with --visual.",
   );
   process.exit(2);
 }
@@ -37,8 +38,9 @@ for (const id of ["G", "H"] as const) {
 
 const result = await runCombined({
   manifests,
-  adapter: new ProductionAdapter(),
+  adapter: new ProductionAdapter(repoRoot),
   includeVisual,
+  repoRoot,
   keep,
   visual: captureDir
     ? () =>

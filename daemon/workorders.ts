@@ -8,6 +8,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import * as crypto from "node:crypto";
 
+import type { DomainEvent, EventBus } from "./ports.js";
+import type { RuleKind } from "./learning.js";
+
 export const PIPELINE_STATES = [
   "received", "stable", "hashed", "triaged", "converting", "analysing",
   "complete", "failed", "duplicate", "irrelevant", "password_needed",
@@ -168,9 +171,27 @@ export interface CurrencyConversion {
 }
 export type HttpGet = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
+/**
+ * The number of minor-unit decimal places for an ISO-4217 currency, sourced
+ * from the runtime's own CLDR data via Intl rather than a hand-maintained
+ * table. USD/INR/EUR → 2, JPY → 0, BHD → 3, etc. Falls back to 2 for any code
+ * Intl cannot describe.
+ */
+export function minorUnitDigits(currency: string): number {
+  try {
+    const parts = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions();
+    return parts.maximumFractionDigits ?? 2;
+  } catch {
+    return 2;
+  }
+}
+
 /** Frankfurter implementation with an injectable HTTP boundary for deterministic tests. */
 export class FrankfurterFx {
-  constructor(private readonly db: DatabaseSync, private readonly http: HttpGet = (url) => fetch(url)) {}
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly http: HttpGet = (url) => fetch(url, { signal: AbortSignal.timeout(8000) }),
+  ) {}
 
   async convert(input: { amountMinor: number; from: string; to: string; date: string }): Promise<CurrencyConversion | null> {
     if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor < 0) throw new RangeError("amountMinor must be a non-negative safe integer");
@@ -198,8 +219,12 @@ export class FrankfurterFx {
     const stale = this.db.prepare("SELECT rate, rate_date FROM rate_cache WHERE base_currency=? AND quote_currency=? AND source='frankfurter' ORDER BY rate_date DESC LIMIT 1").get(from, to) as { rate: number; rate_date: string } | undefined;
     return stale ? this.make(input.amountMinor, from, to, stale.rate, stale.rate_date, "stale") : null;
   }
-  private make(amount: number, from: string, _to: string, rate: number, date: string, freshness: CurrencyConversion["freshness"]): CurrencyConversion {
-    return { originalAmount: amount, originalCurrency: from, convertedAmount: Math.round(amount * rate), rate, rateDate: date, rateSource: "frankfurter", provenance: "ai-derived", freshness };
+  private make(amount: number, from: string, to: string, rate: number, date: string, freshness: CurrencyConversion["freshness"]): CurrencyConversion {
+    const sourceScale = 10 ** minorUnitDigits(from);
+    const targetScale = 10 ** minorUnitDigits(to);
+    const convertedAmount = Math.round((amount / sourceScale) * rate * targetScale);
+    if (!Number.isSafeInteger(convertedAmount)) throw new RangeError("converted amount exceeds the safe-integer range");
+    return { originalAmount: amount, originalCurrency: from, convertedAmount, rate, rateDate: date, rateSource: "frankfurter", provenance: "ai-derived", freshness };
   }
 }
 
@@ -220,6 +245,19 @@ export const LEARNING_TRIGGERS = [
 ] as const;
 export type LearningTrigger = (typeof LEARNING_TRIGGERS)[number];
 type PredictedRuleKind = "alias" | "vendor-rule" | "entity-rule" | "document-type-rule" | "merge";
+interface ResolvedPredictedRule {
+  kind: RuleKind;
+  matchKind?: string;
+}
+const PREDICTED_RULE_KINDS: Record<PredictedRuleKind, ResolvedPredictedRule | null> = {
+  alias: { kind: "entity_alias" },
+  "vendor-rule": { kind: "vendor_to_account" },
+  "entity-rule": { kind: "descriptor_to_entity", matchKind: "organisation" },
+  "document-type-rule": { kind: "doctype_to_category" },
+  // A merge is destructive identity work, not a lookup rule. It must go
+  // through the explicit merge flow rather than becoming an inert DB row.
+  merge: null,
+};
 export interface LearningAmbiguity {
   kind: LearningTrigger; dedupeKey: string; prompt: string;
   sourceFact: Record<string, unknown>;
@@ -227,10 +265,10 @@ export interface LearningAmbiguity {
   noveltyScore: number; why: string; ttl?: string;
 }
 export interface LearningQuestion {
-  type: "learning.question"; questionId: string; askedAt: string;
-  trigger: { kind: LearningTrigger; documentId: string; pipelineState: "analysing" | "complete"; noveltyScore: number };
-  prompt: string; sourceFact: Record<string, unknown>;
-  predictedRule: LearningAmbiguity["predictedRule"]; dedupeKey: string; why: string; ttl?: string;
+  type: "learning.question"; question_id: string; at: string;
+  trigger: { kind: LearningTrigger; document_id: string; pipeline_state: "analysing" | "complete"; novelty_score: number };
+  prompt: string; source_fact: Record<string, unknown>;
+  predicted_rule: LearningAmbiguity["predictedRule"]; dedupe_key: string; why: string;
 }
 function setting(db: DatabaseSync, key: string): string | undefined {
   return (db.prepare("SELECT value FROM app_settings WHERE key=?").get(key) as { value?: string } | undefined)?.value;
@@ -245,7 +283,7 @@ function availableQuestionBudget(db: DatabaseSync): number {
 }
 export function generateLearningQuestions(
   db: DatabaseSync,
-  ports: { clock: { isoNow(): string }; bus: { publish(e: never): void } },
+  ports: { clock: { isoNow(): string }; bus: Pick<EventBus, "publish"> },
   input: { documentId: string; pipelineState: "analysing" | "complete"; ambiguities: LearningAmbiguity[] },
 ): LearningQuestion[] {
   let remaining = availableQuestionBudget(db);
@@ -263,17 +301,17 @@ export function generateLearningQuestions(
        VALUES(?,?,?,?,?,?,?,?,?)`,
     ).run(ambiguity.prompt, JSON.stringify({ document_id: input.documentId, pipeline_state: input.pipelineState, source_fact: ambiguity.sourceFact }), ambiguity.kind,
       JSON.stringify(["Yes", "No", "Later"]), ambiguity.dedupeKey, ambiguity.noveltyScore, JSON.stringify(ambiguity.predictedRule), ambiguity.why, askedAt);
-    const q: LearningQuestion = { type: "learning.question", questionId: String(inserted.lastInsertRowid), askedAt,
-      trigger: { kind: ambiguity.kind, documentId: input.documentId, pipelineState: input.pipelineState, noveltyScore: ambiguity.noveltyScore },
-      prompt: ambiguity.prompt, sourceFact: ambiguity.sourceFact, predictedRule: ambiguity.predictedRule,
-      dedupeKey: ambiguity.dedupeKey, why: ambiguity.why, ttl: ambiguity.ttl };
-    ports.bus.publish(q as never); out.push(q);
+    const q: LearningQuestion = { type: "learning.question", question_id: String(inserted.lastInsertRowid), at: askedAt,
+      trigger: { kind: ambiguity.kind, document_id: input.documentId, pipeline_state: input.pipelineState, novelty_score: ambiguity.noveltyScore },
+      prompt: ambiguity.prompt, source_fact: ambiguity.sourceFact, predicted_rule: ambiguity.predictedRule,
+      dedupe_key: ambiguity.dedupeKey, why: ambiguity.why };
+    ports.bus.publish(q); out.push(q);
   }
   return out;
 }
 export function answerLearningQuestion(
   db: DatabaseSync,
-  ports: { clock: { isoNow(): string }; bus: { publish(e: never): void } },
+  ports: { clock: { isoNow(): string }; bus: Pick<EventBus, "publish"> },
   questionId: string | number, answer: string,
 ): { ruleId: number | null } {
   const row = db.prepare("SELECT id,predicted_rule,answered_at,dismissed,context FROM training_reviews WHERE id=?").get(questionId) as
@@ -283,19 +321,21 @@ export function answerLearningQuestion(
   const now = ports.clock.isoNow(); let ruleId: number | null = null;
   if (/^(yes|confirm|accept)/i.test(answer) && row.predicted_rule) {
     const predicted = JSON.parse(row.predicted_rule) as LearningAmbiguity["predictedRule"];
+    const resolved = PREDICTED_RULE_KINDS[predicted.kind];
+    if (!resolved) throw new Error(`unsupported predicted rule kind: ${predicted.kind}`);
     const key = String(predicted.payload.match_key ?? predicted.payload.alias ?? questionId);
     const value = String(predicted.payload.value ?? predicted.payload.entity_id ?? answer);
     const info = db.prepare(
       `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
-       VALUES(?,?,NULL,?,'user',1,1,?)
+       VALUES(?,?,?,?, 'user',1,1,?)
        ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET value=excluded.value,active=1,confidence=1`,
-    ).run(predicted.kind, key, value, now);
+    ).run(resolved.kind, key, resolved.matchKind ?? null, value, now);
     ruleId = Number(info.lastInsertRowid);
     const context = row.context ? JSON.parse(row.context) as Record<string, unknown> : {};
-    ports.bus.publish({ type: "learning.rule.applied", ruleId, documentId: context.document_id as string | undefined, at: now } as never);
+    ports.bus.publish({ type: "learning.rule.applied", rule_id: ruleId, document_id: context.document_id as string | undefined, at: now });
   }
   db.prepare("UPDATE training_reviews SET answer=?,answered_at=?,rule_id=? WHERE id=?").run(answer, now, ruleId, row.id);
-  ports.bus.publish({ type: "learning.answer", questionId: String(row.id), answeredAt: now, answer } as never);
+  ports.bus.publish({ type: "learning.answer", question_id: String(row.id), at: now, answer });
   return { ruleId };
 }
 export function ignoreLearningQuestion(db: DatabaseSync, ports: { clock: { isoNow(): string } }, questionId: number): void {
@@ -369,7 +409,7 @@ export function detectDocumentType(text: string): {type:DocumentType;confidence:
 export interface TypedExtraction {
   documentType: DocumentType;
   confidence: number;
-  issuer?: { name: string; kind: "person"; address?: string; contact?: string; email?: string; gstin?: string };
+  issuer?: { name: string; kind: "person" | "organisation" | "account"; address?: string; contact?: string; email?: string; gstin?: string };
   vendor?: { name: string; kind: "organisation"; address?: string; contact?: string; email?: string };
   broker?: { name: string; kind: "organisation"; pan?: string; gstin?: string };
   client?: { name: string; kind: "person"; ucc?: string; pan?: string; mobile?: string };
@@ -427,7 +467,11 @@ function financialYear(date: string | undefined): string | undefined {
 }
 
 export function extractTypedDocument(text: string): TypedExtraction {
-  const detected = detectDocumentType(text);
+  const structuredText = text.replace(
+    /\s+(?=(?:Invoice Number|Invoice Date|Due Date|Contact|Currency|Email|Place of Supply|GSTIN|BILL TO|Bank Details|Name|Bank|Branch|Current Account No\.?|IFS Code|SWIFT|Notes|PAN of Trading Member|GSTIN of Trading Member|Name of the Client|Address|UCC & Client Code|PAN of Client|Mobile No\.?|Contract Note No\.?|Trade Date|Settlement Number|Settlement Date|Net amount receivable\/payable by client|Pay In\/Pay Out Obligation|Ledger Balance|Total Amount in Words|CHARGES|TRADE DETAILS)\s*[:|])/gi,
+    "\n",
+  );
+  const detected = detectDocumentType(structuredText);
   const meta = DOCUMENT_TAXONOMY[detected.type];
   const out: TypedExtraction = {
     documentType: detected.type,
@@ -435,7 +479,7 @@ export function extractTypedDocument(text: string): TypedExtraction {
     defaultImpactBucket: meta.defaultImpactBucket,
     advisoryHint: meta.advisoryHint,
   };
-  const capture = (pattern: RegExp): string | undefined => clean(pattern.exec(text)?.[1]);
+  const capture = (pattern: RegExp): string | undefined => clean(pattern.exec(structuredText)?.[1]);
   const amount = (label: RegExp): number | undefined => {
     const raw = capture(new RegExp(`${label.source}[^\\d]{0,30}([\\d,]+\\.\\d{2})`, "i"));
     return raw ? minor(raw) : undefined;
@@ -443,7 +487,7 @@ export function extractTypedDocument(text: string): TypedExtraction {
   const personName = capture(/(?:issuer|invoice\s+for|receipt\s+for|person)\s*:?\s*(.+?)(?=\.\s+total\b|<|\n|$)/i);
   const organisationName = capture(/organisation\s*:?\s*(.+?)(?=\s*<|\.\s+total\b|\n|$)/i)
     ?? capture(/vendor\s*:?\s*(.+?)(?=\s*<|\.\s+total\b|\n|$)/i);
-  const emails = [...text.matchAll(/[\w.+-]+@[\w.-]+/g)].map((match) => match[0]);
+  const emails = [...structuredText.matchAll(/[\w.+-]+@[\w.-]+/g)].map((match) => match[0]);
 
   if (detected.type === "tax_invoice") {
     out.documentNumber = capture(/invoice\s+number\s*[:#-]?\s*([^\n*]+)/i)
@@ -453,7 +497,7 @@ export function extractTypedDocument(text: string): TypedExtraction {
     out.financialYear = financialYear(out.documentDate);
     out.currency = capture(/currency\s*[:#-]?\s*\**\s*([A-Z]{3})/i)?.toUpperCase();
     out.placeOfSupply = capture(/place\s+of\s+supply\s*[:#-]?\s*\**\s*([A-Za-z ]+)/i);
-    out.amountMinor = amount(/(?:grand\s+)?total/i) ?? [...text.matchAll(/[$₹€£]\s*([\d,]+\.\d{2})/g)].map((m) => minor(m[1])).at(-1);
+    out.amountMinor = amount(/(?:grand\s+)?total/i) ?? [...structuredText.matchAll(/[$₹€£]\s*([\d,]+\.\d{2})/g)].map((m) => minor(m[1])).at(-1);
     out.subtotalMinor = amount(/subtotal/i) ?? out.amountMinor;
     out.taxMinor = amount(/\btax\b/i) ?? 0;
     if (out.currency && out.currency !== "INR" && out.amountMinor && out.documentDate) {
@@ -467,9 +511,11 @@ export function extractTypedDocument(text: string): TypedExtraction {
       };
     }
 
-    const heading = text.split(/\r?\n/).map(clean).find((line) => line && !/tax invoice/i.test(line));
-    const issuerName = clean(/^\s*(?:#{1,4}\s*)?([^\n]+)$/m.exec(text)?.[1]) ?? heading;
+    const heading = structuredText.split(/\r?\n/).map(clean).find((line) => line && !/tax invoice/i.test(line));
+    const headingPrefix = clean(structuredText.split(/tax\s+invoice/i)[0]);
+    const issuerName = headingPrefix || clean(/^\s*(?:#{1,4}\s*)?([^\n]+)$/m.exec(structuredText)?.[1]) || heading;
     if (issuerName) {
+      const issuerGstin = capture(/gstin\s*:\s*([A-Z0-9]{15})/i);
       const address = [
         capture(/tax\s+invoice\s*\n+\s*([^\n]+)/i),
         capture(/invoice\s+number[^\n]*\n+\s*([^\n]+)/i),
@@ -478,11 +524,11 @@ export function extractTypedDocument(text: string): TypedExtraction {
       ].filter(Boolean).join(", ");
       out.issuer = {
         name: issuerName,
-        kind: "person",
+        kind: issuerGstin ? "organisation" : "person",
         address: address || undefined,
-        contact: clean(/contact\s*:\s*\**\s*([^*]+?)(?=\*+currency)/i.exec(text)?.[1]),
-        email: [...text.matchAll(/[\w.+-]+@[\w.-]+/g)].map((match) => match[0])[0],
-        gstin: capture(/gstin\s*:\s*([A-Z0-9]{15})/i),
+        contact: clean(/contact\s*:\s*\**\s*([^*\n]+?)(?=\*+currency|\n|$)/i.exec(structuredText)?.[1]),
+        email: [...structuredText.matchAll(/[\w.+-]+@[\w.-]+/g)].map((match) => match[0])[0],
+        gstin: issuerGstin,
       };
     }
     const vendor = capture(/bill\s+to\s+details[\s\S]{0,500}?^\s*#{1,4}\s*([^\n]+)/im)
@@ -493,10 +539,10 @@ export function extractTypedDocument(text: string): TypedExtraction {
         kind: "organisation",
         address: capture(new RegExp(`${vendor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*\\n+([^\\n]+)`, "i")),
         contact: capture(/contact\s+person\s*:\s*([^\n*]+?)(?=email|gst|$)/i),
-        email: [...text.matchAll(/[\w.+-]+@[\w.-]+/g)].map((m) => m[0]).find((email) => email !== out.issuer?.email),
+        email: [...structuredText.matchAll(/[\w.+-]+@[\w.-]+/g)].map((m) => m[0]).find((email) => email !== out.issuer?.email),
       };
     }
-    const bankText = capture(/bank\s+details\s*:(.+?)(?=notes|terms|supply meant|$)/is) ?? text;
+    const bankText = capture(/bank\s+details\s*:(.+?)(?=notes|terms|supply meant|$)/is) ?? structuredText;
     const accountNumber = clean(/(?:account\s*(?:no\.?|number)|current\s+account\s+no\.?)\s*:\s*(\d+)/i.exec(bankText)?.[1]);
     out.bank = {
       type: "bank",
@@ -507,18 +553,18 @@ export function extractTypedDocument(text: string): TypedExtraction {
       ifsc: capture(/(?:ifsc|ifs\s+code)\s*:\s*([A-Z0-9]+)/i),
       swift: capture(/swift\s*:\s*([A-Z0-9]+)/i),
     };
-    const descriptions = /description\s+amount\s*\n+([^\n]+)/i.exec(text)?.[1] ?? "";
-    const hsnRows = [...text.matchAll(/\|(\d{4,8})\|([^|\n]+)\|[$₹€£]?\s*([\d,.]+)/g)];
+    const descriptions = /description\s+amount\s*\n+([^\n]+)/i.exec(structuredText)?.[1] ?? "";
+    const hsnRows = [...structuredText.matchAll(/([^\n|]+?)\s*\|\s*(\d{4,8})\s*\|\s*([\d.]+)\s*\|\s*[$₹€£]?\s*([\d,.]+)\s*\|\s*[$₹€£]?\s*([\d,.]+)(?=\s+(?:[^\n|]+?\s*\|\s*\d{4,8}\s*\|)|\s+(?:subtotal|tax|total)\s*:|$)/gi)];
     const itemAmounts = [...descriptions.matchAll(/(.+?)\s+[$₹€£]\s*([\d,]+(?:\.\d{2})?)(?=\s+[A-Z]|$)/g)];
     out.lineItems = hsnRows.length > 0
-      ? hsnRows.map((row, index) => ({
-          description: clean(itemAmounts[index]?.[1]) ?? `Line item ${index + 1}`,
-          hsnSac: row[1],
-          quantity: clean(row[2])?.split(/\s+/)[0] ?? "0",
-          rateMinor: minor(row[3]),
-          amountMinor: itemAmounts[index] ? minor(itemAmounts[index][2]) : minor(row[3]),
+      ? hsnRows.map((row) => ({
+          description: clean(row[1]) ?? "Line item",
+          hsnSac: row[2],
+          quantity: row[3],
+          rateMinor: minor(row[4]),
+          amountMinor: minor(row[5]),
         }))
-      : [...text.matchAll(/^(.+?)\s*\|\s*(\d{4,8})\s*\|\s*([\d.]+)\s*\|\s*[$₹€£]?([\d,.]+)\s*\|\s*[$₹€£]?([\d,.]+)\s*$/gm)].map((row) => ({
+      : [...structuredText.matchAll(/^(.+?)\s*\|\s*(\d{4,8})\s*\|\s*([\d.]+)\s*\|\s*[$₹€£]?([\d,.]+)\s*\|\s*[$₹€£]?([\d,.]+)\s*$/gm)].map((row) => ({
           description: clean(row[1]) ?? "Line item",
           hsnSac: row[2],
           quantity: row[3],
@@ -526,7 +572,8 @@ export function extractTypedDocument(text: string): TypedExtraction {
           amountMinor: minor(row[5]),
         }));
   } else if (detected.type === "contract_note") {
-    const brokerName = capture(/(?:^|\n)\s*#{1,4}\s*([^\n]*\blimited\b)/im)
+    const brokerName = capture(/^\s*(?:#{1,4}\s*)?([A-Z][A-Z ]+LIMITED)\s+CONTRACT\s+NOTE/im)
+      ?? capture(/(?:^|\n)\s*#{1,4}\s*([^\n]*\blimited\b)/im)
       ?? capture(/contract\s+note(?:\s+cum\s+tax\s+invoice)?[\s\S]{0,160}?([A-Z][A-Z ]+LIMITED)/i);
     out.broker = brokerName ? {
       name: brokerName,
@@ -550,13 +597,13 @@ export function extractTypedDocument(text: string): TypedExtraction {
       ?? capture(/settlement\s+no\**\s*(\d+)/i);
     out.settlementDate = dateISO(capture(/settlement(?:\s+date)?\**\s*(\d{1,2}\/\d{1,2}\/\d{4})/i) ?? "");
     out.currency = "INR";
-    const totalMatch = /net\s+amount\s+receivable\/payable\s+by\s+client[^\d]*([\d,]+\.\d{2})\s*(DR|CR)/i.exec(text);
+    const totalMatch = /net\s+amount\s+receivable\/payable\s+by\s+client[^\d]*([\d,]+\.\d{2})\s*(DR|CR)/i.exec(structuredText);
     if (totalMatch) {
       out.amountMinor = minor(totalMatch[1]);
       out.amountDirection = totalMatch[2].toUpperCase() as "DR" | "CR";
     }
     out.payInOutObligationMinor = amount(/pay\s+in\/pay\s+out\s+obligation/i);
-    const ledger = /ledger\s+balance[^\d]*([\d,]+\.\d{2})\s*(DR|CR)/i.exec(text);
+    const ledger = /ledger\s+balance[^\d]*([\d,]+\.\d{2})\s*(DR|CR)/i.exec(structuredText);
     if (ledger) {
       out.ledgerBalanceMinor = minor(ledger[1]);
       out.ledgerBalanceDirection = ledger[2].toUpperCase() as "DR" | "CR";
@@ -570,25 +617,26 @@ export function extractTypedDocument(text: string): TypedExtraction {
       securitiesTransactionTaxMinor: amount(/securities\s+transactions?\s+tax/i),
     };
     out.trades = [];
-    for (const line of text.split(/\r?\n/)) {
+    const seenTradeIsins = new Set<string>();
+    for (const labelled of structuredText.matchAll(/(.+?)\s+(INE[A-Z0-9]{9})\s+Qty\s+([\d.]+)\s+Price\s+([\d,.]+)\s+Net\s+([\d,.]+)\s+(DR|CR)(?=\s+.+?\s+INE[A-Z0-9]{9}\s+Qty\b|\s+Net\s+amount\b|\n|$)/gi)) {
+      if (seenTradeIsins.has(labelled[2])) continue;
+      out.trades.push({
+        security: clean(labelled[1]) ?? labelled[2],
+        isin: labelled[2],
+        quantity: Number(labelled[3]),
+        priceMinor: minor(labelled[4]),
+        netObligationMinor: minor(labelled[5]),
+        side: labelled[6].toUpperCase() === "CR" ? "sell" : "buy",
+      });
+      seenTradeIsins.add(labelled[2]);
+    }
+    for (const line of structuredText.split(/\r?\n/)) {
       const compact = clean(line) ?? "";
-      const labelled = /^(.+?)\s+(INE[A-Z0-9]{9})\s+Qty\s+([\d.]+)\s+Price\s+([\d,.]+)\s+Net\s+([\d,.]+)\s+(DR|CR)/i.exec(compact);
-      if (labelled) {
-        out.trades.push({
-          security: clean(labelled[1]) ?? labelled[2],
-          isin: labelled[2],
-          quantity: Number(labelled[3]),
-          priceMinor: minor(labelled[4]),
-          netObligationMinor: minor(labelled[5]),
-          side: labelled[6].toUpperCase() === "CR" ? "sell" : "buy",
-        });
-        continue;
-      }
       const isin = /(INE[A-Z0-9]{9})/i.exec(compact);
-      if (!isin) continue;
+      if (!isin || seenTradeIsins.has(isin[1])) continue;
       const before = compact.slice(0, isin.index).trim();
       const after = compact.slice(isin.index + isin[0].length).trim();
-      const tailSource = after.replace(/INTERNATION\/52\s+0/i, "INTERNATION/527");
+      const tailSource = after;
       const numericTail = /\s(\d+(?:\.\d+)?)\s+([\d,.]+)\s+\2\s+([\d,.]+)\s+\d+\s*-?([\d,.]+)\s*$/.exec(tailSource)
         ?? /\s(\d+(?:\.\d+)?)\s+([\d,.]+)(?:\s+[\d,.]+)*\s+-?([\d,.]+)\s*$/.exec(tailSource);
       if (!numericTail) continue;
@@ -601,9 +649,7 @@ export function extractTypedDocument(text: string): TypedExtraction {
         const parts = name.split(/\s+/);
         name = `${parts.at(-1)} ${parts.slice(0, -1).join(" ")}`;
       }
-      if (/KALPATARU/i.test(name) && /INTERNATION\/52\s+0/.test(after)) {
-        name = "KALPATARU PROJECTS INTERNATION/527";
-      }
+
       out.trades.push({
         security: name,
         isin: isin[1],
@@ -613,10 +659,10 @@ export function extractTypedDocument(text: string): TypedExtraction {
         side: "buy",
       });
     }
-    for (const line of text.split(/\r?\n/)) {
+    for (const line of structuredText.split(/\r?\n/)) {
       const wrapped = /^(.*?)\s*(INE[A-Z0-9]{9})\s+(.+?)\s+(\d+(?:\.\d+)?)\s+([\d,.]+)\s+[\d,.]+\s+([\d,.]+)\s+\d+-([\d,.]+)\s+(.+)$/.exec(clean(line) ?? "");
       if (!wrapped || out.trades.some((trade) => trade.isin === wrapped[2])) continue;
-      const suffix = wrapped[8].replace(/\/(\d+)\s+(\d+)$/, "/$1$2").replace(/\/520$/, "/527");
+      const suffix = wrapped[8];
       out.trades.push({
         security: clean(`${wrapped[1]} ${wrapped[3]} ${suffix}`) ?? wrapped[2],
         isin: wrapped[2],

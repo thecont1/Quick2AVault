@@ -174,6 +174,7 @@ export async function runCombined(options: {
   manifests: FixtureManifest[];
   adapter: HarnessAdapter;
   includeVisual: boolean;
+  repoRoot?: string;
   keep?: boolean;
   visual?: (root: string) => Promise<Assertion[]>;
 }): Promise<RunResult> {
@@ -194,6 +195,7 @@ export async function runCombined(options: {
     sqlitePath: path.join(root, "vault", "vault.db"),
     sourcePath: (filename) => path.join(root, "drop", filename),
   };
+  const repoRoot = options.repoRoot ?? process.cwd();
   const assertions: Assertion[] = [];
   await fs.mkdir(context.sourceDir, { recursive: true });
   await fs.mkdir(context.vaultPath, { recursive: true });
@@ -203,17 +205,20 @@ export async function runCombined(options: {
         const file = context.sourcePath(source.filename);
         await fs.mkdir(path.dirname(file), { recursive: true });
         if (source.fixturePath) {
-          await fs.copyFile(path.resolve(source.fixturePath), file);
+          await fs.copyFile(path.resolve(repoRoot, source.fixturePath), file);
         } else {
           await fs.writeFile(file, source.text!, "utf8");
         }
       }
       try {
         const result = await options.adapter.load(context, fixture);
-        if (
-          fixture.expectations.disposition &&
-          result.disposition !== fixture.expectations.disposition
-        ) {
+        if (!fixture.expectations.disposition) {
+          assertions.push({
+            fixtureId: fixture.id,
+            name: "expected disposition",
+            status: "not_applicable",
+          });
+        } else if (result.disposition !== fixture.expectations.disposition) {
           assertions.push({
             fixtureId: fixture.id,
             name: "expected disposition",

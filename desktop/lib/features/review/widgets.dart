@@ -3,6 +3,13 @@ import 'package:flutter/material.dart';
 import '../../theme.dart';
 import 'state.dart';
 
+class PartyChoice {
+  final String id;
+  final String displayName;
+
+  const PartyChoice({required this.id, required this.displayName});
+}
+
 class FinancialImpactPanel extends StatelessWidget {
   final DetailDocument document;
   final ValueChanged<ImpactBucket>? onBucketChanged;
@@ -225,7 +232,7 @@ class ProvenanceFieldRow extends StatelessWidget {
 
 class PartiesSection extends StatelessWidget {
   final List<DetailParty> parties;
-  final Map<DocumentPartyRole, List<String>> choices;
+  final Map<DocumentPartyRole, List<PartyChoice>> choices;
   final void Function(DocumentPartyRole role, String? value)? onChanged;
 
   const PartiesSection({
@@ -267,7 +274,7 @@ class PartiesSection extends StatelessWidget {
 class _PartyRow extends StatelessWidget {
   final DocumentPartyRole role;
   final DetailParty? party;
-  final List<String> choices;
+  final List<PartyChoice> choices;
   final ValueChanged<String?>? onChanged;
 
   const _PartyRow({
@@ -279,11 +286,15 @@ class _PartyRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final current = party?.displayName;
-    final knownChoices = <String>{
-      if (current != null) current,
-      ...choices,
-    }.toList();
+    final currentId = party?.entityId;
+    final knownChoices = <String, PartyChoice>{
+      if (currentId != null)
+        currentId: PartyChoice(
+          id: currentId,
+          displayName: party?.displayName ?? currentId,
+        ),
+      for (final choice in choices) choice.id: choice,
+    }.values.toList();
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -312,15 +323,15 @@ class _PartyRow extends StatelessWidget {
                 : DropdownButtonHideUnderline(
                     child: DropdownButton<String>(
                       isExpanded: true,
-                      value: current,
+                      value: currentId,
                       hint: const Text('Choose from list'),
                       onChanged: onChanged,
                       items: [
                         for (final choice in knownChoices)
                           DropdownMenuItem(
-                            value: choice,
+                            value: choice.id,
                             child: Text(
-                              choice,
+                              choice.displayName,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),

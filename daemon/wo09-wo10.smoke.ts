@@ -41,9 +41,9 @@ console.log("\nWO09 + WO10 backend contracts\n");
 await check("canonical pipeline persists every ordered transition and terminal policy", () => {
   const db = openDatabase(":memory:");
   assert.deepEqual(PIPELINE_STATES, ["received","stable","hashed","triaged","converting","analysing","complete","failed","duplicate","irrelevant","password_needed"]);
-  const path = ["received","stable","hashed","triaged","converting","analysing","complete"] as const;
-  path.forEach((toState, i) => transitionPipeline(db, { documentId:"doc-p", toState, source:"drop", timestamp:`2026-08-10T00:00:0${i}.000Z` }));
-  assert.deepEqual(pipelineEventsFor(db,"doc-p").map(e => e.toState), path);
+  const statePath = ["received","stable","hashed","triaged","converting","analysing","complete"] as const;
+  statePath.forEach((toState, i) => transitionPipeline(db, { documentId:"doc-p", toState, source:"drop", timestamp:`2026-08-10T00:00:0${i}.000Z` }));
+  assert.deepEqual(pipelineEventsFor(db,"doc-p").map(e => e.toState), statePath);
   assert.equal(sourceActionFor("complete"), "remove");
   for (const state of ["failed","duplicate","irrelevant","password_needed"] as const) assert.equal(sourceActionFor(state), "archive-copy-retain-source");
   assert.throws(() => transitionPipeline(db,{documentId:"other",toState:"complete",source:"x",timestamp:ports.clock.isoNow()}),/illegal/);
@@ -116,8 +116,10 @@ await check("adaptive learning exposes seven triggers, dedupes, budgets, backoff
   assert.ok((db.prepare("SELECT backoff_until FROM training_reviews WHERE id=?").get(qid) as {backoff_until:string}).backoff_until);
   const input2 = {...input, ambiguities:[{...input.ambiguities[0],dedupeKey:"entity:beta",prompt:"Is Beta new?"}]};
   const q2 = generateLearningQuestions(db,ports,input2)[0];
-  const answered = answerLearningQuestion(db,ports,q2.questionId,"yes");
+  const answered = answerLearningQuestion(db,ports,q2.question_id,"yes");
   assert.ok(answered.ruleId);
+  const learned = db.prepare("SELECT kind,match_kind,value FROM learned_rules WHERE id=?").get(answered.ruleId) as {kind:string;match_kind:string|null;value:string};
+  assert.deepEqual(learned,{kind:"descriptor_to_entity",match_kind:"organisation",value:"ent-acme"});
   assert.equal(generateLearningQuestions(db,ports,input2).length,0);
   db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES('learning.enabled','false')").run();
   const input3 = {...input, ambiguities:[{...input.ambiguities[0],dedupeKey:"entity:gamma"}]};
@@ -155,6 +157,10 @@ await check("Frankfurter uses requested/cache/prior business day and stale offli
   const fx=new FrankfurterFx(db,async(url)=>{ calls++; return url.includes("2026-08-10") ? {ok:false,status:404,json:async()=>({})} : {ok:true,status:200,json:async()=>({rates:{INR:90}})}; });
   const first=await fx.convert({amountMinor:10000,from:"USD",to:"INR",date:"2026-08-10"});
   assert.equal(first?.rateDate,"2026-08-07"); assert.equal(first?.freshness,"prior-business-day"); assert.equal(first?.convertedAmount,900000);
+  const jpy=await new FrankfurterFx(db,async()=>({ok:true,status:200,json:async()=>({rates:{JPY:150}})})).convert({amountMinor:10000,from:"USD",to:"JPY",date:"2026-08-11"});
+  assert.equal(jpy?.convertedAmount,15000,"USD minor units must be rescaled to zero-decimal JPY");
+  const usd=await new FrankfurterFx(db,async()=>({ok:true,status:200,json:async()=>({rates:{USD:0.00667}})})).convert({amountMinor:15000,from:"JPY",to:"USD",date:"2026-08-11"});
+  assert.equal(usd?.convertedAmount,10005,"zero-decimal JPY must be rescaled to USD cents");
   const cached=await new FrankfurterFx(db,async()=>{throw new Error("should not call")}).convert({amountMinor:10000,from:"USD",to:"INR",date:"2026-08-07"});
   assert.equal(cached?.freshness,"cache-hit"); assert.ok(calls>=2);
   const stale=await new FrankfurterFx(db,async()=>{throw new Error("offline")}).convert({amountMinor:10000,from:"USD",to:"INR",date:"2026-08-12"});
@@ -162,7 +168,7 @@ await check("Frankfurter uses requested/cache/prior business day and stale offli
 });
 
 await check("taxonomy detects and generally extracts invoice and contract-note content", () => {
-  const invoice=`TAX INVOICE\nGSTIN: 29AONPS5418R1ZS\nInvoice Number: INV/2026-27/01\nInvoice Date: April 1, 2026\nDue Date: April 15, 2026\nBill To: PetaSight Inc.\nCurrency: USD\nData Science consulting services | 998393 | 0.3043 | 5397 | 1642.31\nKilo Pass subscription | 998393 | 1 | 49 | 49\nTotal: 1,691.31 USD`;
+  const invoice=`TAX INVOICE\nGSTIN: 29ABCDE1234F1Z5\nInvoice Number: INV/2026-27/01\nInvoice Date: April 1, 2026\nDue Date: April 15, 2026\nBill To: PetaSight Inc.\nCurrency: USD\nData Science consulting services | 998393 | 0.3043 | 5397 | 1642.31\nKilo Pass subscription | 998393 | 1 | 49 | 49\nTotal: 1,691.31 USD`;
   assert.deepEqual(detectDocumentType(invoice),{type:"tax_invoice",confidence:1});
   const ix=extractTypedDocument(invoice);
   assert.equal(ix.documentType,"tax_invoice"); assert.equal(ix.documentNumber,"INV/2026-27/01"); assert.equal(ix.amountMinor,169131); assert.equal(ix.lineItems?.length,2);

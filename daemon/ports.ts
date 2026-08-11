@@ -162,9 +162,9 @@ export type DomainEvent =
     }
   // WO09 adaptive-learning event stream. These are domain events, not a
   // polling API; SSE clients receive them immediately.
-  | { type: "learning.question"; questionId: string; askedAt: string; trigger: Record<string, unknown>; prompt: string; sourceFact: Record<string, unknown>; predictedRule: Record<string, unknown>; dedupeKey: string; why: string }
-  | { type: "learning.answer"; questionId: string; answeredAt: string; answer: string }
-  | { type: "learning.rule.applied"; ruleId: number; documentId?: string; at: string };
+  | { type: "learning.question"; question_id: string; at: string; trigger: { kind: string; document_id: string; pipeline_state: string; novelty_score: number }; prompt: string; source_fact: Record<string, unknown>; predicted_rule: Record<string, unknown>; dedupe_key: string; why: string }
+  | { type: "learning.answer"; question_id: string; at: string; answer: string }
+  | { type: "learning.rule.applied"; rule_id: number; document_id?: string; at: string };
 
 export interface EventBus {
   publish(e: DomainEvent): void;

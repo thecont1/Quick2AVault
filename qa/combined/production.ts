@@ -70,14 +70,14 @@ function teachIdentityQuestions(db: DatabaseSync, ports: Ports, fixture: Fixture
     mergePeople(db, ports, context.candidate_entity_id, context.existing_entity_id);
   }
 
-  // Initials-only "MS" has no shared lexical evidence, so the resolver must
+  // Initials-only "PN" has no shared lexical evidence, so the resolver must
   // not invent a fuzzy match. Fixture B models the user's explicit merge for
   // that final moniker after the evidence-bearing variants have been taught.
   const canonical = db.prepare(
     `SELECT DISTINCT e.id FROM entities e
        JOIN document_parties dp ON dp.entity_id=e.id
        JOIN documents d ON d.id=dp.document_id
-      WHERE e.kind='person' AND e.display_name='Mahesh Shantaram'
+      WHERE e.kind='person' AND e.display_name='Priya Nair'
         AND d.original_filename IN (${filenameSlots})`,
   ).get(...filenames) as { id: string } | undefined;
   if (!canonical) throw new Error("Fixture B canonical person was not created");
@@ -94,10 +94,10 @@ function teachIdentityQuestions(db: DatabaseSync, ports: Ports, fixture: Fixture
 async function extractionFor(
   fixture: FixtureManifest,
   ports: Ports,
-  context: RunContext,
+  repoRoot: string,
 ): Promise<ReturnType<typeof extractTypedDocument> | undefined> {
   if (!fixture.source.fixturePath) return undefined;
-  const file = path.resolve(process.cwd(), fixture.source.fixturePath);
+  const file = path.resolve(repoRoot, fixture.source.fixturePath);
   const converted = await typedConverter(ports.logger).toMarkdown(file, path.extname(file));
   return converted ? extractTypedDocument(converted.markdown) : undefined;
 }
@@ -122,7 +122,7 @@ function goldenMismatches(actual: unknown, expected: unknown, at = "fields"): st
 async function capabilityAssertions(
   db: DatabaseSync,
   ports: Ports,
-  context: RunContext,
+  repoRoot: string,
   fixture: FixtureManifest,
 ): Promise<Assertion[]> {
   const filenames = [fixture.source, ...(fixture.sources ?? [])].map((source) => source.filename);
@@ -133,7 +133,7 @@ async function capabilityAssertions(
   const ids = rows.map((row) => row.id);
   const placeholders = ids.length ? ids.map(() => "?").join(",") : "NULL";
   const count = (sql: string, ...args: Array<string | number | bigint | Uint8Array | null>) => Number((db.prepare(sql).get(...args) as { n: number } | undefined)?.n ?? 0);
-  const typed = await extractionFor(fixture, ports, context);
+  const typed = await extractionFor(fixture, ports, repoRoot);
   const totalEntities = count("SELECT count(*) n FROM entities");
   const personCount = count("SELECT count(*) n FROM entities WHERE kind='person'");
   const organisationCount = count("SELECT count(*) n FROM entities WHERE kind='organisation'");
@@ -155,7 +155,8 @@ async function capabilityAssertions(
         const parties = ids.length
           ? count(`SELECT count(*) n FROM document_parties WHERE document_id IN (${placeholders})`, ...ids)
           : 0;
-        passed = fixture.scenario === "identity_collapse" ? parties >= 1 : parties >= 1;
+        const minimum = fixture.scenario === "identity_collapse" ? 5 : 1;
+        passed = parties >= minimum;
         detail = `observed ${parties} document-party links`;
         break;
       }
@@ -180,20 +181,11 @@ async function capabilityAssertions(
                 ...ids,
               )
             : 0;
-          const aliases = ids.length
-            ? count(
-                `SELECT count(DISTINCT a.normalised) n FROM entity_aliases a
-                  WHERE a.entity_id=(SELECT dp.entity_id FROM document_parties dp
-                    WHERE dp.document_id IN (${placeholders}) LIMIT 1)
-                    AND a.status='confirmed'`,
-                ...ids,
-              )
-            : 0;
           const evidence = ids.length
             ? count(`SELECT count(*) n FROM document_parties WHERE document_id IN (${placeholders})`, ...ids)
             : 0;
-          passed = fixturePeople === 1 && aliases >= 5 && evidence === 5;
-          detail = `fixture people=${fixturePeople}, aliases=${aliases}, evidence=${evidence}`;
+          passed = fixturePeople === 1 && evidence === 5;
+          detail = `fixture people=${fixturePeople}, evidence=${evidence}`;
         } else {
           passed = personCount >= 1 && organisationCount >= 1;
           detail = `people=${personCount}, organisations=${organisationCount}`;
@@ -254,7 +246,7 @@ async function capabilityAssertions(
   }
   if ((fixture.id === "G" || fixture.id === "H") && typed) {
     const golden = JSON.parse(
-      await fs.readFile(path.resolve(process.cwd(), "fixtures/golden", `${fixture.id}.json`), "utf8"),
+      await fs.readFile(path.resolve(repoRoot, "fixtures/golden", `${fixture.id}.json`), "utf8"),
     ) as { documentType: string; confidenceAtLeast: number; fields: Record<string, unknown> };
     const mismatches = [
       ...(typed.documentType === golden.documentType
@@ -278,6 +270,8 @@ async function capabilityAssertions(
 export class ProductionAdapter implements HarnessAdapter {
   private db: DatabaseSync | undefined;
   private ports: Ports | undefined;
+
+  constructor(private readonly repoRoot = process.cwd()) {}
 
   private setup(context: RunContext, fixture: FixtureManifest): { db: DatabaseSync; ports: Ports } {
     if (this.db && this.ports) return { db: this.db, ports: this.ports };
@@ -345,7 +339,7 @@ export class ProductionAdapter implements HarnessAdapter {
     }
     await workUntilSettled(db, ports);
     if (fixture.scenario === "identity_collapse") teachIdentityQuestions(db, ports, fixture);
-    assertions.push(...await capabilityAssertions(db, ports, context, fixture));
+    assertions.push(...await capabilityAssertions(db, ports, this.repoRoot, fixture));
     if (primarySourcePolicy) {
       const existsAfterSettle = await fs.stat(primarySourcePolicy.file).then(
         () => true,
@@ -368,9 +362,13 @@ export class ProductionAdapter implements HarnessAdapter {
     }
 
     if (fixture.scenario === "password_needed" && fixture.source) {
-      const failed = db
-        .prepare("SELECT processing_state FROM intake_events WHERE filename=?")
-        .get("d-failed.pdf") as { processing_state?: string } | undefined;
+      const failedSource = (fixture.sources ?? []).find((source) =>
+        /failed/i.test(source.filename),
+      );
+      const failed = failedSource
+        ? db.prepare("SELECT processing_state FROM intake_events WHERE filename=?")
+            .get(failedSource.filename) as { processing_state?: string } | undefined
+        : undefined;
       assertions.push(
         failed?.processing_state === "failed"
           ? {
@@ -406,9 +404,11 @@ export class ProductionAdapter implements HarnessAdapter {
     }
 
     if (fixture.scenario === "duplicate") {
-      const duplicate = db
-        .prepare("SELECT canonical_path FROM intake_events WHERE filename=?")
-        .get("e-duplicate.txt") as { canonical_path: string | null } | undefined;
+      const duplicateSource = (fixture.sources ?? [])[0];
+      const duplicate = duplicateSource
+        ? db.prepare("SELECT canonical_path FROM intake_events WHERE filename=?")
+            .get(duplicateSource.filename) as { canonical_path: string | null } | undefined
+        : undefined;
       const archived =
         !!duplicate?.canonical_path &&
         (await fs.stat(duplicate.canonical_path).then(

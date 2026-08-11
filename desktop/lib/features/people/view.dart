@@ -42,7 +42,7 @@ class _EntityDeskState extends State<EntityDesk> {
             ? Column(
                 children: [
                   Expanded(child: list),
-                  if (selected != null) detail,
+                  if (selected != null) Expanded(child: detail),
                 ],
               )
             : Row(

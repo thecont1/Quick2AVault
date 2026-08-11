@@ -244,46 +244,7 @@ class _VaultHomeState extends State<VaultHome> {
         _daemonUp = true;
         _stale = false;
       });
-      final l = await _api.learning();
-      if (mounted) {
-        setState(() {
-          _learningOn = l.enabled;
-          _reviewCount = l.questions.length;
-          _learningQuestions = l.questions
-              .map(
-                (q) => wo_learning.LearningPrompt(
-                  id: '${q['id'] ?? ''}',
-                  prompt: '${q['question'] ?? ''}',
-                  why: q['context']?.toString() ?? '${q['trigger'] ?? ''}',
-                  trigger: '${q['trigger'] ?? ''}',
-                  novelty: (q['novelty_score'] as num?)?.toDouble() ?? 1,
-                ),
-              )
-              .toList();
-          _authError = null;
-        });
-      }
-      final featureResults = await Future.wait<Object>([
-        _api.featureIntakeStatus(),
-        _api.featureEntities(),
-        _api.featureSettings(),
-        _api.featureJurisdiction(),
-      ]);
-      if (mounted) {
-        final intake = featureResults[0] as List<wo_intake_state.IntakeItem>;
-        setState(() {
-          _intakeItems = intake;
-          _entities = featureResults[1] as List<wo_people_state.EntitySummary>;
-          _appSettings = featureResults[2] as wo_settings.AppSettings;
-          _jurisdiction = featureResults[3] as wo_settings.JurisdictionPack;
-          _learningOn = _appSettings.learningEnabled;
-          _intakeArrivals = intake
-              .where(
-                (item) => item.state != wo_intake_state.PipelineState.complete,
-              )
-              .length;
-        });
-      }
+      await _refreshFeatureData();
     } on VaultAuthException catch (e) {
       // NEVER fall through to zeros here. Rendering Rs 0 for an auth failure
       // reads as "your vault is empty" — indistinguishable from real data loss,
@@ -306,6 +267,61 @@ class _VaultHomeState extends State<VaultHome> {
       });
       _scheduleReconnect();
     }
+  }
+
+  Future<void> _refreshFeatureData() async {
+    try {
+      final learning = await _api.learning();
+      if (mounted) {
+        setState(() {
+          _learningOn = learning.enabled;
+          _reviewCount = learning.questions.length;
+          _learningQuestions = learning.questions
+              .map(
+                (q) => wo_learning.LearningPrompt(
+                  id: '${q['id'] ?? ''}',
+                  prompt: '${q['question'] ?? ''}',
+                  why: q['context']?.toString() ?? '${q['trigger'] ?? ''}',
+                  trigger: '${q['trigger'] ?? ''}',
+                  novelty: (q['novelty_score'] as num?)?.toDouble() ?? 1,
+                ),
+              )
+              .toList();
+        });
+      }
+    } catch (_) {
+      // Feature failures must not hide a successfully loaded ledger.
+    }
+
+    try {
+      final intake = await _api.featureIntakeStatus();
+      if (mounted) {
+        setState(() {
+          _intakeItems = intake;
+          _intakeArrivals = intake
+              .where(
+                (item) => item.state != wo_intake_state.PipelineState.complete,
+              )
+              .length;
+        });
+      }
+    } catch (_) {}
+
+    try {
+      final entities = await _api.featureEntities();
+      if (mounted) setState(() => _entities = entities);
+    } catch (_) {}
+
+    try {
+      final bundle = await _api.featureSettingsBundle();
+      if (mounted) {
+        setState(() {
+          _appSettings = bundle.settings;
+          _jurisdiction = bundle.jurisdiction;
+          _learningOn = bundle.settings.learningEnabled;
+        });
+      }
+    } catch (_) {}
   }
 
   /// Poll for the daemon after a failed fetch.
@@ -406,7 +422,7 @@ class _VaultHomeState extends State<VaultHome> {
           if (e.type != 'Ready') _feed.insert(0, e);
           if (_feed.length > 60) _feed.removeLast();
           if (e.type == 'learning.question') {
-            final id = '${e.data['questionId'] ?? ''}';
+            final id = '${e.data['question_id'] ?? ''}';
             if (!_learningQuestions.any((question) => question.id == id)) {
               _learningQuestions = [
                 wo_learning.LearningPrompt(
@@ -424,7 +440,7 @@ class _VaultHomeState extends State<VaultHome> {
               _reviewCount = _learningQuestions.length;
             }
           } else if (e.type == 'learning.answer') {
-            final id = '${e.data['questionId'] ?? ''}';
+            final id = '${e.data['question_id'] ?? ''}';
             _learningQuestions = _learningQuestions
                 .where((question) => question.id != id)
                 .toList();

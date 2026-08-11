@@ -62,6 +62,19 @@ class AppSettings {
     if (dropFolder != null) 'drop_folder': dropFolder,
   };
 
+  /// Schema accepted by the daemon's `/v1/settings` route.
+  Map<String, dynamic> toApiJson({AppSettings? before}) => {
+    'learning_enabled': learningEnabled,
+    'question_budget': questionBudget,
+    'watcher_enabled': watcherEnabled,
+    'scan_on_launch': scanOnLaunch,
+    'move_on_success': moveOnSuccess,
+    if (dropFolder != null)
+      'drop_folder': dropFolder
+    else if (before?.dropFolder != null)
+      'drop_folder': '',
+  };
+
   AppSettings copyWith({
     bool? learningEnabled,
     int? questionBudget,

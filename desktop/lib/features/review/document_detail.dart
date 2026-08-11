@@ -61,9 +61,15 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
   @override
   void didUpdateWidget(covariant DocumentDetailPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.document.id != widget.document.id ||
+    final documentChanged = oldWidget.document.id != widget.document.id;
+    if (documentChanged ||
         oldWidget.document.bucket != widget.document.bucket) {
       _bucket = widget.document.bucket;
+    }
+    if (documentChanged ||
+        oldWidget.initialMarkdown != widget.initialMarkdown ||
+        oldWidget.documentAvailable != widget.documentAvailable ||
+        oldWidget.markdownAvailable != widget.markdownAvailable) {
       _markdown = widget.initialMarkdown && widget.markdownAvailable;
       if (!widget.documentAvailable && widget.markdownAvailable) {
         _markdown = true;
@@ -209,16 +215,22 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
         const SizedBox(height: 16),
         PartiesSection(
           parties: document.parties,
+          choices: {
+            for (final role in DocumentPartyRole.values)
+              role: document.parties
+                  .where((party) => party.entityId != null)
+                  .map(
+                    (party) => PartyChoice(
+                      id: party.entityId!,
+                      displayName: party.displayName ?? party.entityId!,
+                    ),
+                  )
+                  .toList(),
+          },
           onChanged: widget.onPartyChanged == null
               ? null
-              : (role, value) => widget.onPartyChanged!(
-                  document.id,
-                  role,
-                  document.parties
-                      .where((party) => party.displayName == value)
-                      .firstOrNull
-                      ?.entityId,
-                ),
+              : (role, entityId) =>
+                    widget.onPartyChanged!(document.id, role, entityId),
         ),
         const SizedBox(height: 18),
         _Disclosure(
