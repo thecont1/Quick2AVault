@@ -156,7 +156,10 @@ void main() {
     testWidgets('clearApiKey sends an empty string, not a dropped field', (t) async {
       final rec = _Recorder();
       final api = rec.api();
-      await api.clearApiKey();
+      // These tests call the API directly (no widget tree), so they must
+      // run outside the FakeAsync zone that testWidgets installs — otherwise
+      // Dio's internal timers never fire and the request hangs forever.
+      await t.runAsync(() => api.clearApiKey());
 
       expect(rec.requests, hasLength(1));
       expect(rec.requests.first.path, '/v1/settings');
@@ -169,7 +172,7 @@ void main() {
     testWidgets('saving an unrelated field does not send api_key at all', (t) async {
       final rec = _Recorder();
       final api = rec.api();
-      await api.saveSettings(model: 'claude-sonnet-5');
+      await t.runAsync(() => api.saveSettings(model: 'claude-sonnet-5'));
 
       expect(rec.requests, hasLength(1));
       // Regression guard for the cc90973 setup_view bug: sending an empty
@@ -185,7 +188,7 @@ void main() {
     testWidgets('setting a real key sends it verbatim', (t) async {
       final rec = _Recorder();
       final api = rec.api();
-      await api.saveSettings(apiKey: 'sk-ant-real-key');
+      await t.runAsync(() => api.saveSettings(apiKey: 'sk-ant-real-key'));
 
       expect(rec.requests.first.body['api_key'], 'sk-ant-real-key');
     });

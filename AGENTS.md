@@ -32,12 +32,6 @@ cd desktop && flutter analyze
 cd desktop && flutter test
 ```
 
-Note: `test/settings_click_through_test.dart` is flaky due to an SSE
-teardown issue. Exclude it with:
-```bash
-cd desktop && flutter test $(find test -name "*_test.dart" ! -name "settings_click_through_test.dart")
-```
-
 ### Build macOS
 ```bash
 cd desktop && flutter build macos
@@ -78,6 +72,19 @@ The Flutter app uses established Dart/Flutter packages:
 
 - `build.yaml` — json_serializable config (snake_case field rename, explicit_to_json)
 - `analysis_options.yaml` — Lint rules, ignores invalid_annotation_target (Freezed)
+
+### HTTP dependency boundary
+
+Dio is the production HTTP client. `package:http` remains temporarily because
+`HttpClienDioAdapter` (in `lib/core/network/http_client_adapter.dart`) preserves
+existing `MockClient`-based tests. New production code must not import
+`package:http` directly. Removal is tracked as a follow-up ticket:
+> `test(desktop): migrate MockClient tests to Dio test transport and remove http`
+
+The boundary is enforced:
+- `lib/api.dart` is the only production file that imports `package:http` (for the adapter).
+- All other `package:http` usage is in `test/` files using `MockClient`.
+- Feature widgets and providers do not import `package:http`.
 
 ## CI
 
