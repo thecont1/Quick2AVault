@@ -516,13 +516,23 @@ await check("E2E B: ambiguous match → Learning question → user confirms", as
 
 // C — Invoice only, no slip → transaction exists with awaiting_settlement flag
 await check("E2E C: invoice only with no settlement → transaction has awaiting_settlement flag", async () => {
-  // doc_invoice is in the shared db; verify it exists and has evidence_role merchant_invoice
-  const link = db.prepare("SELECT evidence_role FROM transaction_documents WHERE document_id='doc_invoice'").get() as { evidence_role: string };
-  assert.ok(link, "the invoice transaction should exist");
+  // Use a fresh db: the shared db's doc_invoice was already linked with a
+  // matching slip in step 2, so its status was promoted to 'evidenced'.
+  const { db: dbC, ports: portsC } = freshDb();
+  const inv = makeInvoice();
+  const docId = seedDoc(dbC, "c_invoice_only", inv);
+  const rec = recordTransaction(dbC, portsC, docId, inv);
+  assert.ok(rec, "invoice transaction should be created");
+  const link = dbC.prepare("SELECT evidence_role FROM transaction_documents WHERE document_id=?").get(docId) as { evidence_role: string };
   assert.equal(link.evidence_role, "merchant_invoice", "invoice should be linked with merchant_invoice role");
+  // WO12 phase 2: the transaction status should be 'awaiting_settlement' —
+  // an invoice is on file but no settlement evidence has matched yet.
+  const txn = dbC.prepare("SELECT status FROM transactions WHERE id=?").get(rec!.transaction_id) as { status: string };
+  assert.equal(txn.status, "awaiting_settlement", "invoice-only transaction should be awaiting_settlement");
+  dbC.close();
 });
 
-// D — Slip only, no invoice → creates separate transaction
+// D — Slip only, no invoice → creates separate transaction with no_invoice status
 await check("E2E D: slip-only transaction → no_invoice on file", async () => {
   const x: ExtractionResult = {
     ...makeBankSlip(),
@@ -537,6 +547,31 @@ await check("E2E D: slip-only transaction → no_invoice on file", async () => {
   assert.ok(matches.length === 0 || matches[0].score < REVIEW_FLOOR, "no matching invoice → stays separate");
   const rec = recordTransaction(db, ports, docId, x);
   assert.ok(rec, "slip-only transaction should be created");
+  // WO12 phase 2: a settlement document with no matching invoice is a gap.
+  const txn = db.prepare("SELECT status FROM transactions WHERE id=?").get(rec!.transaction_id) as { status: string };
+  assert.equal(txn.status, "no_invoice", "slip-only transaction should be flagged no_invoice");
+});
+
+// C2 — Invoice (awaiting_settlement) → matching slip auto-links → status promotes to evidenced
+await check("E2E C2: invoice awaiting_settlement → matching slip auto-links → status promotes to evidenced", async () => {
+  const { db: dbC2, ports: portsC2 } = freshDb();
+  // Step 1: record an invoice-only transaction
+  const inv = makeInvoice();
+  const invDoc = seedDoc(dbC2, "c2_invoice", inv);
+  const invRec = recordTransaction(dbC2, portsC2, invDoc, inv);
+  assert.ok(invRec, "invoice transaction should be created");
+  let st = dbC2.prepare("SELECT status FROM transactions WHERE id=?").get(invRec!.transaction_id) as { status: string };
+  assert.equal(st.status, "awaiting_settlement", "invoice-only should start as awaiting_settlement");
+  // Step 2: drop a matching bank slip (same amount, same counterparty, close date)
+  const slip = makeBankSlip();
+  const slipDoc = seedDoc(dbC2, "c2_slip", slip);
+  const matches = findMatches(dbC2, slip, slipDoc);
+  assert.ok(matches.length > 0 && matches[0].score >= AUTO_LINK, "should find an auto-link match");
+  linkEvidence(dbC2, portsC2, matches[0].transaction_id, slipDoc, slip, matches[0].score);
+  // Step 3: the transaction should now be promoted to 'evidenced'
+  st = dbC2.prepare("SELECT status FROM transactions WHERE id=?").get(invRec!.transaction_id) as { status: string };
+  assert.equal(st.status, "evidenced", "transaction with both invoice + settlement should be evidenced");
+  dbC2.close();
 });
 
 // E — Refund against an invoice → totals net correctly

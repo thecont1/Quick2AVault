@@ -388,6 +388,13 @@ export function recordTransaction(
     // extraction. Cascading delete handles dependent rows.
     db.prepare("DELETE FROM transaction_legs WHERE transaction_id=?").run(id);
     db.prepare("DELETE FROM holdings WHERE transaction_id=?").run(id);
+    // Recompute status: the re-analysed document's role may have changed
+    // (e.g. a doc_type correction from payment_receipt to merchant_invoice),
+    // which affects whether the transaction is awaiting_settlement or no_invoice.
+    db.prepare("UPDATE transactions SET status=? WHERE id=?").run(
+      computeTxnStatus(db, id, role, isReanalysis),
+      id,
+    );
     ports.logger.info("re-analysis: upserted existing transaction", {
       transaction_id: id,
       document_id: documentId,
@@ -414,7 +421,7 @@ export function recordTransaction(
       x.payment_rail ?? null,
       isTransfer ? "transfer" : (x.category_hint ?? null),
       x.purpose_text ?? null,
-      "evidenced",
+      computeTxnStatus(db, id, role, isReanalysis),
       x.confidence,
       now,
     );
@@ -564,4 +571,52 @@ export function evidenceRole(x: ExtractionResult): string {
     case "contract_note": return "contract_note";
     default: return "payment_receipt";
   }
+}
+
+// Evidence roles that state what was ASKED FOR (an invoice, a contract note,
+// a refund note). Mirror claims.ts INVOICE_ROLES — kept local to avoid
+// coupling ledger.ts to claims.ts for a set membership check.
+export const INVOICE_ROLES = new Set(["merchant_invoice", "contract_note", "refund_note"]);
+
+// Evidence roles that state what was PAID (a bank slip, a card confirmation,
+// a statement line, a payment receipt). Mirror claims.ts SETTLEMENT_ROLES.
+export const SETTLEMENT_ROLES = new Set(["card_confirmation", "bank_slip", "statement_line", "payment_receipt"]);
+
+/**
+ * Compute the transaction's status from the evidence roles attached to it.
+ *
+ *   awaiting_settlement — an invoice is on file but no settlement evidence
+ *                         (bank slip, card confirmation, etc.) has matched yet.
+ *   no_invoice          — a settlement document arrived with no invoice to
+ *                         back it; the gap report.
+ *   evidenced           — both sides are present (or neither — a manual entry).
+ *
+ * The current document's role is passed separately so the caller can include
+ * it in the computation before the evidence row is actually inserted (the
+ * INSERT OR IGNORE on line ~504 may be a no-op on re-analysis).
+ */
+function computeTxnStatus(
+  db: DatabaseSync,
+  transactionId: string,
+  currentRole: string,
+  isReanalysis: boolean,
+): "awaiting_settlement" | "no_invoice" | "evidenced" {
+  // On re-analysis, the evidence row already exists in transaction_documents.
+  // On first analysis, it doesn't yet — include the current role in the set.
+  const existingRoles = db
+    .prepare("SELECT evidence_role FROM transaction_documents WHERE transaction_id=?")
+    .all(transactionId) as { evidence_role: string }[];
+
+  const roleSet = new Set(existingRoles.map((r) => r.evidence_role));
+  // On first analysis, the row isn't inserted yet — count the current role.
+  // On re-analysis, the row is already there (INSERT OR IGNORE is a no-op),
+  // so adding it again is harmless (Set dedupes).
+  roleSet.add(currentRole);
+
+  const hasInvoice = [...roleSet].some((r) => INVOICE_ROLES.has(r));
+  const hasSettlement = [...roleSet].some((r) => SETTLEMENT_ROLES.has(r));
+
+  if (hasInvoice && !hasSettlement) return "awaiting_settlement";
+  if (hasSettlement && !hasInvoice) return "no_invoice";
+  return "evidenced";
 }
