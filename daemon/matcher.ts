@@ -178,31 +178,51 @@ function normRef(v: unknown): string | null {
  */
 export function linkEvidence(
   db: DatabaseSync,
-  ports: Ports,
+  ports: Pick<Ports, "clock" | "bus" | "logger">,
   transactionId: string,
   documentId: string,
   x: ExtractionResult,
   score: number,
-): void {
+  linkedBy: string = "matcher",
+): boolean {
   const now = ports.clock.isoNow();
-  db.prepare(
+  const info = db.prepare(
     `INSERT OR IGNORE INTO transaction_documents
       (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
      VALUES (?,?,?,?,?,?)`,
-  ).run(transactionId, documentId, evidenceRole(x), score, "matcher", now);
+  ).run(transactionId, documentId, evidenceRole(x), score, linkedBy, now);
 
-  // A card confirmation proves settlement; an invoice alone does not.
-  if (x.doc_type === "card_confirmation" || x.doc_type === "bank_slip") {
-    db.prepare("UPDATE transactions SET status='evidenced', posted_at=COALESCE(posted_at,?) WHERE id=?")
-      .run(x.occurred_at ?? null, transactionId);
+  const inserted = Number(info.changes ?? 0) > 0;
+
+  if (!inserted) {
+    // Idempotent retry: a row with the same document_id + evidence_role already
+    // exists. Find its owner for diagnosability.
+    const existing = db.prepare(
+      "SELECT transaction_id FROM transaction_documents WHERE document_id=? AND evidence_role=?",
+    ).get(documentId, evidenceRole(x)) as { transaction_id: string } | undefined;
+    ports.logger.info("linkEvidence: duplicate evidence ignored", {
+      documentId,
+      evidenceRole: evidenceRole(x),
+      existingTransactionId: existing?.transaction_id ?? "none",
+      transactionId,
+    });
   }
 
-  ports.bus.publish({
-    type: "MatchProposed",
-    transaction_id: transactionId,
-    document_id: documentId,
-    score,
-    at: now,
-  });
-  ports.logger.info("evidence linked", { transactionId, documentId, score: score.toFixed(2) });
+  if (inserted) {
+    // A card confirmation proves settlement; an invoice alone does not.
+    if (x.doc_type === "card_confirmation" || x.doc_type === "bank_slip") {
+      db.prepare("UPDATE transactions SET status='evidenced', posted_at=COALESCE(posted_at,?) WHERE id=?")
+        .run(x.occurred_at ?? null, transactionId);
+    }
+
+    ports.bus.publish({
+      type: "MatchProposed",
+      transaction_id: transactionId,
+      document_id: documentId,
+      score,
+      at: now,
+    });
+    ports.logger.info("evidence linked", { transactionId, documentId, score: score.toFixed(2), linkedBy });
+  }
+  return inserted;
 }

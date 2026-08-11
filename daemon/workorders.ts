@@ -8,8 +8,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import * as crypto from "node:crypto";
 
-import type { DomainEvent, EventBus } from "./ports.js";
+import type { DomainEvent, EventBus, Ports } from "./ports.js";
 import type { RuleKind } from "./learning.js";
+import { linkEvidence } from "./matcher.js";
+import type { ExtractionResult } from "./extraction-contract.js";
 
 export const PIPELINE_STATES = [
   "received", "stable", "hashed", "triaged", "converting", "analysing",
@@ -273,11 +275,11 @@ export interface LearningQuestion {
 function setting(db: DatabaseSync, key: string): string | undefined {
   return (db.prepare("SELECT value FROM app_settings WHERE key=?").get(key) as { value?: string } | undefined)?.value;
 }
-function availableQuestionBudget(db: DatabaseSync): number {
+function availableQuestionBudget(db: DatabaseSync, ports: { clock: { isoNow(): string } }): number {
   if (setting(db, "learning.enabled") === "false") return 0;
   const manual = Number(setting(db, "learning.question_budget"));
   const cap = Number.isInteger(manual) && manual >= 0 ? Math.min(20, manual) : 3;
-  const open = (db.prepare("SELECT COUNT(*) n FROM training_reviews WHERE answered_at IS NULL AND dismissed=0").get() as { n: number }).n;
+  const open = (db.prepare("SELECT COUNT(*) n FROM training_reviews WHERE answered_at IS NULL AND dismissed=0 AND (backoff_until IS NULL OR backoff_until < ?)").get(ports.clock.isoNow()) as { n: number }).n;
   const rules = (db.prepare("SELECT COUNT(*) n FROM learned_rules WHERE active=1").get() as { n: number }).n;
   return Math.max(0, cap - open - Math.floor(rules / 10));
 }
@@ -286,7 +288,7 @@ export function generateLearningQuestions(
   ports: { clock: { isoNow(): string }; bus: Pick<EventBus, "publish"> },
   input: { documentId: string; pipelineState: "analysing" | "complete"; ambiguities: LearningAmbiguity[] },
 ): LearningQuestion[] {
-  let remaining = availableQuestionBudget(db);
+  let remaining = availableQuestionBudget(db, ports);
   if (remaining <= 0) return [];
   const out: LearningQuestion[] = [];
   for (const ambiguity of input.ambiguities) {
@@ -312,16 +314,100 @@ export function generateLearningQuestions(
 }
 export function answerLearningQuestion(
   db: DatabaseSync,
-  ports: { clock: { isoNow(): string }; bus: Pick<EventBus, "publish"> },
+  ports: Pick<Ports, "clock" | "bus" | "logger">,
   questionId: string | number, answer: string,
-): { ruleId: number | null } {
-  const row = db.prepare("SELECT id,predicted_rule,answered_at,dismissed,context FROM training_reviews WHERE id=?").get(questionId) as
-    | { id: number; predicted_rule: string | null; answered_at: string | null; dismissed: number; context: string | null } | undefined;
+): { ruleId: number | null; linked: boolean; dismissed: boolean; deferred: boolean } {
+  const row = db.prepare("SELECT id,trigger,predicted_rule,answered_at,dismissed,context,dedupe_key FROM training_reviews WHERE id=?").get(questionId) as
+    | { id: number; trigger: string; predicted_rule: string | null; answered_at: string | null; dismissed: number; context: string | null; dedupe_key: string | null } | undefined;
   if (!row) throw new Error("learning question not found");
-  if (row.answered_at || row.dismissed) return { ruleId: null };
+  if (row.answered_at || row.dismissed) return { ruleId: null, linked: false, dismissed: false, deferred: false };
   const now = ports.clock.isoNow(); let ruleId: number | null = null;
   let appliedRuleId: number | null = null;
   let contextForEvent: Record<string, unknown> | null = null;
+  let linked = false;
+  let dismissed = false;
+  let deferred = false;
+
+  // ── Reconciliation-ambiguity: Link / Don't link / Later ─────────────
+  if (row.trigger === "reconciliation-ambiguity") {
+    let ctx: Record<string, unknown> | null = null;
+    try { ctx = row.context ? JSON.parse(row.context) as Record<string, unknown> : null; } catch { /* ignore */ }
+    const sourceFact = (ctx?.source_fact ?? ctx) as Record<string, unknown> | undefined;
+    const docId = String(sourceFact?.document_id ?? "");
+    const txnId = String(sourceFact?.transaction_id ?? "");
+
+    if (/^(yes|confirm|accept|link)/i.test(answer)) {
+      db.prepare("BEGIN IMMEDIATE").run();
+      try {
+        if (docId && txnId) {
+          const docRow = db.prepare("SELECT extraction_json FROM documents WHERE id=?").get(docId) as { extraction_json: string } | undefined;
+          if (docRow?.extraction_json) {
+            let x: ExtractionResult | undefined;
+            try {
+              x = JSON.parse(docRow.extraction_json);
+            } catch {
+              // Fallback: if extraction_json won't parse, link with a generic role.
+              // INSERT OR IGNORE (not REPLACE) — never silently move evidence
+              // from another transaction.
+              const info = db.prepare(
+                `INSERT OR IGNORE INTO transaction_documents
+                   (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
+                  VALUES (?,?,?,?, 'user', ?)`,
+              ).run(txnId, docId, "payment_receipt", 1.0, now);
+              linked = Number(info.changes ?? 0) > 0;
+            }
+            if (x) {
+              // Call linkEvidence outside the JSON.parse try/catch so its
+              // constraint violations propagate naturally.
+              linked = linkEvidence(db, ports, txnId, docId, x, 1.0, "user");
+            }
+          }
+        }
+        db.prepare("UPDATE training_reviews SET answer=?, answered_at=?, rule_id=NULL WHERE id=?").run(answer, now, row.id);
+      } catch {
+        db.prepare("ROLLBACK").run();
+        throw new Error("failed to apply reconciliation link answer");
+      }
+      db.prepare("COMMIT").run();
+      ports.bus.publish({ type: "learning.answer", question_id: String(row.id), at: now, answer });
+      return { ruleId: null, linked, dismissed: false, deferred: false };
+    }
+
+    if (/^(no|dont|nope|dismiss)/i.test(answer)) {
+      // D5: write a standing rule so this candidate pair is never proposed again.
+      // The rule key is the dedupe_key of the ambiguity question.
+      const dedupeKey = row.dedupe_key ?? null;
+      let ruleIdForDismiss: number | null = null;
+      db.exec("BEGIN");
+      try {
+        if (dedupeKey) {
+          const row2 = db.prepare(
+            `INSERT INTO learned_rules(kind, match_key, match_kind, value, source, created_at)
+             VALUES('reconciliation_decline', ?, '', 'no', 'user', ?)
+             ON CONFLICT(kind, match_key, COALESCE(match_kind,'')) DO UPDATE SET value='no', active=1
+             RETURNING id`,
+          ).get(dedupeKey, now) as { id: number } | undefined;
+          ruleIdForDismiss = row2 ? row2.id : null;
+        }
+        db.prepare("UPDATE training_reviews SET answer=?, answered_at=?, dismissed=1, rule_id=? WHERE id=?").run(answer, now, ruleIdForDismiss, row.id);
+        db.prepare("COMMIT").run();
+      } catch {
+        db.prepare("ROLLBACK").run();
+        throw new Error("failed to apply reconciliation decline answer");
+      }
+      ports.bus.publish({ type: "learning.answer", question_id: String(row.id), at: now, answer });
+      return { ruleId: ruleIdForDismiss, linked: false, dismissed: true, deferred: false };
+    }
+
+    if (/^(later|defer|skip)/i.test(answer)) {
+      const start = new Date(now);
+      start.setUTCDate(start.getUTCDate() + 7);
+      db.prepare("UPDATE training_reviews SET answer=?, backoff_until=?, rule_id=NULL WHERE id=?").run(answer, start.toISOString(), row.id);
+      ports.bus.publish({ type: "learning.answer", question_id: String(row.id), at: now, answer });
+      return { ruleId: null, linked: false, dismissed: false, deferred: true };
+    }
+  }
+
   if (/^(yes|confirm|accept)/i.test(answer) && row.predicted_rule) {
     const predicted = JSON.parse(row.predicted_rule) as LearningAmbiguity["predictedRule"];
     const resolved = PREDICTED_RULE_KINDS[predicted.kind];
@@ -352,7 +438,7 @@ export function answerLearningQuestion(
     ports.bus.publish({ type: "learning.rule.applied", rule_id: appliedRuleId, document_id: contextForEvent.document_id as string | undefined, at: now });
   }
   ports.bus.publish({ type: "learning.answer", question_id: String(row.id), at: now, answer });
-  return { ruleId };
+  return { ruleId, linked: false, dismissed: false, deferred: false };
 }
 export function ignoreLearningQuestion(db: DatabaseSync, ports: { clock: { isoNow(): string } }, questionId: number): void {
   const start = new Date(ports.clock.isoNow()); start.setUTCDate(start.getUTCDate() + 1);
