@@ -201,16 +201,16 @@ export async function runCombined(options: {
   await fs.mkdir(context.vaultPath, { recursive: true });
   try {
     for (const fixture of manifests) {
-      for (const source of [fixture.source, ...(fixture.sources ?? [])]) {
-        const file = context.sourcePath(source.filename);
-        await fs.mkdir(path.dirname(file), { recursive: true });
-        if (source.fixturePath) {
-          await fs.copyFile(path.resolve(repoRoot, source.fixturePath), file);
-        } else {
-          await fs.writeFile(file, source.text!, "utf8");
-        }
-      }
       try {
+        for (const source of [fixture.source, ...(fixture.sources ?? [])]) {
+          const file = context.sourcePath(source.filename);
+          await fs.mkdir(path.dirname(file), { recursive: true });
+          if (source.fixturePath) {
+            await fs.copyFile(path.resolve(repoRoot, source.fixturePath), file);
+          } else {
+            await fs.writeFile(file, source.text!, "utf8");
+          }
+        }
         const result = await options.adapter.load(context, fixture);
         if (!fixture.expectations.disposition) {
           assertions.push({
@@ -253,8 +253,11 @@ export async function runCombined(options: {
         });
     }
   } finally {
-    await options.adapter.close?.();
-    if (!options.keep) await fs.rm(root, { recursive: true, force: true });
+    try {
+      await options.adapter.close?.();
+    } finally {
+      if (!options.keep) await fs.rm(root, { recursive: true, force: true });
+    }
   }
   return {
     exitCode: assertions.some((item) => item.status === "failed") ? 1 : 0,
