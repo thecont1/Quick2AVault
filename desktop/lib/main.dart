@@ -393,10 +393,15 @@ class _VaultHomeState extends State<VaultHome> {
     final verb = action.substring(0, split);
     final id = int.tryParse(action.substring(split + 1));
     if (id == null) return;
-    if (verb == 'confirm') {
+    // WO12 phase 2: reconciliation-ambiguity questions use link/dismiss/later
+    // verbs. The daemon routes these through answerLearningQuestion which
+    // handles the evidence link, standing rule, or backoff respectively.
+    if (verb == 'confirm' || verb == 'link') {
       await _api.answerLearning(id, 'yes');
+    } else if (verb == 'dismiss') {
+      await _api.answerLearning(id, 'no');
     } else if (verb == 'later') {
-      await _api.dismissLearning(id);
+      await _api.answerLearning(id, 'later');
     } else {
       setState(() {
         _tab = VaultTab.review;

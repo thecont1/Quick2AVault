@@ -30,6 +30,12 @@ class EvidencePanel extends StatefulWidget {
 
 class _EvidencePanelState extends State<EvidencePanel> {
   ClaimSet _claims = ClaimSet.empty;
+  bool _unlinking = false;
+
+  /// Evidence IDs that were unlinked in this session but not yet reflected in
+  /// a parent refetch. We hide them immediately so the user sees the result
+  /// without waiting for the shell to re-fetch the ledger.
+  final Set<String> _unlinkedIds = {};
 
   @override
   void initState() {
@@ -40,7 +46,65 @@ class _EvidencePanelState extends State<EvidencePanel> {
   @override
   void didUpdateWidget(EvidencePanel old) {
     super.didUpdateWidget(old);
-    if (old.card.transaction.id != widget.card.transaction.id) _loadClaims();
+    if (old.card.transaction.id != widget.card.transaction.id) {
+      _unlinkedIds.clear();
+      _loadClaims();
+    }
+  }
+
+  Future<void> _handleUnlink(Evidence e) async {
+    final api = widget.api;
+    if (api == null) return;
+    // Confirm before unlinking — the action is reversible by re-linking,
+    // but the user should understand they're removing proof from this
+    // transaction.
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unlink evidence?'),
+        content: Text(
+          'Remove "${e.filename}" from this transaction?\n\n'
+          'The document is preserved — only the link is removed. '
+          'The matcher may re-link it on a future analysis.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Unlink'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    setState(() => _unlinking = true);
+    try {
+      final ok = await api.unlinkEvidence(widget.card.transaction.id, e.id);
+      if (!ok) {
+        // The daemon refused the unlink — preserve the card and show an error.
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            const SnackBar(content: Text('Could not unlink evidence — the daemon refused the request.')),
+          );
+        }
+        return;
+      }
+      // Success: hide the evidence locally and notify the shell to refetch.
+      if (mounted) setState(() => _unlinkedIds.add(e.id));
+      widget.onEdited?.call();
+    } catch (err) {
+      // Network or parse error — preserve the card and show the message.
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('Could not unlink evidence: ${err.toString()}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _unlinking = false);
+    }
   }
 
   Future<void> _loadClaims() async {
@@ -61,6 +125,10 @@ class _EvidencePanelState extends State<EvidencePanel> {
     final shared = card.sharedRefValues;
     final t = card.transaction;
     final api = widget.api;
+    // Filter out evidence that was unlinked in this session — the parent
+    // refetch will eventually replace the whole card, but until then we hide
+    // the removed rows so the user sees immediate feedback.
+    final visibleEvidence = card.evidence.where((e) => !_unlinkedIds.contains(e.id)).toList();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -78,14 +146,56 @@ class _EvidencePanelState extends State<EvidencePanel> {
               fontSize: 12.5, fontWeight: FontWeight.w600, color: VaultColors.ink),
         ),
         const SizedBox(height: 12),
-        ...card.evidence.map((e) => Padding(
+        ...visibleEvidence.map((e) => Padding(
               padding: const EdgeInsets.only(bottom: 7),
               child: Container(
                 padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
                 decoration: BoxDecoration(border: Border.all(color: VaultColors.line)),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(e.filename,
-                      style: const TextStyle(fontSize: 12, color: VaultColors.ink)),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(e.filename,
+                            style: const TextStyle(fontSize: 12, color: VaultColors.ink)),
+                      ),
+                      // WO12 phase 2: refund badge for refund_note evidence
+                      if (e.role == 'refund_note')
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE0A800).withValues(alpha: .15),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: const Text(
+                            'REVERSAL',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFFB07A00),
+                            ),
+                          ),
+                        ),
+                      // WO12 phase 2: unlink button (only when an API client
+                      // is available and we're not already unlinking)
+                      if (api != null && !_unlinking)
+                        IconButton(
+                          icon: const Icon(Icons.link_off, size: 14, color: VaultColors.faint),
+                          padding: const EdgeInsets.all(2),
+                          constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                          tooltip: 'Unlink evidence',
+                          onPressed: () => _handleUnlink(e),
+                        ),
+                      if (api != null && _unlinking)
+                        const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: SizedBox(
+                            width: 12,
+                            height: 12,
+                            child: CircularProgressIndicator(strokeWidth: 1.5),
+                          ),
+                        ),
+                    ],
+                  ),
                   const SizedBox(height: 5),
                   Text(
                     '${e.role} · linked by ${e.linkedBy}'
