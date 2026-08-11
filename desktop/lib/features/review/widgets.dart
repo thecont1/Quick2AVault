@@ -331,7 +331,9 @@ class _PartyRow extends StatelessWidget {
                           DropdownMenuItem(
                             value: choice.id,
                             child: Text(
-                              choice.displayName,
+                              knownChoices.where((c) => c.displayName == choice.displayName).length > 1
+                                  ? '${choice.displayName} (${choice.id})'
+                                  : choice.displayName,
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),

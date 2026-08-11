@@ -30,8 +30,15 @@ void main() {
     expect(find.text('Investment purchase'), findsOneWidget); // 4
     expect(find.text(fixture.text('broker')), findsWidgets); // 5
     expect(find.text(fixture.text('client')), findsWidgets); // 6
-    expect(fixture.text('trade_date'), '2026-07-01'); // 7
-    expect(fixture.text('contract_note_no'), '2216643'); // 8
+    await _scrollTo(tester, '2026-07-01');
+    expect(find.byWidgetPredicate((w) => w is SelectableText && w.data == '2026-07-01'), findsOneWidget); // 7
+    await _scrollTo(tester, '2216643');
+    expect(find.byWidgetPredicate((w) => w is SelectableText && w.data == '2216643'), findsOneWidget); // 8
+    // Scroll back to top so the trade rows are within the lazy build window.
+    for (var i = 0; i < 30; i++) {
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, 180));
+      await tester.pump();
+    }
     for (final trade in fixture.list('trades')) {
       await _scrollTo(tester, trade['description'] as String);
       expect(find.text(trade['description'] as String), findsOneWidget); // 9+
@@ -66,8 +73,12 @@ void main() {
   });
 }
 
+Finder _findText(String text) => find.byWidgetPredicate(
+      (w) => (w is Text && w.data == text) || (w is SelectableText && w.data == text),
+    );
+
 Future<void> _scrollTo(WidgetTester tester, String text) async {
-  final target = find.text(text);
+  final target = _findText(text);
   if (target.evaluate().isNotEmpty) {
     await tester.ensureVisible(target.first);
   } else {

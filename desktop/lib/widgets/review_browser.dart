@@ -22,7 +22,9 @@ import '../api.dart';
 import '../theme.dart';
 import 'magnified_document.dart';
 import '../features/review/document_detail.dart';
+import '../features/review/widgets.dart';
 import '../features/adapters.dart';
+import '../features/people/state.dart' as feature_people;
 
 class ReviewBrowser extends StatefulWidget {
   final VaultApi api;
@@ -436,11 +438,13 @@ class _Detail extends StatefulWidget {
 
 class _DetailState extends State<_Detail> {
   Future<DetailDocument>? _detail;
+  late Future<List<feature_people.EntitySummary>?> _entities;
 
   @override
   void initState() {
     super.initState();
     _detail = widget.api.featureDocumentDetail(widget.doc);
+    _entities = widget.api.featureEntities().catchError((_) => <feature_people.EntitySummary>[]);
   }
 
   @override
@@ -590,16 +594,31 @@ class _DetailState extends State<_Detail> {
           ),
         );
       }
-      return DocumentDetailPanel(
-        key: ValueKey('glaze-detail-${widget.doc.id}'),
-        document: snapshot.data!,
-        documentAvailable: widget.doc.hasPageImage,
-        markdownAvailable: widget.doc.hasMarkdown,
-        initialMarkdown: widget.showMarkdown,
-        previewBuilder: _preview,
-        onFieldChanged: (_, field, value) => _fieldChanged(field, value),
-        onPartyChanged: (_, role, entityId) => _partyChanged(role, entityId),
-        onAction: (_, action) => _action(action),
+      return FutureBuilder<List<feature_people.EntitySummary>?>(
+        future: _entities,
+        builder: (context, entSnapshot) {
+          final roleCandidates = <DocumentPartyRole, List<PartyChoice>>{};
+          if (entSnapshot.hasData && entSnapshot.data != null) {
+            final all = entSnapshot.data!
+                .map((e) => PartyChoice(id: e.id, displayName: e.name))
+                .toList();
+            for (final role in DocumentPartyRole.values) {
+              roleCandidates[role] = all;
+            }
+          }
+          return DocumentDetailPanel(
+            key: ValueKey('glaze-detail-${widget.doc.id}'),
+            document: snapshot.data!,
+            documentAvailable: widget.doc.hasPageImage,
+            markdownAvailable: widget.doc.hasMarkdown,
+            initialMarkdown: widget.showMarkdown,
+            previewBuilder: _preview,
+            roleCandidates: roleCandidates.isEmpty ? null : roleCandidates,
+            onFieldChanged: (_, field, value) => _fieldChanged(field, value),
+            onPartyChanged: (_, role, entityId) => _partyChanged(role, entityId),
+            onAction: (_, action) => _action(action),
+          );
+        },
       );
     },
   );

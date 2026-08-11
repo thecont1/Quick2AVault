@@ -348,11 +348,20 @@ class _VaultHomeState extends State<VaultHome> {
 
   Future<void> _toggleLearning() async {
     final next = !_learningOn;
-    setState(() => _learningOn = next);
+    final previous = _appSettings;
+    setState(() {
+      _learningOn = next;
+      _appSettings = _appSettings.copyWith(learningEnabled: next);
+    });
     try {
       await _api.toggleLearning(next);
     } catch (_) {
-      if (mounted) setState(() => _learningOn = !next);
+      if (mounted) {
+        setState(() {
+          _learningOn = !next;
+          _appSettings = previous;
+        });
+      }
     }
   }
 

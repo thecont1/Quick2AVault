@@ -26,6 +26,11 @@ class DocumentDetailPanel extends StatefulWidget {
   /// the panel's current Document/Markdown tab state (true = markdown).
   final Widget Function(BuildContext context, bool markdown)? previewBuilder;
 
+  /// Role-scoped candidate entities. When provided, each DocumentPartyRole
+  /// receives its own candidate list so unlinked roles remain selectable.
+  /// When null, the panel falls back to document.parties as candidates.
+  final Map<DocumentPartyRole, List<PartyChoice>>? roleCandidates;
+
   const DocumentDetailPanel({
     super.key,
     required this.document,
@@ -38,6 +43,7 @@ class DocumentDetailPanel extends StatefulWidget {
     this.markdownAvailable = true,
     this.initialMarkdown = false,
     this.previewBuilder,
+    this.roleCandidates,
   });
 
   @override
@@ -215,18 +221,19 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
         const SizedBox(height: 16),
         PartiesSection(
           parties: document.parties,
-          choices: {
-            for (final role in DocumentPartyRole.values)
-              role: document.parties
-                  .where((party) => party.entityId != null)
-                  .map(
-                    (party) => PartyChoice(
-                      id: party.entityId!,
-                      displayName: party.displayName ?? party.entityId!,
-                    ),
-                  )
-                  .toList(),
-          },
+          choices: widget.roleCandidates ??
+              {
+                for (final role in DocumentPartyRole.values)
+                  role: document.parties
+                      .where((party) => party.entityId != null)
+                      .map(
+                        (party) => PartyChoice(
+                          id: party.entityId!,
+                          displayName: party.displayName ?? party.entityId!,
+                        ),
+                      )
+                      .toList(),
+              },
           onChanged: widget.onPartyChanged == null
               ? null
               : (role, entityId) =>

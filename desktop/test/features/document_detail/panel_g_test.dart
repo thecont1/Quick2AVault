@@ -29,11 +29,21 @@ void main() {
     ); // 3
     expect(find.text('Income'), findsOneWidget); // 4
     expect(find.text(fixture.text('person')), findsWidgets); // 5
-    expect(fixture.text('document_type'), 'Tax Invoice'); // 6
-    expect(fixture.text('vendor'), 'PetaSight Inc.'); // 7
-    expect(fixture.text('document_date'), '2026-04-01'); // 8
-    expect(fixture.text('financial_year'), 'FY 2026-27'); // 9
-    expect(fixture.text('currency_conversion'), '1691.31 USD'); // 10
+    await _scrollTo(tester, 'Tax Invoice');
+    expect(find.byWidgetPredicate((w) => w is SelectableText && w.data == 'Tax Invoice'), findsOneWidget); // 6
+    await _scrollTo(tester, 'PetaSight Inc.');
+    expect(find.byWidgetPredicate((w) => w is SelectableText && w.data == 'PetaSight Inc.'), findsOneWidget); // 7
+    await _scrollTo(tester, '2026-04-01');
+    expect(find.byWidgetPredicate((w) => w is SelectableText && w.data == '2026-04-01'), findsOneWidget); // 8
+    await _scrollTo(tester, 'FY 2026-27');
+    expect(find.byWidgetPredicate((w) => w is SelectableText && w.data == 'FY 2026-27'), findsOneWidget); // 9
+    await _scrollTo(tester, 'Currency conversion');
+    expect(find.textContaining('1691.31 USD'), findsOneWidget); // 10
+    // Scroll back to top so the line items are within the lazy build window.
+    for (var i = 0; i < 30; i++) {
+      await tester.drag(find.byType(Scrollable).first, const Offset(0, 180));
+      await tester.pump();
+    }
     for (final line in fixture.list('lines')) {
       await _scrollTo(tester, line['description'] as String);
       expect(find.text(line['description'] as String), findsOneWidget); // 11+
@@ -66,8 +76,12 @@ void main() {
   });
 }
 
+Finder _findText(String text) => find.byWidgetPredicate(
+      (w) => (w is Text && w.data == text) || (w is SelectableText && w.data == text),
+    );
+
 Future<void> _scrollTo(WidgetTester tester, String text) async {
-  final target = find.text(text);
+  final target = _findText(text);
   if (target.evaluate().isNotEmpty) {
     await tester.ensureVisible(target.first);
   } else {

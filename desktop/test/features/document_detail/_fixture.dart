@@ -66,7 +66,7 @@ class PanelFixture {
   List<DetailParty> _parties() => [
     if (json['person'] != null)
       DetailParty(
-        role: DocumentPartyRole.owner,
+        role: DocumentPartyRole.issuer,
         entityId: 'person-priya',
         displayName: text('person'),
         kind: 'person',
@@ -80,14 +80,14 @@ class PanelFixture {
       ),
     if (json['vendor'] != null)
       DetailParty(
-        role: DocumentPartyRole.issuer,
+        role: DocumentPartyRole.counterparty,
         entityId: 'org-petasight',
         displayName: text('vendor'),
         kind: 'organisation',
       ),
     if (json['broker'] != null)
       DetailParty(
-        role: DocumentPartyRole.issuer,
+        role: DocumentPartyRole.counterparty,
         entityId: 'org-paytm',
         displayName: text('broker'),
         kind: 'organisation',
