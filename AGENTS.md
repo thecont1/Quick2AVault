@@ -66,7 +66,8 @@ The Flutter app uses established Dart/Flutter packages:
 - `lib/features/dashboard/` — Snapshot, treemap, transactions, periods providers
 - `lib/features/events/event_service.dart` — SSE EventService with reconnection
 - `lib/features/feature_providers.dart` — Learning, intake, entities, settings
-- `lib/main.dart` — App entry point and god widget (being migrated)
+- `lib/main.dart` — App entry point and VaultHome shell (provider-driven)
+- `lib/features/events/event_dispatcher.dart` — SSE event dispatch to providers
 
 ### Configuration
 
@@ -93,3 +94,26 @@ GitHub Actions workflow in `.github/workflows/flutter.yml` runs:
 2. `dart run build_runner build --delete-conflicting-outputs`
 3. `flutter analyze`
 4. `flutter test`
+
+## macOS smoke test checklist
+
+Before tagging a release or merging a major refactor, run these manual checks
+against a real daemon and a release-built macOS app:
+
+```bash
+cd desktop && flutter build macos --dart-define=Q2AV_URL=http://127.0.0.1:4477 --dart-define=Q2AV_TOKEN=<token>
+```
+
+- [ ] **Cold start**: launch from a clean state; verify the menubar popup appears
+- [ ] **Connection status**: the status dot shows "live" once the daemon responds
+- [ ] **Period change**: switch the period; dashboard figures update exactly once
+- [ ] **Receipts bucket**: switch the bucket; the receipts list and evidence panel reset
+- [ ] **Settings round-trip**: open Settings, toggle learning, close and reopen — the toggle persists
+- [ ] **API key save/clear**: set a key, clear it, verify the wire payload (empty string, not dropped)
+- [ ] **Daemon restart**: stop the daemon, verify "reconnecting" then "live" on restart; figures refresh
+- [ ] **SSE recovery**: after daemon restart, no duplicate event handling or duplicate requests
+- [ ] **Drag-and-drop**: drop a file onto the window; verify it ingests
+- [ ] **Document detail**: open a transaction, exercise evidence panel and review actions
+- [ ] **Window restoration**: close the full window, reopen from tray; geometry is remembered
+- [ ] **Release logging**: no tokens, API keys, or document contents appear in console output
+- [ ] **Entitlements**: the sandboxed release app can reach 127.0.0.1 and read dropped files
