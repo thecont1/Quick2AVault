@@ -42,7 +42,10 @@ class LearningNotifier
     return (enabled: result.enabled, questions: questions);
   }
 
-  Future<void> refresh() async => state = await AsyncValue.guard(build);
+  Future<void> refresh() async {
+    ref.invalidateSelf();
+    await future;
+  }
 
   /// Optimistic toggle of the learning engine.
   Future<void> toggle(VaultApi api) async {
@@ -107,7 +110,10 @@ class IntakeStatusNotifier extends AsyncNotifier<List<intake.IntakeItem>> {
     return api.featureIntakeStatus();
   }
 
-  Future<void> refresh() async => state = await AsyncValue.guard(build);
+  Future<void> refresh() async {
+    ref.invalidateSelf();
+    await future;
+  }
 }
 
 final AsyncNotifierProvider<IntakeStatusNotifier, List<intake.IntakeItem>>
@@ -125,7 +131,10 @@ class EntitiesNotifier extends AsyncNotifier<List<people.EntitySummary>> {
     return api.featureEntities();
   }
 
-  Future<void> refresh() async => state = await AsyncValue.guard(build);
+  Future<void> refresh() async {
+    ref.invalidateSelf();
+    await future;
+  }
 }
 
 final AsyncNotifierProvider<EntitiesNotifier, List<people.EntitySummary>>
@@ -153,7 +162,10 @@ class SettingsBundleNotifier
     return api.featureSettingsBundle();
   }
 
-  Future<void> refresh() async => state = await AsyncValue.guard(build);
+  Future<void> refresh() async {
+    ref.invalidateSelf();
+    await future;
+  }
 
   /// Optimistic settings update with rollback on failure.
   Future<void> saveSettings(

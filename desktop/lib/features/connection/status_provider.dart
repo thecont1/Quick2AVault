@@ -86,10 +86,14 @@ class _Unreachable extends ConnectionStatus {
 class ConnectionNotifier extends Notifier<ConnectionStatus> {
   Timer? _pollTimer;
   bool _wasConnected = false;
+  bool _disposed = false;
 
   @override
   ConnectionStatus build() {
-    ref.onDispose(() => _pollTimer?.cancel());
+    ref.onDispose(() {
+      _disposed = true;
+      _pollTimer?.cancel();
+    });
     return const _Loading();
   }
 
@@ -101,6 +105,7 @@ class ConnectionNotifier extends Notifier<ConnectionStatus> {
     final api = ref.read(vaultApiProvider);
     try {
       final healthy = await api.health();
+      if (_disposed) return;
       if (healthy) {
         _wasConnected = true;
         state = const _Connected();
@@ -111,6 +116,7 @@ class ConnectionNotifier extends Notifier<ConnectionStatus> {
         _schedulePoll();
       }
     } catch (_) {
+      if (_disposed) return;
       state = _wasConnected
           ? const _Degraded('the selected period')
           : const _Unreachable();

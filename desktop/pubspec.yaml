@@ -21,9 +21,10 @@ version: 1.0.0+1
 environment:
   sdk: ^3.12.2
   # Color.withValues (29 call sites across the UI) landed in Flutter 3.27.
-  # Without this floor, an older SDK fails with a confusing "no such method"
-  # at build time instead of a clear pub version error.
-  flutter: ">=3.27.0"
+  # SemanticsData.flagsCollection (used in vault_tabs_test.dart) landed in
+  # Flutter 3.32. Without this floor, an older SDK fails with a confusing
+  # "no such method" at build time instead of a clear pub version error.
+  flutter: ">=3.32.0"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions

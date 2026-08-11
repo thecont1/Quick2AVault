@@ -47,7 +47,10 @@ class SnapshotNotifier extends AsyncNotifier<Snapshot> {
   }
 
   /// Force a refetch.
-  Future<void> refresh() async => state = await AsyncValue.guard(build);
+  Future<void> refresh() async {
+    ref.invalidateSelf();
+    await future;
+  }
 }
 
 final AsyncNotifierProvider<SnapshotNotifier, Snapshot> snapshotProvider =
@@ -67,7 +70,10 @@ class TreemapNotifier extends AsyncNotifier<TreemapData> {
     );
   }
 
-  Future<void> refresh() async => state = await AsyncValue.guard(build);
+  Future<void> refresh() async {
+    ref.invalidateSelf();
+    await future;
+  }
 }
 
 final AsyncNotifierProvider<TreemapNotifier, TreemapData> treemapProvider =
@@ -89,7 +95,10 @@ class TransactionsNotifier extends AsyncNotifier<List<Txn>> {
     );
   }
 
-  Future<void> refresh() async => state = await AsyncValue.guard(build);
+  Future<void> refresh() async {
+    ref.invalidateSelf();
+    await future;
+  }
 }
 
 final AsyncNotifierProvider<TransactionsNotifier, List<Txn>>
@@ -106,7 +115,10 @@ class PeriodsNotifier extends AsyncNotifier<Periods> {
     return api.periods();
   }
 
-  Future<void> refresh() async => state = await AsyncValue.guard(build);
+  Future<void> refresh() async {
+    ref.invalidateSelf();
+    await future;
+  }
 }
 
 final AsyncNotifierProvider<PeriodsNotifier, Periods> periodsProvider =
