@@ -295,8 +295,39 @@ export function generateLearningQuestions(
     if (remaining <= 0) break;
     if (!LEARNING_TRIGGERS.includes(ambiguity.kind)) continue;
     if (!(ambiguity.noveltyScore >= 0 && ambiguity.noveltyScore <= 1) || !ambiguity.why.trim()) continue;
-    const existing = db.prepare("SELECT 1 FROM training_reviews WHERE dedupe_key=?").get(ambiguity.dedupeKey);
-    if (existing) continue; // answered, ignored and open questions all dedupe
+
+    // WO12 phase 2: consult learned_rules for a standing 'reconciliation_decline'
+    // rule. If the user previously said "Don't link" for this candidate pair,
+    // never re-ask — the rule is the durable decision, the dedupe key is the
+    // transient one.
+    if (ambiguity.kind === "reconciliation-ambiguity") {
+      const declineRule = db
+        .prepare("SELECT 1 FROM learned_rules WHERE kind='reconciliation_decline' AND match_key=? AND active=1")
+        .get(ambiguity.dedupeKey);
+      if (declineRule) continue;
+    }
+
+    // WO12 phase 2: respect backoff_until. A question that was deferred with
+    // "Later" should re-ask after the backoff period expires. The old logic
+    // blocked ALL re-asks via the dedupe key, making "Later" equivalent to
+    // "never ask again."
+    const existing = db.prepare("SELECT answered_at, dismissed, backoff_until FROM training_reviews WHERE dedupe_key=?")
+      .get(ambiguity.dedupeKey) as
+      | { answered_at: string | null; dismissed: number; backoff_until: string | null }
+      | undefined;
+    if (existing) {
+      if (existing.answered_at || existing.dismissed) continue; // answered or dismissed — never re-ask
+      if (existing.backoff_until) {
+        // "Later" — re-ask only after the backoff period expires
+        const now = ports.clock.isoNow();
+        if (existing.backoff_until > now) continue; // still in backoff
+        // Backoff expired: clear the old row and allow re-asking
+        db.prepare("DELETE FROM training_reviews WHERE dedupe_key=?").run(ambiguity.dedupeKey);
+      } else {
+        // Open question with no backoff — still pending, don't re-ask
+        continue;
+      }
+    }
     const askedAt = ports.clock.isoNow();
     const inserted = db.prepare(
       `INSERT INTO training_reviews(question,context,trigger,options,dedupe_key,novelty_score,predicted_rule,why,created_at)
