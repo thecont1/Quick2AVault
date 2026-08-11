@@ -39,6 +39,46 @@ class LearningNotifier
   }
 
   Future<void> refresh() async => state = await AsyncValue.guard(build);
+
+  /// Optimistic toggle of the learning engine.
+  Future<void> toggle(VaultApi api) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final next = !current.enabled;
+    state = AsyncData((enabled: next, questions: current.questions));
+    try {
+      await api.toggleLearning(next);
+    } catch (_) {
+      state = AsyncData((enabled: current.enabled, questions: current.questions));
+    }
+  }
+
+  /// Add a new learning question (from SSE event).
+  void addQuestion(learning.LearningPrompt question) {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    if (current.questions.any((q) => q.id == question.id)) return;
+    state = AsyncData((
+      enabled: current.enabled,
+      questions: [question, ...current.questions],
+    ));
+  }
+
+  /// Remove a learning question by id (from SSE event or user action).
+  void removeQuestion(String id) {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    state = AsyncData((
+      enabled: current.enabled,
+      questions: current.questions.where((q) => q.id != id).toList(),
+    ));
+  }
+
+  /// Answer a learning question via the API and remove it.
+  Future<void> answerQuestion(VaultApi api, int id, String answer) async {
+    await api.answerLearning(id, answer);
+    removeQuestion('$id');
+  }
 }
 
 final AsyncNotifierProvider<LearningNotifier,
@@ -98,6 +138,22 @@ class SettingsBundleNotifier
   }
 
   Future<void> refresh() async => state = await AsyncValue.guard(build);
+
+  /// Optimistic settings update with rollback on failure.
+  Future<void> saveSettings(
+    VaultApi api,
+    settings.AppSettings before,
+    settings.AppSettings after,
+  ) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    state = AsyncData((settings: after, jurisdiction: current.jurisdiction));
+    try {
+      await api.saveFeatureSettings(before, after);
+    } catch (_) {
+      state = AsyncData((settings: before, jurisdiction: current.jurisdiction));
+    }
+  }
 }
 
 final AsyncNotifierProvider<SettingsBundleNotifier,

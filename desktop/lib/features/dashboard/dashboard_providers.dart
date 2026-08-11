@@ -8,7 +8,6 @@
 library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:logger/logger.dart';
 
 import '../../api.dart';
 import '../../core/providers.dart';

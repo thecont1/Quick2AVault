@@ -172,3 +172,10 @@ final Provider<EventService> sseServiceProvider = Provider<EventService>((ref) {
   ref.onDispose(service.dispose);
   return service;
 });
+
+/// Synchronous SSE connection state for widget consumption.
+final StreamProvider<SseConnectionState> sseConnectionStateProvider =
+    StreamProvider<SseConnectionState>((ref) {
+  final service = ref.watch(sseServiceProvider);
+  return service.connectionState;
+});

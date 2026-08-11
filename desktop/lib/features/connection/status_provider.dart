@@ -13,7 +13,6 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../api.dart';
 import '../../core/providers.dart';
 
 /// The daemon's reachability and auth state, as the client knows it.
