@@ -1,0 +1,9 @@
+{
+  "extends": "./daemon/tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./build",
+    "noEmit": true
+  },
+  "include": ["daemon/**/*.ts", "qa/**/*.ts", "scripts/**/*.ts"]
+}
