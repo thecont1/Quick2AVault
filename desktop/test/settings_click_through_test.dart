@@ -26,53 +26,68 @@ import 'package:quick2avault_desktop/widgets/person_editor.dart';
 
 /// Records every POST/PATCH/DELETE so the wire format is asserted, not assumed.
 class _Recorder {
-  final List<({String method, String path, Map<String, dynamic> body})> requests = [];
+  final List<({String method, String path, Map<String, dynamic> body})>
+  requests = [];
   Map<String, dynamic> resetResponse = {
     'scope': 'ledger',
-    'cleared': {'documents': 72, 'transactions': 78, 'entities': 4, 'learned_rules': 6},
+    'cleared': {
+      'documents': 72,
+      'transactions': 78,
+      'entities': 4,
+      'learned_rules': 6,
+    },
     'ai_available': true,
-    'note': 'Documents on disk were not touched. Drop them into the watched folder to rebuild the ledger.',
+    'note':
+        'Documents on disk were not touched. Drop them into the watched folder to rebuild the ledger.',
   };
   int resetStatus = 200;
-  Map<String, dynamic> settingsResponse = {'saved': [], 'cleared': [], 'ai_available': false};
+  Map<String, dynamic> settingsResponse = {
+    'saved': [],
+    'cleared': [],
+    'ai_available': false,
+  };
   int peopleStatus = 200;
   Map<String, dynamic> peopleResponse = {'changed': [], 'person': {}};
   int deleteStatus = 200;
-  Map<String, dynamic> deleteResponse = {'deleted': 'ent_x', 'reassigned_documents': 0};
+  Map<String, dynamic> deleteResponse = {
+    'deleted': 'ent_x',
+    'reassigned_documents': 0,
+  };
 
   VaultApi api() => VaultApi(
-        baseUrl: 'http://x',
-        token: 't',
-        client: MockClient((req) async {
-          final body = req.body.isEmpty
-              ? <String, dynamic>{}
-              : jsonDecode(req.body) as Map<String, dynamic>;
-          requests.add((method: req.method, path: req.url.path, body: body));
+    baseUrl: 'http://x',
+    token: 't',
+    client: MockClient((req) async {
+      final body = req.body.isEmpty
+          ? <String, dynamic>{}
+          : jsonDecode(req.body) as Map<String, dynamic>;
+      requests.add((method: req.method, path: req.url.path, body: body));
 
-          if (req.url.path == '/v1/reset') {
-            return http.Response(jsonEncode(resetResponse), resetStatus);
-          }
-          if (req.url.path == '/v1/settings') {
-            return http.Response(jsonEncode(settingsResponse), 200);
-          }
-          if (req.method == 'DELETE' && req.url.path.startsWith('/v1/people/')) {
-            return http.Response(jsonEncode(deleteResponse), deleteStatus);
-          }
-          if (req.method == 'PATCH' && req.url.path.startsWith('/v1/people/')) {
-            return http.Response(jsonEncode(peopleResponse), peopleStatus);
-          }
-          return http.Response('{}', 404);
-        }),
-      );
+      if (req.url.path == '/v1/reset') {
+        return http.Response(jsonEncode(resetResponse), resetStatus);
+      }
+      if (req.url.path == '/v1/settings') {
+        return http.Response(jsonEncode(settingsResponse), 200);
+      }
+      if (req.method == 'DELETE' && req.url.path.startsWith('/v1/people/')) {
+        return http.Response(jsonEncode(deleteResponse), deleteStatus);
+      }
+      if (req.method == 'PATCH' && req.url.path.startsWith('/v1/people/')) {
+        return http.Response(jsonEncode(peopleResponse), peopleStatus);
+      }
+      return http.Response('{}', 404);
+    }),
+  );
 }
 
-Future<void> _pump(WidgetTester t, Widget child) => t.pumpWidget(
-      MaterialApp(home: Scaffold(body: child)),
-    );
+Future<void> _pump(WidgetTester t, Widget child) =>
+    t.pumpWidget(MaterialApp(home: Scaffold(body: child)));
 
 void main() {
   group('Danger Zone', () {
-    testWidgets('reset ledger requires typing the confirm phrase verbatim', (t) async {
+    testWidgets('reset ledger requires typing the confirm phrase verbatim', (
+      t,
+    ) async {
       final rec = _Recorder();
       await _pump(t, DangerZone(api: rec.api()));
 
@@ -86,7 +101,11 @@ void main() {
       expect(resetButtons, findsOneWidget);
 
       // No request fired just from opening the dialog.
-      expect(rec.requests, isEmpty, reason: 'opening the confirm dialog must not call the API');
+      expect(
+        rec.requests,
+        isEmpty,
+        reason: 'opening the confirm dialog must not call the API',
+      );
     });
 
     testWidgets('cancel posts nothing', (t) async {
@@ -101,31 +120,43 @@ void main() {
       expect(rec.requests, isEmpty, reason: 'Cancel must not call /v1/reset');
     });
 
-    testWidgets('confirming posts scope + confirm:RESET and renders the daemon response', (t) async {
-      final rec = _Recorder();
-      await _pump(t, DangerZone(api: rec.api()));
+    testWidgets(
+      'confirming posts scope + confirm:RESET and renders the daemon response',
+      (t) async {
+        final rec = _Recorder();
+        await _pump(t, DangerZone(api: rec.api()));
 
-      await t.tap(find.text('Reset ledger'));
-      await t.pumpAndSettle();
-      await t.tap(find.widgetWithText(FilledButton, 'Reset ledger'));
-      await t.pumpAndSettle();
+        await t.tap(find.text('Reset ledger'));
+        await t.pumpAndSettle();
+        await t.tap(find.widgetWithText(FilledButton, 'Reset ledger'));
+        await t.pumpAndSettle();
 
-      expect(rec.requests, hasLength(1));
-      expect(rec.requests.first.method, 'POST');
-      expect(rec.requests.first.path, '/v1/reset');
-      expect(rec.requests.first.body['scope'], 'ledger');
-      expect(rec.requests.first.body['confirm'], 'RESET', reason: 'must be the literal word, not a boolean flag');
+        expect(rec.requests, hasLength(1));
+        expect(rec.requests.first.method, 'POST');
+        expect(rec.requests.first.path, '/v1/reset');
+        expect(rec.requests.first.body['scope'], 'ledger');
+        expect(
+          rec.requests.first.body['confirm'],
+          'RESET',
+          reason: 'must be the literal word, not a boolean flag',
+        );
 
-      // The success message renders the daemon's own counts, not a canned string.
-      expect(find.textContaining('72'), findsOneWidget);
-      expect(find.textContaining('78'), findsOneWidget);
-    });
+        // The success message renders the daemon's own counts, not a canned string.
+        expect(find.textContaining('72'), findsOneWidget);
+        expect(find.textContaining('78'), findsOneWidget);
+      },
+    );
 
     testWidgets('factory reset also posts scope:factory', (t) async {
       final rec = _Recorder()
         ..resetResponse = {
           'scope': 'factory',
-          'cleared': {'documents': 0, 'transactions': 0, 'entities': 0, 'learned_rules': 0},
+          'cleared': {
+            'documents': 0,
+            'transactions': 0,
+            'entities': 0,
+            'learned_rules': 0,
+          },
           'ai_available': false,
         };
       await _pump(t, DangerZone(api: rec.api()));
@@ -153,7 +184,9 @@ void main() {
   });
 
   group('Clear API key', () {
-    testWidgets('clearApiKey sends an empty string, not a dropped field', (t) async {
+    testWidgets('clearApiKey sends an empty string, not a dropped field', (
+      t,
+    ) async {
       final rec = _Recorder();
       final api = rec.api();
       // These tests call the API directly (no widget tree), so they must
@@ -169,7 +202,9 @@ void main() {
       expect(rec.requests.first.body['api_key'], '');
     });
 
-    testWidgets('saving an unrelated field does not send api_key at all', (t) async {
+    testWidgets('saving an unrelated field does not send api_key at all', (
+      t,
+    ) async {
       final rec = _Recorder();
       final api = rec.api();
       await t.runAsync(() => api.saveSettings(model: 'claude-sonnet-5'));
@@ -195,29 +230,25 @@ void main() {
   });
 
   group('Person editor', () {
-    Map<String, dynamic> person({String id = 'ent_a', String name = 'Alice'}) => {
-          'id': id,
-          'display_name': name,
-          'subtype': null,
-          'is_member': 0,
-        };
+    Map<String, dynamic> person({String id = 'ent_a', String name = 'Alice'}) =>
+        {'id': id, 'display_name': name, 'subtype': null, 'is_member': 0};
 
-    testWidgets('rename posts PATCH with display_name and shows alias-kept copy', (t) async {
-      final rec = _Recorder();
-      await _pump(
-        t,
-        PersonEditor(api: rec.api(), person: person()),
-      );
+    testWidgets(
+      'rename posts PATCH with display_name and shows alias-kept copy',
+      (t) async {
+        final rec = _Recorder();
+        await _pump(t, PersonEditor(api: rec.api(), person: person()));
 
-      await t.enterText(find.byType(TextField).first, 'Alicia');
-      await t.tap(find.text('Save'));
-      await t.pumpAndSettle();
+        await t.enterText(find.byType(TextField).first, 'Alicia');
+        await t.tap(find.text('Save'));
+        await t.pumpAndSettle();
 
-      expect(rec.requests, hasLength(1));
-      expect(rec.requests.first.method, 'PATCH');
-      expect(rec.requests.first.path, '/v1/people/ent_a');
-      expect(rec.requests.first.body['display_name'], 'Alicia');
-    });
+        expect(rec.requests, hasLength(1));
+        expect(rec.requests.first.method, 'PATCH');
+        expect(rec.requests.first.path, '/v1/people/ent_a');
+        expect(rec.requests.first.body['display_name'], 'Alicia');
+      },
+    );
 
     testWidgets('the helper text explains the alias is kept', (t) async {
       final rec = _Recorder();
@@ -225,25 +256,29 @@ void main() {
       expect(find.textContaining('alias'), findsOneWidget);
     });
 
-    testWidgets('renaming onto an existing person surfaces the merge-refusal, not a crash', (t) async {
-      final rec = _Recorder()
-        ..peopleStatus = 409
-        ..peopleResponse = {
-          'error': 'name_taken',
-          'message': '"Bob" already exists. Use /v1/people/merge to combine them.',
-          'existing_id': 'ent_b',
-        };
-      await _pump(t, PersonEditor(api: rec.api(), person: person()));
+    testWidgets(
+      'renaming onto an existing person surfaces the merge-refusal, not a crash',
+      (t) async {
+        final rec = _Recorder()
+          ..peopleStatus = 409
+          ..peopleResponse = {
+            'error': 'name_taken',
+            'message':
+                '"Bob" already exists. Use /v1/people/merge to combine them.',
+            'existing_id': 'ent_b',
+          };
+        await _pump(t, PersonEditor(api: rec.api(), person: person()));
 
-      await t.enterText(find.byType(TextField).first, 'Bob');
-      await t.tap(find.text('Save'));
-      await t.pumpAndSettle();
+        await t.enterText(find.byType(TextField).first, 'Bob');
+        await t.tap(find.text('Save'));
+        await t.pumpAndSettle();
 
-      expect(find.textContaining('already exists'), findsOneWidget);
-      expect(find.textContaining('merge'), findsOneWidget);
-      // flutter_test fails the test automatically on any uncaught exception
-      // during pump/settle, so reaching this line means none escaped.
-    });
+        expect(find.textContaining('already exists'), findsOneWidget);
+        expect(find.textContaining('merge'), findsOneWidget);
+        // flutter_test fails the test automatically on any uncaught exception
+        // during pump/settle, so reaching this line means none escaped.
+      },
+    );
 
     testWidgets('making owner sends is_owner:true', (t) async {
       final rec = _Recorder();
@@ -256,29 +291,36 @@ void main() {
       expect(rec.requests.first.body['is_owner'], isTrue);
     });
 
-    testWidgets('deleting a referenced person renders the 409 explanation with a force option', (t) async {
-      final rec = _Recorder()
-        ..deleteStatus = 409
-        ..deleteResponse = {
-          'error': 'person_in_use',
-          'message': 'Alice is named on 55 document(s). Re-run with ?force=1 to unlink and delete.',
-          'documents': 55,
-        };
-      await _pump(t, PersonEditor(api: rec.api(), person: person()));
+    testWidgets(
+      'deleting a referenced person renders the 409 explanation with a force option',
+      (t) async {
+        final rec = _Recorder()
+          ..deleteStatus = 409
+          ..deleteResponse = {
+            'error': 'person_in_use',
+            'message':
+                'Alice is named on 55 document(s). Re-run with ?force=1 to unlink and delete.',
+            'documents': 55,
+          };
+        await _pump(t, PersonEditor(api: rec.api(), person: person()));
 
-      await t.tap(find.text('Delete'));
-      await t.pumpAndSettle();
-      // Confirm the initial "are you sure" dialog.
-      await t.tap(find.widgetWithText(FilledButton, 'Delete'));
-      await t.pumpAndSettle();
+        await t.tap(find.text('Delete'));
+        await t.pumpAndSettle();
+        // Confirm the initial "are you sure" dialog.
+        await t.tap(find.widgetWithText(FilledButton, 'Delete'));
+        await t.pumpAndSettle();
 
-      // The 409 explanation, with the document count, must reach the screen.
-      expect(find.textContaining('55'), findsOneWidget);
-      expect(find.textContaining('Unidentified'), findsOneWidget,
-          reason: 'force path must state what happens to the evidence links');
+        // The 409 explanation, with the document count, must reach the screen.
+        expect(find.textContaining('55'), findsOneWidget);
+        expect(
+          find.textContaining('Unidentified'),
+          findsOneWidget,
+          reason: 'force path must state what happens to the evidence links',
+        );
 
-      // The force option is offered, not just an error dead-end.
-      expect(find.text('Unlink and delete'), findsOneWidget);
-    });
+        // The force option is offered, not just an error dead-end.
+        expect(find.text('Unlink and delete'), findsOneWidget);
+      },
+    );
   });
 }

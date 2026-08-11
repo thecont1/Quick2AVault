@@ -71,7 +71,8 @@ class _AuthError extends ConnectionStatus {
   @override
   bool get isAuthError => true;
   @override
-  String? get banner => 'Cannot read the vault — the daemon rejected this '
+  String? get banner =>
+      'Cannot read the vault — the daemon rejected this '
       'app\'s token. Your data is intact; the totals below are not real.';
 }
 
@@ -144,7 +145,7 @@ class ConnectionNotifier extends Notifier<ConnectionStatus> {
 
 /// The daemon connection status.
 final NotifierProvider<ConnectionNotifier, ConnectionStatus>
-    connectionStatusProvider =
+connectionStatusProvider =
     NotifierProvider<ConnectionNotifier, ConnectionStatus>(
-  ConnectionNotifier.new,
-);
+      ConnectionNotifier.new,
+    );

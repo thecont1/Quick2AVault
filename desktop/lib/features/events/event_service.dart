@@ -92,33 +92,36 @@ class EventService {
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen(
-        (line) {
-          if (line.startsWith('event:')) {
-            type = line.substring(6).trim();
-          } else if (line.startsWith('data:')) {
-            final raw = line.substring(5).trim();
-            if (type != null && raw.isNotEmpty) {
-              try {
-                _eventsController.add(
-                  VaultEvent(type!, jsonDecode(raw) as Map<String, dynamic>),
-                );
-              } catch (_) {
-                // keepalive or malformed frame — skip
+            (line) {
+              if (line.startsWith('event:')) {
+                type = line.substring(6).trim();
+              } else if (line.startsWith('data:')) {
+                final raw = line.substring(5).trim();
+                if (type != null && raw.isNotEmpty) {
+                  try {
+                    _eventsController.add(
+                      VaultEvent(
+                        type!,
+                        jsonDecode(raw) as Map<String, dynamic>,
+                      ),
+                    );
+                  } catch (_) {
+                    // keepalive or malformed frame — skip
+                  }
+                }
+              } else if (line.isEmpty) {
+                type = null;
               }
-            }
-          } else if (line.isEmpty) {
-            type = null;
-          }
-        },
-        onDone: () {
-          _subscription = null;
-          if (!_disposed) _scheduleReconnect();
-        },
-        onError: (_) {
-          _subscription = null;
-          if (!_disposed) _scheduleReconnect();
-        },
-      );
+            },
+            onDone: () {
+              _subscription = null;
+              if (!_disposed) _scheduleReconnect();
+            },
+            onError: (_) {
+              _subscription = null;
+              if (!_disposed) _scheduleReconnect();
+            },
+          );
     } catch (_) {
       _cleanupClient();
       if (!_disposed) _scheduleReconnect();
@@ -133,8 +136,7 @@ class EventService {
     logger?.w('SSE reconnecting (attempt $_reconnectAttempts)');
 
     // Exponential backoff: 2s, 4s, 8s, 16s, capped at 30s.
-    final seconds = (1 << (_reconnectAttempts.clamp(0, 4) + 1))
-        .clamp(2, 30);
+    final seconds = (1 << (_reconnectAttempts.clamp(0, 4) + 1)).clamp(2, 30);
     final delay = Duration(seconds: seconds);
 
     _reconnectAttempts++;
@@ -176,6 +178,6 @@ final Provider<EventService> sseServiceProvider = Provider<EventService>((ref) {
 /// Synchronous SSE connection state for widget consumption.
 final StreamProvider<SseConnectionState> sseConnectionStateProvider =
     StreamProvider<SseConnectionState>((ref) {
-  final service = ref.watch(sseServiceProvider);
-  return service.connectionState;
-});
+      final service = ref.watch(sseServiceProvider);
+      return service.connectionState;
+    });

@@ -58,8 +58,12 @@ class _IntakeQueueViewState extends State<IntakeQueueView> {
       // else sorted by recency. Active items (processing, queued) are shown
       // but most users will only look here when something needs attention.
       events.sort((a, b) {
-        final aNeeds = a.needsPassword ? 0 : (a.disposition == 'irrelevant' ? 1 : 2);
-        final bNeeds = b.needsPassword ? 0 : (b.disposition == 'irrelevant' ? 1 : 2);
+        final aNeeds = a.needsPassword
+            ? 0
+            : (a.disposition == 'irrelevant' ? 1 : 2);
+        final bNeeds = b.needsPassword
+            ? 0
+            : (b.disposition == 'irrelevant' ? 1 : 2);
         if (aNeeds != bNeeds) return aNeeds.compareTo(bNeeds);
         return b.id.compareTo(a.id);
       });
@@ -69,7 +73,11 @@ class _IntakeQueueViewState extends State<IntakeQueueView> {
         _error = null;
       });
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = VaultError.from(e).message; });
+      if (mounted)
+        setState(() {
+          _loading = false;
+          _error = VaultError.from(e).message;
+        });
     }
   }
 
@@ -91,9 +99,9 @@ class _IntakeQueueViewState extends State<IntakeQueueView> {
     } catch (e) {
       if (mounted) setState(() => _submitting[item.id] = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(VaultError.from(e).message)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(VaultError.from(e).message)));
       }
     }
   }
@@ -106,9 +114,9 @@ class _IntakeQueueViewState extends State<IntakeQueueView> {
       widget.onChanged?.call();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(VaultError.from(e).message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(VaultError.from(e).message)));
     }
   }
 
@@ -122,7 +130,10 @@ class _IntakeQueueViewState extends State<IntakeQueueView> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: Text(_error!, style: TextStyle(fontSize: 12, color: VaultColors.tertiary)),
+          child: Text(
+            _error!,
+            style: TextStyle(fontSize: 12, color: VaultColors.tertiary),
+          ),
         ),
       );
     }
@@ -132,32 +143,44 @@ class _IntakeQueueViewState extends State<IntakeQueueView> {
     }
 
     // Split into sections: needs attention first, then recent activity.
-    final needsAttention = _items.where((e) => e.needsPassword || e.disposition == 'irrelevant').toList();
-    final recent = _items.where((e) => !e.needsPassword && e.disposition != 'irrelevant').take(20).toList();
+    final needsAttention = _items
+        .where((e) => e.needsPassword || e.disposition == 'irrelevant')
+        .toList();
+    final recent = _items
+        .where((e) => !e.needsPassword && e.disposition != 'irrelevant')
+        .take(20)
+        .toList();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 30),
       children: [
         if (needsAttention.isNotEmpty) ...[
           _SectionHeader('Needs attention'),
-          ...needsAttention.map((item) => _IntakeRow(
-            item: item,
-            passwordController: _passwordControllers.putIfAbsent(item.id, () => TextEditingController()),
-            submitting: _submitting[item.id] ?? false,
-            onSubmitPassword: () => _submitPassword(item),
-            onRestore: () => _restore(item),
-          )),
+          ...needsAttention.map(
+            (item) => _IntakeRow(
+              item: item,
+              passwordController: _passwordControllers.putIfAbsent(
+                item.id,
+                () => TextEditingController(),
+              ),
+              submitting: _submitting[item.id] ?? false,
+              onSubmitPassword: () => _submitPassword(item),
+              onRestore: () => _restore(item),
+            ),
+          ),
           const SizedBox(height: 20),
         ],
         if (recent.isNotEmpty) ...[
           _SectionHeader('Recent'),
-          ...recent.map((item) => _IntakeRow(
-            item: item,
-            passwordController: null,
-            submitting: false,
-            onSubmitPassword: null,
-            onRestore: null,
-          )),
+          ...recent.map(
+            (item) => _IntakeRow(
+              item: item,
+              passwordController: null,
+              submitting: false,
+              onSubmitPassword: null,
+              onRestore: null,
+            ),
+          ),
         ],
       ],
     );
@@ -212,9 +235,7 @@ class _IntakeRow extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.fromLTRB(13, 11, 13, 11),
-      decoration: vaultCard(
-        border: VaultColors.warn.withValues(alpha: 0.4),
-      ),
+      decoration: vaultCard(border: VaultColors.warn.withValues(alpha: 0.4)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -227,7 +248,10 @@ class _IntakeRow extends StatelessWidget {
                   item.filename,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12, color: VaultColors.primary),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: VaultColors.primary,
+                  ),
                 ),
               ),
               Text(
@@ -245,18 +269,30 @@ class _IntakeRow extends StatelessWidget {
                   child: TextField(
                     controller: passwordController,
                     obscureText: true,
-                    style: const TextStyle(fontSize: 12, color: VaultColors.primary),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: VaultColors.primary,
+                    ),
                     decoration: InputDecoration(
                       hintText: 'Password',
-                      hintStyle: TextStyle(fontSize: 11, color: VaultColors.tertiary),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      hintStyle: TextStyle(
+                        fontSize: 11,
+                        color: VaultColors.tertiary,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(4),
                         borderSide: BorderSide(color: VaultColors.line),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(4),
-                        borderSide: BorderSide(color: VaultColors.accent, width: 1),
+                        borderSide: BorderSide(
+                          color: VaultColors.accent,
+                          width: 1,
+                        ),
                       ),
                     ),
                     onSubmitted: (_) => onSubmitPassword?.call(),
@@ -267,17 +303,34 @@ class _IntakeRow extends StatelessWidget {
               SizedBox(
                 height: 28,
                 child: ElevatedButton(
-                  onPressed: submitting || onSubmitPassword == null ? null : onSubmitPassword,
+                  onPressed: submitting || onSubmitPassword == null
+                      ? null
+                      : onSubmitPassword,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: VaultColors.accent,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4),
+                    ),
                     elevation: 0,
                   ),
                   child: submitting
-                    ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Text('Unlock', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
+                      ? const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'Unlock',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                 ),
               ),
             ],
@@ -307,7 +360,10 @@ class _IntakeRow extends StatelessWidget {
                   item.filename,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 12, color: VaultColors.primary),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: VaultColors.primary,
+                  ),
                 ),
                 if (item.reason != null && isIrrelevant)
                   Padding(
@@ -316,7 +372,11 @@ class _IntakeRow extends StatelessWidget {
                       item.reason!,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 10.5, color: VaultColors.tertiary, height: 1.4),
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: VaultColors.tertiary,
+                        height: 1.4,
+                      ),
                     ),
                   ),
               ],
@@ -333,7 +393,11 @@ class _IntakeRow extends StatelessWidget {
               onTap: onRestore,
               child: Text(
                 'Restore',
-                style: TextStyle(fontSize: 10.5, color: VaultColors.accent, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: VaultColors.accent,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ],
@@ -361,10 +425,7 @@ class _StateDot extends StatelessWidget {
     return Container(
       width: 7,
       height: 7,
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-      ),
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle),
     );
   }
 }

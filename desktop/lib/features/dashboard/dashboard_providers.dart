@@ -37,7 +37,9 @@ class SnapshotNotifier extends AsyncNotifier<Snapshot> {
       rethrow;
     } catch (e, st) {
       logger.w('Snapshot: fetch failed', error: e, stackTrace: st);
-      ref.read(connectionStatusProvider.notifier).markDegraded(
+      ref
+          .read(connectionStatusProvider.notifier)
+          .markDegraded(
             period.month ?? period.fy ?? period.quick ?? 'the selected period',
           );
       rethrow;
@@ -48,11 +50,8 @@ class SnapshotNotifier extends AsyncNotifier<Snapshot> {
   Future<void> refresh() async => state = await AsyncValue.guard(build);
 }
 
-final AsyncNotifierProvider<SnapshotNotifier, Snapshot>
-    snapshotProvider =
-    AsyncNotifierProvider<SnapshotNotifier, Snapshot>(
-  SnapshotNotifier.new,
-);
+final AsyncNotifierProvider<SnapshotNotifier, Snapshot> snapshotProvider =
+    AsyncNotifierProvider<SnapshotNotifier, Snapshot>(SnapshotNotifier.new);
 
 // ─── Treemap ────────────────────────────────────────────────────────────
 
@@ -71,11 +70,8 @@ class TreemapNotifier extends AsyncNotifier<TreemapData> {
   Future<void> refresh() async => state = await AsyncValue.guard(build);
 }
 
-final AsyncNotifierProvider<TreemapNotifier, TreemapData>
-    treemapProvider =
-    AsyncNotifierProvider<TreemapNotifier, TreemapData>(
-  TreemapNotifier.new,
-);
+final AsyncNotifierProvider<TreemapNotifier, TreemapData> treemapProvider =
+    AsyncNotifierProvider<TreemapNotifier, TreemapData>(TreemapNotifier.new);
 
 // ─── Transactions ───────────────────────────────────────────────────────
 
@@ -97,8 +93,7 @@ class TransactionsNotifier extends AsyncNotifier<List<Txn>> {
 }
 
 final AsyncNotifierProvider<TransactionsNotifier, List<Txn>>
-    transactionsProvider =
-    AsyncNotifierProvider<TransactionsNotifier, List<Txn>>(
+transactionsProvider = AsyncNotifierProvider<TransactionsNotifier, List<Txn>>(
   TransactionsNotifier.new,
 );
 
@@ -114,8 +109,5 @@ class PeriodsNotifier extends AsyncNotifier<Periods> {
   Future<void> refresh() async => state = await AsyncValue.guard(build);
 }
 
-final AsyncNotifierProvider<PeriodsNotifier, Periods>
-    periodsProvider =
-    AsyncNotifierProvider<PeriodsNotifier, Periods>(
-  PeriodsNotifier.new,
-);
+final AsyncNotifierProvider<PeriodsNotifier, Periods> periodsProvider =
+    AsyncNotifierProvider<PeriodsNotifier, Periods>(PeriodsNotifier.new);

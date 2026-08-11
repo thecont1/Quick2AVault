@@ -21,46 +21,51 @@ import 'package:quick2avault_desktop/widgets/popup_view.dart';
 import 'package:quick2avault_desktop/widgets/period_bar.dart';
 
 Snapshot _snap(int spendMinor, String label) => Snapshot(
-      spendingMinor: spendMinor,
-      incomeMinor: 0,
-      transfersMinor: 0,
-      documents: 71,
-      transactions: 38,
-      entities: 81,
-      evidenceLinks: 79,
-      period: Period(key: label, label: label),
-    );
+  spendingMinor: spendMinor,
+  incomeMinor: 0,
+  transfersMinor: 0,
+  documents: 71,
+  transactions: 38,
+  entities: 81,
+  evidenceLinks: 79,
+  period: Period(key: label, label: label),
+);
 
 Widget _popup({String? authError, required Snapshot snapshot}) => MaterialApp(
-      home: SizedBox(
-        width: 420,
-        height: 760,
-        child: PopupView(
-          snapshot: snapshot,
-          authError: authError,
-          periods: Periods.empty,
-          selection: PeriodSelection.thisMonth,
-          onPeriodChanged: (_) {},
-          txns: const [],
-          feed: const [],
-          connected: false,
-          onOpenFull: () {},
-          onQuit: () {},
-          onSetup: () {},
-          onReview: () {},
-          onRefresh: () {},
-          onToggleLearning: () {},
-        ),
-      ),
-    );
+  home: SizedBox(
+    width: 420,
+    height: 760,
+    child: PopupView(
+      snapshot: snapshot,
+      authError: authError,
+      periods: Periods.empty,
+      selection: PeriodSelection.thisMonth,
+      onPeriodChanged: (_) {},
+      txns: const [],
+      feed: const [],
+      connected: false,
+      onOpenFull: () {},
+      onQuit: () {},
+      onSetup: () {},
+      onReview: () {},
+      onRefresh: () {},
+      onToggleLearning: () {},
+    ),
+  ),
+);
 
 void main() {
-  testWidgets('a stale banner is shown when figures are frozen', (tester) async {
-    await tester.pumpWidget(_popup(
-      snapshot: _snap(1789990, 'July 2026'),
-      authError: 'Daemon unreachable — showing the last figures fetched, '
-          'not 2026-08.',
-    ));
+  testWidgets('a stale banner is shown when figures are frozen', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _popup(
+        snapshot: _snap(1789990, 'July 2026'),
+        authError:
+            'Daemon unreachable — showing the last figures fetched, '
+            'not 2026-08.',
+      ),
+    );
     await tester.pumpAndSettle();
 
     // The user must be told the number does not describe their selection.
@@ -81,7 +86,9 @@ void main() {
     final api = VaultApi(
       baseUrl: 'http://127.0.0.1:9',
       token: 't',
-      client: MockClient((_) async => throw const FakeSocketException('refused')),
+      client: MockClient(
+        (_) async => throw const FakeSocketException('refused'),
+      ),
     );
     await expectLater(
       api.snapshot(period: 'month', month: '2026-08'),
@@ -93,10 +100,16 @@ void main() {
     final api = VaultApi(
       baseUrl: 'http://127.0.0.1:9',
       token: 't',
-      client: MockClient((_) async => throw const FakeSocketException('refused')),
+      client: MockClient(
+        (_) async => throw const FakeSocketException('refused'),
+      ),
     );
-    expect(await api.health(), isFalse,
-        reason: 'the reconnect loop depends on this returning false, not throwing');
+    expect(
+      await api.health(),
+      isFalse,
+      reason:
+          'the reconnect loop depends on this returning false, not throwing',
+    );
   });
 
   test('a 200 with a different period yields different figures', () async {
@@ -114,7 +127,10 @@ void main() {
             'income_minor': 0,
             'transfers_minor': 0,
             'counts': {
-              'documents': 1, 'transactions': 1, 'entities': 1, 'evidence_links': 1,
+              'documents': 1,
+              'transactions': 1,
+              'entities': 1,
+              'evidence_links': 1,
             },
             'period': {'key': 'x', 'label': 'x'},
           }),
@@ -128,8 +144,11 @@ void main() {
     final aug = await api.snapshot(period: 'month', month: '2026-08');
     expect(lastQuery, contains('month=2026-08'));
 
-    expect(jul.spendingMinor, isNot(aug.spendingMinor),
-        reason: 'the period must reach the wire, or the picker is decorative');
+    expect(
+      jul.spendingMinor,
+      isNot(aug.spendingMinor),
+      reason: 'the period must reach the wire, or the picker is decorative',
+    );
   });
 }
 

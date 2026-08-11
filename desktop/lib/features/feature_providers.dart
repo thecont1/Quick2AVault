@@ -19,9 +19,13 @@ import '../../features/settings/state.dart' as settings;
 
 /// The learning state: open questions and whether the engine is on.
 class LearningNotifier
-    extends AsyncNotifier<({bool enabled, List<learning.LearningPrompt> questions})> {
+    extends
+        AsyncNotifier<
+          ({bool enabled, List<learning.LearningPrompt> questions})
+        > {
   @override
-  Future<({bool enabled, List<learning.LearningPrompt> questions})> build() async {
+  Future<({bool enabled, List<learning.LearningPrompt> questions})>
+  build() async {
     final api = ref.watch(vaultApiProvider);
     final result = await api.learning();
     final questions = result.questions
@@ -49,7 +53,10 @@ class LearningNotifier
     try {
       await api.toggleLearning(next);
     } catch (_) {
-      state = AsyncData((enabled: current.enabled, questions: current.questions));
+      state = AsyncData((
+        enabled: current.enabled,
+        questions: current.questions,
+      ));
     }
   }
 
@@ -81,12 +88,15 @@ class LearningNotifier
   }
 }
 
-final AsyncNotifierProvider<LearningNotifier,
-    ({bool enabled, List<learning.LearningPrompt> questions})> learningProvider =
-    AsyncNotifierProvider<LearningNotifier,
-        ({bool enabled, List<learning.LearningPrompt> questions})>(
-  LearningNotifier.new,
-);
+final AsyncNotifierProvider<
+  LearningNotifier,
+  ({bool enabled, List<learning.LearningPrompt> questions})
+>
+learningProvider =
+    AsyncNotifierProvider<
+      LearningNotifier,
+      ({bool enabled, List<learning.LearningPrompt> questions})
+    >(LearningNotifier.new);
 
 // ─── Intake ─────────────────────────────────────────────────────────────
 
@@ -100,12 +110,11 @@ class IntakeStatusNotifier extends AsyncNotifier<List<intake.IntakeItem>> {
   Future<void> refresh() async => state = await AsyncValue.guard(build);
 }
 
-final AsyncNotifierProvider<IntakeStatusNotifier,
-    List<intake.IntakeItem>> intakeStatusProvider =
-    AsyncNotifierProvider<IntakeStatusNotifier,
-        List<intake.IntakeItem>>(
-  IntakeStatusNotifier.new,
-);
+final AsyncNotifierProvider<IntakeStatusNotifier, List<intake.IntakeItem>>
+intakeStatusProvider =
+    AsyncNotifierProvider<IntakeStatusNotifier, List<intake.IntakeItem>>(
+      IntakeStatusNotifier.new,
+    );
 
 // ─── Entities ───────────────────────────────────────────────────────────
 
@@ -119,20 +128,27 @@ class EntitiesNotifier extends AsyncNotifier<List<people.EntitySummary>> {
   Future<void> refresh() async => state = await AsyncValue.guard(build);
 }
 
-final AsyncNotifierProvider<EntitiesNotifier,
-    List<people.EntitySummary>> entitiesProvider =
-    AsyncNotifierProvider<EntitiesNotifier,
-        List<people.EntitySummary>>(
-  EntitiesNotifier.new,
-);
+final AsyncNotifierProvider<EntitiesNotifier, List<people.EntitySummary>>
+entitiesProvider =
+    AsyncNotifierProvider<EntitiesNotifier, List<people.EntitySummary>>(
+      EntitiesNotifier.new,
+    );
 
 // ─── Settings ───────────────────────────────────────────────────────────
 
 class SettingsBundleNotifier
-    extends AsyncNotifier<({settings.AppSettings settings, settings.JurisdictionPack jurisdiction})> {
+    extends
+        AsyncNotifier<
+          ({
+            settings.AppSettings settings,
+            settings.JurisdictionPack jurisdiction,
+          })
+        > {
   @override
-  Future<({settings.AppSettings settings, settings.JurisdictionPack jurisdiction})>
-      build() async {
+  Future<
+    ({settings.AppSettings settings, settings.JurisdictionPack jurisdiction})
+  >
+  build() async {
     final api = ref.watch(vaultApiProvider);
     return api.featureSettingsBundle();
   }
@@ -156,10 +172,12 @@ class SettingsBundleNotifier
   }
 }
 
-final AsyncNotifierProvider<SettingsBundleNotifier,
-    ({settings.AppSettings settings, settings.JurisdictionPack jurisdiction})>
-    settingsBundleProvider =
-    AsyncNotifierProvider<SettingsBundleNotifier,
-        ({settings.AppSettings settings, settings.JurisdictionPack jurisdiction})>(
-  SettingsBundleNotifier.new,
-);
+final AsyncNotifierProvider<
+  SettingsBundleNotifier,
+  ({settings.AppSettings settings, settings.JurisdictionPack jurisdiction})
+>
+settingsBundleProvider =
+    AsyncNotifierProvider<
+      SettingsBundleNotifier,
+      ({settings.AppSettings settings, settings.JurisdictionPack jurisdiction})
+    >(SettingsBundleNotifier.new);

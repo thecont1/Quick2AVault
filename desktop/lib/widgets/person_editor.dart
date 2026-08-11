@@ -91,9 +91,14 @@ class _PersonEditorState extends State<PersonEditor> {
           'but lose the link.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Delete'),
           ),
@@ -123,9 +128,14 @@ class _PersonEditorState extends State<PersonEditor> {
             'not dropped.',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFDC2626),
+              ),
               onPressed: () => Navigator.pop(ctx, true),
               child: const Text('Unlink and delete'),
             ),
@@ -180,7 +190,9 @@ class _PersonEditorState extends State<PersonEditor> {
             const SizedBox(height: 6),
             CheckboxListTile(
               value: _isOwner,
-              onChanged: _busy ? null : (v) => setState(() => _isOwner = v ?? false),
+              onChanged: _busy
+                  ? null
+                  : (v) => setState(() => _isOwner = v ?? false),
               title: const Text('This is me', style: TextStyle(fontSize: 13)),
               subtitle: const Text(
                 'Only one person can be the owner.',
@@ -200,7 +212,10 @@ class _PersonEditorState extends State<PersonEditor> {
                 ),
                 child: Text(
                   _error!,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFFDC2626),
+                  ),
                 ),
               ),
             ],
@@ -224,7 +239,10 @@ class _PersonEditorState extends State<PersonEditor> {
               ? const SizedBox(
                   width: 14,
                   height: 14,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
                 )
               : const Text('Save'),
         ),

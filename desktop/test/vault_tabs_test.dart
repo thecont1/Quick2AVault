@@ -16,20 +16,19 @@ Widget _bar({
   ValueChanged<VaultTab>? onChanged,
   int reviewCount = 0,
   Set<VaultTab> disabled = const {},
-}) =>
-    MaterialApp(
-      home: Scaffold(
-        body: SizedBox(
-          width: 1360,
-          child: VaultTabBar(
-            current: current,
-            onChanged: onChanged ?? (_) {},
-            reviewCount: reviewCount,
-            disabled: disabled,
-          ),
-        ),
+}) => MaterialApp(
+  home: Scaffold(
+    body: SizedBox(
+      width: 1360,
+      child: VaultTabBar(
+        current: current,
+        onChanged: onChanged ?? (_) {},
+        reviewCount: reviewCount,
+        disabled: disabled,
       ),
-    );
+    ),
+  ),
+);
 
 void main() {
   testWidgets('every surface is reachable from the tab bar', (tester) async {
@@ -38,8 +37,11 @@ void main() {
 
     // The point of the refactor: nothing is hidden behind the popup.
     for (final t in VaultTab.values) {
-      expect(find.text(t.label), findsOneWidget,
-          reason: '${t.label} must be reachable from the full window');
+      expect(
+        find.text(t.label),
+        findsOneWidget,
+        reason: '${t.label} must be reachable from the full window',
+      );
     }
   });
 
@@ -59,10 +61,9 @@ void main() {
 
   testWidgets('a disabled tab does not fire', (tester) async {
     final picked = <VaultTab>[];
-    await tester.pumpWidget(_bar(
-      onChanged: picked.add,
-      disabled: const {VaultTab.charts},
-    ));
+    await tester.pumpWidget(
+      _bar(onChanged: picked.add, disabled: const {VaultTab.charts}),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Charts'));

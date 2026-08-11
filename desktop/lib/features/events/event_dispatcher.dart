@@ -20,20 +20,21 @@ final StateProvider<List<VaultEvent>> eventFeedProvider =
     StateProvider<List<VaultEvent>>((ref) => const []);
 
 /// Intake arrivals counter — incremented when a new document arrives.
-final StateProvider<int> intakeArrivalsProvider =
-    StateProvider<int>((ref) => 0);
+final StateProvider<int> intakeArrivalsProvider = StateProvider<int>(
+  (ref) => 0,
+);
 
 /// The currently selected intake item id.
-final StateProvider<String?> selectedIntakeIdProvider =
-    StateProvider<String?>((ref) => null);
+final StateProvider<String?> selectedIntakeIdProvider = StateProvider<String?>(
+  (ref) => null,
+);
 
 /// A provider that subscribes to the SSE event stream and dispatches events
 /// to the relevant feature providers. Kept alive for the app's lifetime.
 ///
 /// Watch this provider from the top-level widget to ensure the subscription
 /// stays active.
-final Provider<void> eventDispatcherProvider =
-    Provider<void>((ref) {
+final Provider<void> eventDispatcherProvider = Provider<void>((ref) {
   final service = ref.watch(sseServiceProvider);
   final logger = ref.watch(appLoggerProvider);
 
@@ -76,11 +77,20 @@ final Provider<void> eventDispatcherProvider =
 
       // Refresh dashboard data on events that change what the ledger shows.
       const refreshOn = {
-        'TransactionRecorded', 'MatchProposed', 'AnalysisComplete',
-        'DocumentReceived', 'DocumentDuplicate', 'BatchFinished',
-        'IntakeAccepted', 'IntakeIrrelevant', 'IntakeDuplicate',
-        'IntakeFailed', 'IntakeRestored',
-        'PipelineStateChanged', 'learning.question', 'learning.answer',
+        'TransactionRecorded',
+        'MatchProposed',
+        'AnalysisComplete',
+        'DocumentReceived',
+        'DocumentDuplicate',
+        'BatchFinished',
+        'IntakeAccepted',
+        'IntakeIrrelevant',
+        'IntakeDuplicate',
+        'IntakeFailed',
+        'IntakeRestored',
+        'PipelineStateChanged',
+        'learning.question',
+        'learning.answer',
         'learning.rule.applied',
       };
       if (e.type == 'Ready' || refreshOn.contains(e.type)) {

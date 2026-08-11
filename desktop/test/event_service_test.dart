@@ -54,7 +54,10 @@ void main() {
       await server.start();
       addTearDown(server.stop);
 
-      final service = EventService(baseUrl: 'http://127.0.0.1:${server._port}', token: 't');
+      final service = EventService(
+        baseUrl: 'http://127.0.0.1:${server._port}',
+        token: 't',
+      );
       addTearDown(service.dispose);
 
       final events = <VaultEvent>[];
@@ -86,7 +89,10 @@ void main() {
       await server.start();
       addTearDown(server.stop);
 
-      final service = EventService(baseUrl: 'http://127.0.0.1:${server._port}', token: 't');
+      final service = EventService(
+        baseUrl: 'http://127.0.0.1:${server._port}',
+        token: 't',
+      );
       addTearDown(service.dispose);
 
       final events = <VaultEvent>[];
@@ -106,15 +112,14 @@ void main() {
     });
 
     test('exposes connection state changes', () async {
-      final server = _MockSseServer([
-        'event: Ready',
-        'data: {}',
-        '',
-      ]);
+      final server = _MockSseServer(['event: Ready', 'data: {}', '']);
       await server.start();
       addTearDown(server.stop);
 
-      final service = EventService(baseUrl: 'http://127.0.0.1:${server._port}', token: 't');
+      final service = EventService(
+        baseUrl: 'http://127.0.0.1:${server._port}',
+        token: 't',
+      );
       addTearDown(service.dispose);
 
       final states = <SseConnectionState>[];
@@ -131,15 +136,14 @@ void main() {
     });
 
     test('dispose stops the stream and prevents reconnection', () async {
-      final server = _MockSseServer([
-        'event: Ready',
-        'data: {}',
-        '',
-      ]);
+      final server = _MockSseServer(['event: Ready', 'data: {}', '']);
       await server.start();
       addTearDown(server.stop);
 
-      final service = EventService(baseUrl: 'http://127.0.0.1:${server._port}', token: 't');
+      final service = EventService(
+        baseUrl: 'http://127.0.0.1:${server._port}',
+        token: 't',
+      );
 
       await service.connect();
       // Wait briefly for connection.
@@ -152,15 +156,14 @@ void main() {
     });
 
     test('connect is idempotent', () async {
-      final server = _MockSseServer([
-        'event: Ready',
-        'data: {}',
-        '',
-      ]);
+      final server = _MockSseServer(['event: Ready', 'data: {}', '']);
       await server.start();
       addTearDown(server.stop);
 
-      final service = EventService(baseUrl: 'http://127.0.0.1:${server._port}', token: 't');
+      final service = EventService(
+        baseUrl: 'http://127.0.0.1:${server._port}',
+        token: 't',
+      );
       addTearDown(service.dispose);
 
       await service.connect();

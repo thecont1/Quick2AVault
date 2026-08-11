@@ -299,7 +299,8 @@ class _VaultHomeState extends ConsumerState<VaultHome> {
     // Watch the connection status and SSE connection to drive the UI.
     final connection = ref.watch(connectionStatusProvider);
     final sseStateAsync = ref.watch(sseConnectionStateProvider);
-    final sseState = sseStateAsync.valueOrNull ?? SseConnectionState.disconnected;
+    final sseState =
+        sseStateAsync.valueOrNull ?? SseConnectionState.disconnected;
     final daemonUp = connection.isConnected;
 
     // Watch the SSE event stream — keeps the subscription alive.
@@ -329,14 +330,20 @@ class _VaultHomeState extends ConsumerState<VaultHome> {
     final treemap = treemapAsync.valueOrNull ?? TreemapData.empty;
     final txns = txnsAsync.valueOrNull ?? const <Txn>[];
     final periods = periodsAsync.valueOrNull ?? Periods.empty;
-    final learningData = learningAsync.valueOrNull ??
+    final learningData =
+        learningAsync.valueOrNull ??
         (enabled: true, questions: const <wo_learning.LearningPrompt>[]);
-    final intakeItems = intakeAsync.valueOrNull ?? const <wo_intake_state.IntakeItem>[];
-    final entities = entitiesAsync.valueOrNull ?? const <wo_people_state.EntitySummary>[];
-    final settingsBundle = settingsAsync.valueOrNull ??
+    final intakeItems =
+        intakeAsync.valueOrNull ?? const <wo_intake_state.IntakeItem>[];
+    final entities =
+        entitiesAsync.valueOrNull ?? const <wo_people_state.EntitySummary>[];
+    final settingsBundle =
+        settingsAsync.valueOrNull ??
         (
           settings: const wo_settings.AppSettings(
-              learningEnabled: true, questionBudget: null),
+            learningEnabled: true,
+            questionBudget: null,
+          ),
           jurisdiction: wo_settings.JurisdictionPack.india,
         );
 
@@ -447,7 +454,20 @@ class _VaultHomeState extends ConsumerState<VaultHome> {
               Expanded(
                 child: Stack(
                   children: [
-                    Positioned.fill(child: _tabBody(snap, treemap, txns, selectedId, selectedIntakeId, entities, intakeItems, appSettings, jurisdiction, learningData.questions)),
+                    Positioned.fill(
+                      child: _tabBody(
+                        snap,
+                        treemap,
+                        txns,
+                        selectedId,
+                        selectedIntakeId,
+                        entities,
+                        intakeItems,
+                        appSettings,
+                        jurisdiction,
+                        learningData.questions,
+                      ),
+                    ),
                     if (_learningDrawerOpen)
                       Positioned(
                         top: 0,
@@ -502,75 +522,73 @@ class _VaultHomeState extends ConsumerState<VaultHome> {
     final card = cardAsync.valueOrNull;
 
     return switch (_tab) {
-    VaultTab.ledger => LedgerTab(
-      snapshot: snap,
-      treemap: treemap,
-      txns: txns,
-      selectedId: selectedId,
-      card: card,
-      onSelect: _select,
-      api: api,
-      onSearchHit: _openSearchHit,
-      onEdited: _refresh,
-    ),
-    VaultTab.review => ReviewBrowser(
-      api: api,
-      initialDocumentId: selectedIntakeId,
-    ),
-    // WO11 Track A: the desk's owner / merge / keep-separate actions go
-    // through the real gateway; every mutation refetches the entity list.
-    VaultTab.people => wo_people.EntityDesk(
-      entities: entities,
-      onSetOwner: (entity, owner) => _entityAction(
-        () => VaultEntityGateway(api).setOwner(entity.id, owner: owner),
+      VaultTab.ledger => LedgerTab(
+        snapshot: snap,
+        treemap: treemap,
+        txns: txns,
+        selectedId: selectedId,
+        card: card,
+        onSelect: _select,
+        api: api,
+        onSearchHit: _openSearchHit,
+        onEdited: _refresh,
       ),
-      onMerge: (source, target) => _entityAction(
-        () => VaultEntityGateway(
-          api,
-        ).merge(sourceId: source.id, targetId: target.id),
+      VaultTab.review => ReviewBrowser(
+        api: api,
+        initialDocumentId: selectedIntakeId,
       ),
-      onKeepSeparate: (entity, conflict) => _entityAction(
-        () => VaultEntityGateway(api).keepSeparate(
-          identifier: conflict.identifier,
-          entityId: entity.id,
-          otherId: conflict.otherId,
+      // WO11 Track A: the desk's owner / merge / keep-separate actions go
+      // through the real gateway; every mutation refetches the entity list.
+      VaultTab.people => wo_people.EntityDesk(
+        entities: entities,
+        onSetOwner: (entity, owner) => _entityAction(
+          () => VaultEntityGateway(api).setOwner(entity.id, owner: owner),
+        ),
+        onMerge: (source, target) => _entityAction(
+          () => VaultEntityGateway(
+            api,
+          ).merge(sourceId: source.id, targetId: target.id),
+        ),
+        onKeepSeparate: (entity, conflict) => _entityAction(
+          () => VaultEntityGateway(api).keepSeparate(
+            identifier: conflict.identifier,
+            entityId: entity.id,
+            otherId: conflict.otherId,
+          ),
         ),
       ),
-    ),
-    // Work order 07 §G — Intake tab: the unified intake queue.
-    // Shows every incoming file with its state. Encrypted PDFs show an
-    // inline password field. Irrelevant items show Restore. Nothing is
-    // held up by a password-needed item — the rest of the queue keeps
-    // processing.
-    VaultTab.intake => wo_intake.IntakeView(
-      key: ValueKey('intake-${selectedIntakeId ?? "none"}'),
-      items: intakeItems,
-      onOpenDocument: (item) => setState(() {
-        ref.read(selectedIntakeIdProvider.notifier).state =
-            item.documentId ?? item.id;
-        _tab = VaultTab.review;
-      }),
-    ),
-    VaultTab.settings => SettingsPanel(
-      settings: appSettings,
-      pack: jurisdiction,
-      onSettingsChanged: (next) async {
-        final api = ref.read(vaultApiProvider);
-        await ref.read(settingsBundleProvider.notifier).saveSettings(
-              api,
-              appSettings,
-              next,
-            );
-      },
-    ),
-    VaultTab.charts => const ComingSoon(
-      title: 'Charts',
-      detail:
-          'Spending over time, category trends and counterparty '
-          'concentration. The data is already in the vault — this tab is '
-          'the view that has not been built yet.',
-    ),
-  };
+      // Work order 07 §G — Intake tab: the unified intake queue.
+      // Shows every incoming file with its state. Encrypted PDFs show an
+      // inline password field. Irrelevant items show Restore. Nothing is
+      // held up by a password-needed item — the rest of the queue keeps
+      // processing.
+      VaultTab.intake => wo_intake.IntakeView(
+        key: ValueKey('intake-${selectedIntakeId ?? "none"}'),
+        items: intakeItems,
+        onOpenDocument: (item) => setState(() {
+          ref.read(selectedIntakeIdProvider.notifier).state =
+              item.documentId ?? item.id;
+          _tab = VaultTab.review;
+        }),
+      ),
+      VaultTab.settings => SettingsPanel(
+        settings: appSettings,
+        pack: jurisdiction,
+        onSettingsChanged: (next) async {
+          final api = ref.read(vaultApiProvider);
+          await ref
+              .read(settingsBundleProvider.notifier)
+              .saveSettings(api, appSettings, next);
+        },
+      ),
+      VaultTab.charts => const ComingSoon(
+        title: 'Charts',
+        detail:
+            'Spending over time, category trends and counterparty '
+            'concentration. The data is already in the vault — this tab is '
+            'the view that has not been built yet.',
+      ),
+    };
   }
 }
 
