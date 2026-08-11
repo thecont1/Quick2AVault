@@ -18,12 +18,24 @@
  */
 export const ACTIVE_LIFECYCLE_STATES = ["active"] as const;
 
+/**
+ * States a LISTING endpoint may show when the caller explicitly asks for the
+ * soft-hidden set (`?include=removed`). Deleted tombstones are never listable.
+ */
+export const LISTABLE_LIFECYCLE_STATES = ["active", "removed"] as const;
+
 export const isActive = (row: { lifecycle: string }): boolean =>
   (ACTIVE_LIFECYCLE_STATES as readonly string[]).includes(row.lifecycle);
 
 /** SQL fragment: the lifecycle states a document row must be in to count. */
 export function activeDocumentSql(alias: string): string {
   const states = ACTIVE_LIFECYCLE_STATES.map((s) => `'${s}'`).join(",");
+  return `${alias}.lifecycle IN (${states})`;
+}
+
+/** SQL fragment: rows a document listing may show with ?include=removed. */
+export function listableDocumentSql(alias: string): string {
+  const states = LISTABLE_LIFECYCLE_STATES.map((s) => `'${s}'`).join(",");
   return `${alias}.lifecycle IN (${states})`;
 }
 

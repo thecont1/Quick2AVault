@@ -512,12 +512,46 @@ await check("keep-separate dismisses the conflict and writes a standing rule", a
   assert.equal(rows.find((e) => e.id === "ent_xo")?.conflicts?.length, 0);
 });
 
+await check("dismissing a second pair on the same identifier preserves the first", async () => {
+  // A third kind carrying the same identifier: dismissing (person, account)
+  // must not resurrect the already-dismissed (person, organisation) pair —
+  // the learned_rules value is a LIST of pairs, merged on conflict.
+  db.prepare(
+    `INSERT INTO entities (id, kind, display_name, status, confidence, identifiers_json, created_at)
+     VALUES ('ent_xa','account','Shared Account','confirmed',1.0,?,?)`,
+  ).run(JSON.stringify({ email: "shared@example.com" }), now);
+  const mid = await call("GET", "/v1/entities");
+  const midRows = mid.json.entities as Array<{ id: string; conflicts?: Array<{ other_id: string }> }>;
+  const xp = midRows.find((e) => e.id === "ent_xp");
+  assert.ok(xp?.conflicts?.some((c) => c.other_id === "ent_xa"), "new pair surfaces");
+  assert.ok(!xp?.conflicts?.some((c) => c.other_id === "ent_xo"), "old pair stays dismissed");
+
+  const r = await call("POST", "/v1/entities/keep-separate", {
+    identifier: "shared@example.com",
+    entity_ids: ["ent_xp", "ent_xa"],
+  });
+  assert.equal(r.status, 200);
+  const pairs = JSON.parse(
+    (db.prepare("SELECT value FROM learned_rules WHERE kind='entity_separation' AND match_key='identifier:shared@example.com'").get() as { value: string }).value,
+  ) as string[][];
+  assert.equal(pairs.length, 2, `both pairs preserved, got ${JSON.stringify(pairs)}`);
+  const after = await call("GET", "/v1/entities");
+  const rows = after.json.entities as Array<{ id: string; conflicts?: Array<{ other_id: string }> }>;
+  assert.equal(rows.find((e) => e.id === "ent_xp")?.conflicts?.length, 0, "both person pairs dismissed");
+  // The org/account pair was never dismissed — suppression is per-pair, so
+  // it correctly remains.
+  const xa = rows.find((e) => e.id === "ent_xa");
+  assert.equal(xa?.conflicts?.length, 1);
+  assert.equal(xa?.conflicts?.[0]?.other_id, "ent_xo");
+});
+
 await check("keep-separate refuses a same-kind pair (that is a merge candidate)", async () => {
   const r = await call("POST", "/v1/entities/keep-separate", {
     identifier: "same@example.com",
     entity_ids: ["ent_m", "ent_v"],
   });
   assert.equal(r.status, 409);
+  assert.equal(r.json?.error, "same_kind", "the same-kind refusal branch, not a generic 409");
 });
 
 await check("the dismissal survives a full daemon restart (file-backed vault)", async () => {

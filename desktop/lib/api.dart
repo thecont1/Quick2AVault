@@ -1908,11 +1908,13 @@ class VaultApi {
     required String fromId,
     required String intoId,
   }) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/entities/merge'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({'from_id': fromId, 'into_id': intoId}),
-    );
+    final res = await _client
+        .post(
+          Uri.parse('$baseUrl/v1/entities/merge'),
+          headers: {..._headers, 'content-type': 'application/json'},
+          body: jsonEncode({'from_id': fromId, 'into_id': intoId}),
+        )
+        .timeout(const Duration(seconds: 15));
     if (res.statusCode != 200) {
       throw Exception('merge failed: ${res.statusCode} ${res.body}');
     }
@@ -1925,14 +1927,16 @@ class VaultApi {
     required String entityId,
     required String otherId,
   }) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/entities/keep-separate'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({
-        'identifier': identifier,
-        'entity_ids': [entityId, otherId],
-      }),
-    );
+    final res = await _client
+        .post(
+          Uri.parse('$baseUrl/v1/entities/keep-separate'),
+          headers: {..._headers, 'content-type': 'application/json'},
+          body: jsonEncode({
+            'identifier': identifier,
+            'entity_ids': [entityId, otherId],
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
     if (res.statusCode != 200) {
       throw Exception('keep-separate failed: ${res.statusCode} ${res.body}');
     }
@@ -1948,15 +1952,22 @@ class VaultApi {
     );
     // WO11 Track B: a removed/deleted document is a typed "not available",
     // not a generic failure — the caller renders a Reprocess affordance
-    // instead of an error string.
+    // instead of an error string. The error CODE decides the kind (never a
+    // default), and a non-JSON body (a proxy error page, say) degrades to
+    // the plain not-found exception rather than a FormatException.
     if (res.statusCode == 404 || res.statusCode == 410) {
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
-      if (j['error'] == 'document_not_available' ||
-          j['error'] == 'document_deleted') {
-        throw DocumentUnavailable(
-          id,
-          kind: (j['lifecycle'] ?? 'removed').toString(),
-        );
+      Map<String, dynamic> j = const {};
+      try {
+        final decoded = jsonDecode(res.body);
+        if (decoded is Map) j = decoded.cast<String, dynamic>();
+      } catch (_) {
+        // Non-JSON error body — fall through to the generic not-found.
+      }
+      if (j['error'] == 'document_not_available') {
+        throw DocumentUnavailable(id, kind: 'removed');
+      }
+      if (j['error'] == 'document_deleted') {
+        throw DocumentUnavailable(id, kind: 'deleted');
       }
       throw Exception('document not found: $id');
     }

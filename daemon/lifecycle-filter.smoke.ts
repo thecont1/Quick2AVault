@@ -115,13 +115,13 @@ db.prepare(
 ).run();
 
 await check("baseline: the evidenced spend is in the snapshot", async () => {
-  const r = await req("GET", "/v1/snapshot");
+  const r = await req("GET", "/v1/snapshot?period=all");
   assert.equal(r.status, 200);
   assert.equal(r.json.spending_minor, 50000 + 70000, "evidenced + manual spend");
   assert.equal(r.json.spending_documents, 1);
 });
 await check("baseline: the treemap bucket includes the evidenced spend", async () => {
-  const r = await req("GET", "/v1/treemap");
+  const r = await req("GET", "/v1/treemap?period=all");
   const groceries = (r.json.nodes ?? []).find((n: { id?: string; name?: string }) => (n.id ?? n.name) === "groceries");
   assert.ok(groceries, `groceries node missing: ${JSON.stringify(r.json.nodes)}`);
   assert.equal(groceries.amount_minor, 50000 + 70000);
@@ -146,13 +146,13 @@ await check("baseline: the detail endpoint serves the active document", async ()
 await req("POST", "/v1/documents/doc_spend/remove-from-active");
 
 await check("snapshot: removed document's transaction no longer counts", async () => {
-  const r = await req("GET", "/v1/snapshot");
+  const r = await req("GET", "/v1/snapshot?period=all");
   assert.equal(r.json.spending_minor, 70000, "only the evidence-less manual entry remains");
   assert.equal(r.json.spending_documents, 0);
   assert.equal(r.json.counts.evidence_links, 1, "the trade's link is untouched");
 });
 await check("treemap: the bucket shrinks by the removed document's amount", async () => {
-  const r = await req("GET", "/v1/treemap");
+  const r = await req("GET", "/v1/treemap?period=all");
   const groceries = (r.json.nodes ?? []).find((n: { id?: string; name?: string }) => (n.id ?? n.name) === "groceries");
   assert.equal(groceries?.amount_minor, 70000);
 });
@@ -198,7 +198,7 @@ await check("mixed evidence: the transaction stays visible and still counts", as
     ["doc_mixed_a"],
     "the evidence list shows only the active document",
   );
-  const snap = await req("GET", "/v1/snapshot");
+  const snap = await req("GET", "/v1/snapshot?period=all");
   assert.equal(snap.json.spending_minor, 70000 + 30000, "the mixed-evidence spend still counts");
 });
 

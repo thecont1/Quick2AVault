@@ -376,7 +376,7 @@ class _EntityDetail extends StatelessWidget {
           Text(
             entity.owner
                 ? '${entity.name} is the owner of this vault.'
-                : 'Exactly one person is the owner — the self this vault is for.',
+                : 'At most one person can be the owner — the self this vault is for.',
             style: const TextStyle(color: VaultColors.dim, height: 1.4),
           ),
           const SizedBox(height: 9),

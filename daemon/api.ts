@@ -35,7 +35,7 @@ import {
   type ResolvedTransaction,
 } from "./claims.js";
 import { rebuildSearchIndex, searchDocuments, removeFromIndex } from "./search.js";
-import { activeDocumentSql, activeTransactionSql, isActive } from "./lifecycle.js";
+import { activeDocumentSql, activeTransactionSql, isActive, listableDocumentSql } from "./lifecycle.js";
 import {
   backfillEmbeddings,
   hybridSearch,
@@ -55,6 +55,7 @@ import {
   isGenericMailbox,
   mergePeople,
   normaliseIdentifier,
+  recordMergeCandidate,
   UNIDENTIFIED_PERSON_ID,
 } from "./identity.js";
 import {
@@ -1078,16 +1079,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, source, created_at) VALUES (?,?,?,?, 'user-merge', ?)",
           ).run(into.id, into.kind, from.display_name, from.display_name.toLowerCase(), now);
           db.prepare("DELETE FROM entities WHERE id=?").run(from.id);
-          // WO11 A2: a user-confirmed merge is durable evidence — a passive
-          // learning candidate, inactive until consistently confirmed (the
-          // claims.ts pattern; standing rules are reserved for explicit
-          // decisions like keep-separate).
-          db.prepare(
-            `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
-             VALUES('entity_merge',?, ?, ?,'passive-correction',1,0,?)
-             ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET
-               value=excluded.value, source='passive-correction', confidence=1, created_at=excluded.created_at`,
-          ).run(`entity:${from.id}`, into.kind, into.id, now);
+          recordMergeCandidate(db, from.id, into, now);
           db.exec("COMMIT");
         } catch (e) {
           db.exec("ROLLBACK");
@@ -1121,12 +1113,30 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const type = classifyIdentifier(identifier) ?? "email";
         const norm = normaliseIdentifier(type, identifier);
         const sorted = [pair[0]!.id, pair[1]!.id].sort();
+        // Merge with any pairs already dismissed for this identifier — the
+        // unique key is (kind, match_key), so a naive upsert would REPLACE
+        // the stored list and resurrect earlier dismissals.
+        const existing = db
+          .prepare("SELECT value FROM learned_rules WHERE kind='entity_separation' AND match_key=?")
+          .get(`identifier:${norm}`) as { value: string } | undefined;
+        let pairs: string[][] = [];
+        if (existing) {
+          try {
+            const parsed = JSON.parse(existing.value) as unknown;
+            if (Array.isArray(parsed)) {
+              pairs = parsed.filter((p): p is string[] => Array.isArray(p) && p.length === 2);
+            }
+          } catch {
+            pairs = [];
+          }
+        }
+        if (!pairs.some((p) => p[0] === sorted[0] && p[1] === sorted[1])) pairs.push(sorted);
         db.prepare(
           `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
            VALUES('entity_separation',?, NULL, ?, 'user', 1, 1, ?)
            ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET
              value=excluded.value, source='user', active=1, created_at=excluded.created_at`,
-        ).run(`identifier:${norm}`, JSON.stringify([sorted]), ports.clock.isoNow());
+        ).run(`identifier:${norm}`, JSON.stringify(pairs), ports.clock.isoNow());
         ports.logger.info("cross-kind conflict dismissed", {
           identifier: norm,
           entities: [pair[0]!.display_name, pair[1]!.display_name],
@@ -2035,7 +2045,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 `SELECT id, original_filename, ext, byte_size, doc_type, source, sha256,
                         markdown_chars, received_at, converted_at, analysed_at, lifecycle
                  FROM documents
-                 WHERE ${includeRemoved ? "lifecycle IN ('active','removed')" : activeDocumentSql("documents")}
+                 WHERE ${includeRemoved ? listableDocumentSql("documents") : activeDocumentSql("documents")}
                  ORDER BY received_at DESC LIMIT ?`,
               )
               .all(Number(url.searchParams.get("limit") ?? 100)),
@@ -2637,7 +2647,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                         d.extraction_version, d.markdown_hash,
                         td.evidence_role, td.match_score, td.linked_by, td.linked_at
                  FROM transaction_documents td JOIN documents d ON d.id = td.document_id
-                 WHERE td.transaction_id = ?
+                 WHERE td.transaction_id = ? AND ${activeDocumentSql("d")}
                  ORDER BY td.linked_at`,
               )
               .all(m[1]) as Record<string, unknown>[];

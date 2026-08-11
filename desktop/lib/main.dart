@@ -275,7 +275,9 @@ class _VaultHomeState extends State<VaultHome> {
   Future<void> _entityAction(Future<void> Function() action) async {
     try {
       await action();
-      await _refreshFeatureData();
+      // Strict: a failed entity refetch after a successful mutation must
+      // surface here — otherwise the desk silently shows pre-mutation state.
+      await _refreshFeatureData(strictEntities: true);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.maybeOf(
@@ -285,7 +287,7 @@ class _VaultHomeState extends State<VaultHome> {
     }
   }
 
-  Future<void> _refreshFeatureData() async {
+  Future<void> _refreshFeatureData({bool strictEntities = false}) async {
     try {
       final learning = await _api.learning();
       if (mounted) {
@@ -326,7 +328,11 @@ class _VaultHomeState extends State<VaultHome> {
     try {
       final entities = await _api.featureEntities();
       if (mounted) setState(() => _entities = entities);
-    } catch (_) {}
+    } catch (_) {
+      // Background refreshes absorb a failed entity fetch; the People-desk
+      // mutation path asks for strictness so its failure is not silent.
+      if (strictEntities) rethrow;
+    }
 
     try {
       final bundle = await _api.featureSettingsBundle();
