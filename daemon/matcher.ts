@@ -184,26 +184,31 @@ export function linkEvidence(
   x: ExtractionResult,
   score: number,
   linkedBy: string = "matcher",
-): void {
+): boolean {
   const now = ports.clock.isoNow();
-  db.prepare(
+  const info = db.prepare(
     `INSERT OR IGNORE INTO transaction_documents
       (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
      VALUES (?,?,?,?,?,?)`,
   ).run(transactionId, documentId, evidenceRole(x), score, linkedBy, now);
 
-  // A card confirmation proves settlement; an invoice alone does not.
-  if (x.doc_type === "card_confirmation" || x.doc_type === "bank_slip") {
-    db.prepare("UPDATE transactions SET status='evidenced', posted_at=COALESCE(posted_at,?) WHERE id=?")
-      .run(x.occurred_at ?? null, transactionId);
-  }
+  const inserted = Number(info.changes ?? 0) > 0;
 
-  ports.bus.publish({
-    type: "MatchProposed",
-    transaction_id: transactionId,
-    document_id: documentId,
-    score,
-    at: now,
-  });
-  ports.logger.info("evidence linked", { transactionId, documentId, score: score.toFixed(2), linkedBy });
+  if (inserted) {
+    // A card confirmation proves settlement; an invoice alone does not.
+    if (x.doc_type === "card_confirmation" || x.doc_type === "bank_slip") {
+      db.prepare("UPDATE transactions SET status='evidenced', posted_at=COALESCE(posted_at,?) WHERE id=?")
+        .run(x.occurred_at ?? null, transactionId);
+    }
+
+    ports.bus.publish({
+      type: "MatchProposed",
+      transaction_id: transactionId,
+      document_id: documentId,
+      score,
+      at: now,
+    });
+    ports.logger.info("evidence linked", { transactionId, documentId, score: score.toFixed(2), linkedBy });
+  }
+  return inserted;
 }

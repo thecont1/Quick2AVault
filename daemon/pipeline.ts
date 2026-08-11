@@ -1643,12 +1643,27 @@ export async function runAnalyseJob(
       // unattached until the user answers the Learning question.
       return;
     } else {
+      // Questions length is 0 — determine why before falling through.
+      const existing = db.prepare(
+        "SELECT 1 FROM training_reviews WHERE dedupe_key=? LIMIT 1",
+      ).get(ambiguity.dedupeKey);
+      if (existing) {
+        // A dedup row exists (already asked, answered, or dismissed).
+        // Do NOT create a transaction — the question was already handled.
+        ports.logger.info("reconciliation question already exists (deduplicated)", {
+          document_id: documentId,
+          transaction_id: best.transaction_id,
+          score: best.score.toFixed(2),
+        });
+        return;
+      }
+      // Budget genuinely exhausted and no prior question exists:
+      // fall through to recordTransaction as a separate transaction.
       ports.logger.info("reconciliation score in review band but question budget exhausted", {
         document_id: documentId,
         transaction_id: best.transaction_id,
         score: best.score.toFixed(2),
       });
-      // Budget exhausted: fall through to recordTransaction as a separate transaction.
     }
   }
 

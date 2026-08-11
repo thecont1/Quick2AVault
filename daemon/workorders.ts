@@ -337,27 +337,33 @@ export function answerLearningQuestion(
     const txnId = String(sourceFact?.transaction_id ?? "");
 
     if (/^(yes|confirm|accept|link)/i.test(answer)) {
-      if (docId && txnId) {
-        const docRow = db.prepare("SELECT extraction_json FROM documents WHERE id=?").get(docId) as { extraction_json: string } | undefined;
-        if (docRow?.extraction_json) {
-          try {
-            const x = JSON.parse(docRow.extraction_json) as ExtractionResult;
-            linkEvidence(db, ports, txnId, docId, x, 1.0, "user");
-            linked = true;
-          } catch {
-            // Fallback: if extraction_json won't parse, link with a generic role.
-            // INSERT OR IGNORE (not REPLACE) — never silently move evidence
-            // from another transaction.
-            db.prepare(
-              `INSERT OR IGNORE INTO transaction_documents
-                 (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
-                VALUES (?,?,?,?, 'user', ?)`,
-            ).run(txnId, docId, "payment_receipt", 1.0, now);
-            linked = true;
+      db.prepare("BEGIN IMMEDIATE").run();
+      try {
+        if (docId && txnId) {
+          const docRow = db.prepare("SELECT extraction_json FROM documents WHERE id=?").get(docId) as { extraction_json: string } | undefined;
+          if (docRow?.extraction_json) {
+            try {
+              const x = JSON.parse(docRow.extraction_json) as ExtractionResult;
+              linked = linkEvidence(db, ports, txnId, docId, x, 1.0, "user");
+            } catch {
+              // Fallback: if extraction_json won't parse, link with a generic role.
+              // INSERT OR IGNORE (not REPLACE) — never silently move evidence
+              // from another transaction.
+              const info = db.prepare(
+                `INSERT OR IGNORE INTO transaction_documents
+                   (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
+                  VALUES (?,?,?,?, 'user', ?)`,
+              ).run(txnId, docId, "payment_receipt", 1.0, now);
+              linked = Number(info.changes ?? 0) > 0;
+            }
           }
         }
+        db.prepare("UPDATE training_reviews SET answer=?, answered_at=?, rule_id=NULL WHERE id=?").run(answer, now, row.id);
+      } catch {
+        db.prepare("ROLLBACK").run();
+        throw new Error("failed to apply reconciliation link answer");
       }
-      db.prepare("UPDATE training_reviews SET answer=?, answered_at=?, rule_id=NULL WHERE id=?").run(answer, now, row.id);
+      db.prepare("COMMIT").run();
       ports.bus.publish({ type: "learning.answer", question_id: String(row.id), at: now, answer });
       return { ruleId: null, linked, dismissed: false, deferred: false };
     }
@@ -367,14 +373,23 @@ export function answerLearningQuestion(
       // The rule key is the dedupe_key of the ambiguity question.
       const dedupeKey = row.dedupe_key ?? null;
       let ruleIdForDismiss: number | null = null;
-      if (dedupeKey) {
-        const info = db.prepare(
-          `INSERT OR IGNORE INTO learned_rules(kind, match_key, match_kind, value, source, created_at)
-           VALUES('reconciliation_decline', ?, '', 'no', 'user', ?)`,
-        ).run(dedupeKey, now);
-        ruleIdForDismiss = Number(info.lastInsertRowid);
+      db.prepare("BEGIN IMMEDIATE").run();
+      try {
+        if (dedupeKey) {
+          const row2 = db.prepare(
+            `INSERT INTO learned_rules(kind, match_key, match_kind, value, source, created_at)
+             VALUES('reconciliation_decline', ?, '', 'no', 'user', ?)
+             ON CONFLICT(kind, match_key, COALESCE(match_kind,'')) DO UPDATE SET value='no', active=1
+             RETURNING id`,
+          ).get(dedupeKey, now) as { id: number } | undefined;
+          ruleIdForDismiss = row2 ? row2.id : null;
+        }
+        db.prepare("UPDATE training_reviews SET answer=?, answered_at=?, dismissed=1, rule_id=? WHERE id=?").run(answer, now, ruleIdForDismiss, row.id);
+      } catch {
+        db.prepare("ROLLBACK").run();
+        throw new Error("failed to apply reconciliation decline answer");
       }
-      db.prepare("UPDATE training_reviews SET answer=?, answered_at=?, dismissed=1, rule_id=? WHERE id=?").run(answer, now, ruleIdForDismiss, row.id);
+      db.prepare("COMMIT").run();
       ports.bus.publish({ type: "learning.answer", question_id: String(row.id), at: now, answer });
       return { ruleId: ruleIdForDismiss, linked: false, dismissed: true, deferred: false };
     }

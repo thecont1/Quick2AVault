@@ -22,7 +22,7 @@ export type ClaimSubject = "document" | "transaction" | "entity" | "document_par
 export type ClaimSource = "ai" | "user" | "rule" | "import";
 export type ClaimStatus = "proposed" | "confirmed" | "rejected" | "superseded";
 
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 /**
  * Markdown retention policy. The ORIGINAL is truth; markdown is a
@@ -1120,6 +1120,63 @@ export function migrate(db: DatabaseSync): void {
   if (docColsV13.size && !docColsV13.has("lifecycle")) {
     db.exec("ALTER TABLE documents ADD COLUMN lifecycle TEXT NOT NULL DEFAULT 'active'");
     db.exec("CREATE INDEX IF NOT EXISTS idx_documents_lifecycle ON documents(lifecycle)");
+  }
+
+  // ── v13 → v14: evidence_role CHECK constraint on transaction_documents ──
+  // SQLite cannot ALTER a CHECK constraint onto an existing column. We use
+  // an app_settings flag to track whether the rebuild has been done.
+  // The app_settings table is created by the DDL (which runs AFTER migrate),
+  // so we must guard against its absence.
+  let needsRebuildV14 = false;
+  try {
+    const flagRow = db.prepare("SELECT value FROM app_settings WHERE key='td_evidence_role_checked'").get() as { value?: string } | undefined;
+    if (!flagRow) needsRebuildV14 = true;
+  } catch {
+    // app_settings table doesn't exist yet (fresh DB pre-DDL) — table will
+    // be created fresh by DDL with the CHECK, no rebuild needed.
+    needsRebuildV14 = false;
+  }
+  const tdCols = columnsOf(db, "transaction_documents");
+  if (needsRebuildV14 && tdCols.size > 0) {
+    db.exec("BEGIN");
+    try {
+      db.exec(`
+        CREATE TABLE transaction_documents_new (
+          transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+          document_id    TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+          evidence_role  TEXT NOT NULL CHECK (evidence_role IN (
+            'merchant_invoice', 'payment_receipt', 'bank_slip',
+            'card_confirmation', 'statement_line', 'refund_note', 'contract_note'
+          )),
+          match_score    REAL,
+          linked_by      TEXT NOT NULL DEFAULT 'ai',
+          linked_at      TEXT NOT NULL,
+          PRIMARY KEY (transaction_id, document_id)
+        )
+      `);
+      db.exec(`
+        INSERT INTO transaction_documents_new
+          (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
+        SELECT
+          transaction_id, document_id,
+          CASE
+            WHEN evidence_role IN ('merchant_invoice','payment_receipt','bank_slip','card_confirmation','statement_line','refund_note','contract_note')
+            THEN evidence_role
+            ELSE 'payment_receipt'
+          END,
+          match_score, linked_by, linked_at
+        FROM transaction_documents
+      `);
+      db.exec("DROP TABLE transaction_documents");
+      db.exec("ALTER TABLE transaction_documents_new RENAME TO transaction_documents");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_txndocs_doc ON transaction_documents(document_id)");
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_txndoc_evidence_key ON transaction_documents(document_id, evidence_role)");
+      db.exec("COMMIT");
+      db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES('td_evidence_role_checked','1')").run();
+    } catch {
+      db.exec("ROLLBACK");
+      throw new Error("failed to rebuild transaction_documents for evidence_role CHECK");
+    }
   }
 }
 

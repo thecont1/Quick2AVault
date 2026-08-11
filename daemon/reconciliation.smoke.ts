@@ -386,18 +386,17 @@ await check("step 7: user answers Don't link — question dismissed, no link", a
     why: best.reasons.join("; "),
   };
   const qs = generateLearningQuestions(db, ports, { documentId: docId, pipelineState: "analysing", ambiguities: [ambiguity] });
-  if (qs.length > 0) {
-    dismissedQid = Number(qs[0].question_id);
-    const result = answerLearningQuestion(db, ports, dismissedQid, "no");
-    assert.ok(result.dismissed, "question should be dismissed");
-    assert.ok(result.ruleId, "dismissal should create a standing rule");
-    const link = db.prepare("SELECT 1 FROM transaction_documents WHERE document_id='doc_card2'").get();
-    assert.ok(!link, "the document should NOT be linked after dismissal");
+  assert.ok(qs.length > 0, "a learning question should have been raised");
+  dismissedQid = Number(qs[0].question_id);
+  const result = answerLearningQuestion(db, ports, dismissedQid, "no");
+  assert.ok(result.dismissed, "question should be dismissed");
+  assert.ok(result.ruleId, "dismissal should create a standing rule");
+  const link = db.prepare("SELECT 1 FROM transaction_documents WHERE document_id='doc_card2'").get();
+  assert.ok(!link, "the document should NOT be linked after dismissal");
 
-    // Verify the question does NOT re-appear on a second call (dedupe suppression)
-    const qs2 = generateLearningQuestions(db, ports, { documentId: docId, pipelineState: "analysing", ambiguities: [ambiguity] });
-    assert.equal(qs2.length, 0, "question should not re-appear after dismissal");
-  }
+  // Verify the question does NOT re-appear on a second call (dedupe suppression)
+  const qs2 = generateLearningQuestions(db, ports, { documentId: docId, pipelineState: "analysing", ambiguities: [ambiguity] });
+  assert.equal(qs2.length, 0, "question should not re-appear after dismissal");
 });
 
 // ── Step 8: Drop a refund note — nets to zero ──────────────────────────────
@@ -470,7 +469,7 @@ await check("E2E A: invoice + matching slip → one transaction, correct total",
   const x2 = makeBankSlip();
   const docId2 = seedDoc(dbA, "e2e_a_slip", x2);
   const matches = findMatches(dbA, x2, docId2);
-  assert.ok(matches.length > 0);
+  assert.ok(matches.length > 0, "should find a match to auto-link");
   assert.ok(matches[0].score >= AUTO_LINK);
   linkEvidence(dbA, portsA, matches[0].transaction_id, docId2, x2, matches[0].score);
   const count = txnCount(dbA);
@@ -487,11 +486,15 @@ await check("E2E B: ambiguous match → Learning question → user confirms", as
   const rec = recordTransaction(dbB, portsB, docId1, x1);
   dbB.prepare("UPDATE transactions SET counterparty_entity_id='ent_swiggy_b' WHERE id=?").run(rec!.transaction_id);
 
-  const x2 = makeBankSlip();
-  const docId2 = seedDoc(dbB, "e2e_b_slip", x2);
+  const x2 = makeCardConfirmation();
+  const docId2 = seedDoc(dbB, "e2e_b_card", x2);
   const matches = findMatches(dbB, x2, docId2);
+  assert.ok(matches.length > 0, "should find a match");
   const best = matches[0];
-  assert.ok(best.score >= REVIEW_FLOOR);
+  // Card confirmation: same amount + date + counterparty but no shared
+  // reference IDs → score lands in the review band, not auto-link.
+  assert.ok(best.score >= REVIEW_FLOOR && best.score < AUTO_LINK,
+    `score ${best.score} should be in review band [${REVIEW_FLOOR}, ${AUTO_LINK})`);
 
   const ambiguity = {
     kind: "reconciliation-ambiguity" as const,
@@ -503,7 +506,7 @@ await check("E2E B: ambiguous match → Learning question → user confirms", as
     why: best.reasons.join("; "),
   };
   const qs = generateLearningQuestions(dbB, portsB, { documentId: docId2, pipelineState: "analysing", ambiguities: [ambiguity] });
-  assert.ok(qs.length > 0);
+  assert.ok(qs.length > 0, "should get a question");
   const result = answerLearningQuestion(dbB, portsB, Number(qs[0].question_id), "yes");
   assert.ok(result.linked);
   const link = dbB.prepare("SELECT 1 FROM transaction_documents WHERE document_id=?").get(docId2);
@@ -567,6 +570,7 @@ await check("E2E F: remove evidence document → transaction hidden when all evi
   const x2 = makeBankSlip();
   const docId2 = seedDoc(dbF, "e2e_f_slip", x2);
   const matches = findMatches(dbF, x2, docId2);
+  assert.ok(matches.length > 0, "should find a match to link");
   linkEvidence(dbF, portsF, matches[0].transaction_id, docId2, x2, matches[0].score);
 
   // Remove the invoice
@@ -648,6 +652,8 @@ await check("normaliseDescriptor: various UPI/card descriptors", () => {
 
 // ── Summary ─────────────────────────────────────────────────────────────────
 console.log(`\n── ${pass} passed, ${fail} failed\n`);
-if (fail > 0) process.exit(1);
-await api.close();
+// Teardown: close server, close DB, remove temp vault — on both success and failure.
+api.close().catch(() => {});
 db.close();
+fs.rmSync(vault, { recursive: true, force: true });
+process.exitCode = fail > 0 ? 1 : 0;

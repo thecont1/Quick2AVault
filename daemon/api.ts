@@ -401,11 +401,15 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           return send(res, 400, { error: "transaction_id and document_id required" });
         }
         const now = ports.clock.isoNow();
+        const role = b.evidence_role ?? "payment_receipt";
+        if (!["merchant_invoice", "payment_receipt", "bank_slip", "card_confirmation", "statement_line", "refund_note", "contract_note"].includes(role)) {
+          return send(res, 400, { error: "invalid evidence_role", valid: ["merchant_invoice", "payment_receipt", "bank_slip", "card_confirmation", "statement_line", "refund_note", "contract_note"] });
+        }
         db.prepare(
           `INSERT OR REPLACE INTO transaction_documents
             (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
            VALUES (?,?,?,?, 'user', ?)`,
-        ).run(b.transaction_id, b.document_id, b.evidence_role ?? "payment_receipt", 1.0, now);
+        ).run(b.transaction_id, b.document_id, role, 1.0, now);
         db.prepare(
           "INSERT INTO field_claims (subject_type, subject_id, field, value, source, confidence, created_at) VALUES ('transaction',?,?,?, 'user', 1.0, ?)",
         ).run(b.transaction_id, "evidence_link", b.document_id, now);
@@ -1862,11 +1866,19 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         // ── Reconciliation-ambiguity: delegate to answerLearningQuestion ─────
         // It handles all three answers (Link/Don't link/Later) in one place,
         // avoiding duplicated link logic between the API and workorders.
+        // We delegate on trigger alone; answerLearningQuestion's existing
+        // guard (line: if row.answered_at || row.dismissed → no-op) preserves
+        // the state of already-decided questions.
         const review = db.prepare(
-          "SELECT trigger, answered_at, dismissed FROM training_reviews WHERE id=?",
-        ).get(id) as { trigger: string; answered_at: string | null; dismissed: number } | undefined;
+          "SELECT trigger FROM training_reviews WHERE id=?",
+        ).get(id) as { trigger: string } | undefined;
 
-        if (review && review.trigger === "reconciliation-ambiguity" && !review.answered_at && !review.dismissed) {
+        if (review && review.trigger === "reconciliation-ambiguity") {
+          // Validate the answer against the three recognised options.
+          const valid = /^(yes|no|later)$/i.test(answer.trim());
+          if (!valid) {
+            return send(res, 400, { error: "unexpected answer for reconciliation-ambiguity question; expected yes|no|later" });
+          }
           const r = answerLearningQuestion(db, ports, id, answer);
           return send(res, 200, { answered: true, ...r });
         }
