@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../theme.dart';
 import '../widgets/vault_tabs.dart';
-import 'learning/state.dart';
 import 'learning/view.dart';
 
 class WorkspaceShell extends StatelessWidget {

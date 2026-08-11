@@ -1,0 +1,10 @@
+# json_serializable configuration for QAV-FLT-04 Freezed models.
+# The daemon uses snake_case JSON keys; this rename lets model fields stay
+# idiomatic camelCase in Dart without per-field @JsonKey(name: ...) annotations.
+targets:
+  $default:
+    builders:
+      json_serializable:
+        options:
+          field_rename: snake
+          explicit_to_json: true

@@ -1,0 +1,39 @@
+name: Flutter Desktop
+
+on:
+  push:
+    branches: [main, refactor/flutter]
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/flutter.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - '.github/workflows/flutter.yml'
+
+defaults:
+  run:
+    working-directory: desktop
+
+jobs:
+  analyze-and-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate code (build_runner)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test
