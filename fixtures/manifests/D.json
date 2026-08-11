@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "D",
+  "order": 40,
+  "scenario": "password_needed",
+  "source": {
+    "filename": "d-password-needed.pdf",
+    "text": "%PDF-1.4\n% deterministic encrypted fixture marker\nInvoice Total INR 100.00"
+  },
+  "sources": [
+    {
+      "filename": "d-failed.pdf",
+      "text": "%PDF-1.4\n% deterministic failed fixture marker\nInvoice Total INR 200.00"
+    },
+    {
+      "filename": "d-irrelevant.txt",
+      "text": "Shopping list: tomatoes, basil, pasta, lemons, salt, pepper."
+    }
+  ],
+  "expectations": { "disposition": "password_needed", "sourcePolicy": "retained" }
+}

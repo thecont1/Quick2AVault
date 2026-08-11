@@ -17,18 +17,17 @@ VaultDoc _doc(
   String? source = 'drop',
   String? analysedAt = '2026-08-01T10:00:00.000Z',
   int mdChars = 1200,
-}) =>
-    VaultDoc(
-      id: id,
-      filename: name,
-      ext: ext,
-      byteSize: 51200,
-      docType: type,
-      source: source,
-      receivedAt: '2026-08-01T09:00:00.000Z',
-      analysedAt: analysedAt,
-      markdownChars: mdChars,
-    );
+}) => VaultDoc(
+  id: id,
+  filename: name,
+  ext: ext,
+  byteSize: 51200,
+  docType: type,
+  source: source,
+  receivedAt: '2026-08-01T09:00:00.000Z',
+  analysedAt: analysedAt,
+  markdownChars: mdChars,
+);
 
 /// A VaultApi that serves canned documents. Subclassing keeps the widget under
 /// test unchanged — no injection seam invented purely for testing.
@@ -56,6 +55,31 @@ class _FakeApi extends VaultApi {
   Future<List<VaultDoc>> documents({int limit = 200}) async => docs;
 
   @override
+  Future<DocumentDetail> documentDetail(String id) async {
+    final doc = docs.firstWhere((candidate) => candidate.id == id);
+    return DocumentDetail(
+      document: {'id': id, 'original_filename': doc.filename},
+      extraction: const {},
+      effective: {
+        'document_type': EffectiveValue(
+          value: doc.docType ?? 'unknown',
+          source: 'ai',
+          status: 'proposed',
+        ),
+      },
+      referenceIds: const {},
+      lineItems: const [],
+      parties: const [],
+      transactions: const [],
+      editableFields: const {},
+    );
+  }
+
+  @override
+  Future<List<AuditEntry>> audit(String subjectId, {int limit = 50}) async =>
+      const [];
+
+  @override
   Future<String?> documentMarkdown(String id) async {
     markdownCalls++;
     return markdown;
@@ -72,22 +96,19 @@ class _FakeApi extends VaultApi {
   }
 }
 
-Widget _host(VaultApi api, {int pending = 0, VoidCallback? onQueue}) => MaterialApp(
-      home: Scaffold(
-        body: ReviewBrowser(
-          api: api,
-          pendingQuestions: pending,
-          onOpenQueue: onQueue,
-        ),
-      ),
-    );
+Widget _host(VaultApi api, {String? initialDocumentId}) => MaterialApp(
+  home: Scaffold(
+    body: ReviewBrowser(api: api, initialDocumentId: initialDocumentId),
+  ),
+);
 
 void main() {
-  testWidgets('the document list renders and the newest is selected', (tester) async {
-    final api = _FakeApi(docs: [
-      _doc('d1', 'newest-invoice.png'),
-      _doc('d2', 'older-receipt.png'),
-    ]);
+  testWidgets('the document list renders and the newest is selected', (
+    tester,
+  ) async {
+    final api = _FakeApi(
+      docs: [_doc('d1', 'newest-invoice.png'), _doc('d2', 'older-receipt.png')],
+    );
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
@@ -98,11 +119,13 @@ void main() {
   });
 
   testWidgets('search narrows the list and says so honestly', (tester) async {
-    final api = _FakeApi(docs: [
-      _doc('d1', 'swiggy-invoice.png'),
-      _doc('d2', 'airtel-receipt.png'),
-      _doc('d3', 'amazon-invoice.png'),
-    ]);
+    final api = _FakeApi(
+      docs: [
+        _doc('d1', 'swiggy-invoice.png'),
+        _doc('d2', 'airtel-receipt.png'),
+        _doc('d3', 'amazon-invoice.png'),
+      ],
+    );
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
@@ -114,12 +137,15 @@ void main() {
     expect(find.text('airtel-receipt.png'), findsNothing);
   });
 
-  testWidgets('search matches doc type and source, not only filename',
-      (tester) async {
-    final api = _FakeApi(docs: [
-      _doc('d1', 'aaa.png', type: 'contract_note', source: 'gmail'),
-      _doc('d2', 'bbb.png', type: 'invoice', source: 'drop'),
-    ]);
+  testWidgets('search matches doc type and source, not only filename', (
+    tester,
+  ) async {
+    final api = _FakeApi(
+      docs: [
+        _doc('d1', 'aaa.png', type: 'contract_note', source: 'gmail'),
+        _doc('d2', 'bbb.png', type: 'invoice', source: 'drop'),
+      ],
+    );
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
@@ -132,7 +158,9 @@ void main() {
     expect(find.text('1 of 2'), findsOneWidget);
   });
 
-  testWidgets('the Markdown toggle fetches text only when asked', (tester) async {
+  testWidgets('the Markdown toggle fetches text only when asked', (
+    tester,
+  ) async {
     final api = _FakeApi(
       docs: [_doc('d1', 'invoice.png')],
       markdown: '# Invoice\n\nTotal: 2810',
@@ -150,7 +178,9 @@ void main() {
     expect(find.textContaining('Total: 2810'), findsOneWidget);
   });
 
-  testWidgets('a document with no markdown disables the toggle', (tester) async {
+  testWidgets('a document with no markdown disables the toggle', (
+    tester,
+  ) async {
     // Disabled rather than hidden: a control that vanishes between documents is
     // more confusing than one that greys out.
     final api = _FakeApi(docs: [_doc('d1', 'scan.png', mdChars: 0)]);
@@ -164,8 +194,9 @@ void main() {
     expect(api.markdownCalls, 0);
   });
 
-  testWidgets('an image document defaults to the magnifiable image view',
-      (tester) async {
+  testWidgets('an image document defaults to the magnifiable image view', (
+    tester,
+  ) async {
     final api = _FakeApi(
       docs: [_doc('d1', 'receipt.png')],
       markdown: '# Receipt',
@@ -179,8 +210,9 @@ void main() {
     expect(api.markdownCalls, 0);
   });
 
-  testWidgets('a PDF is magnifiable, because the daemon rasterises it',
-      (tester) async {
+  testWidgets('a PDF is magnifiable, because the daemon rasterises it', (
+    tester,
+  ) async {
     // PDFs used to be markdown-only (Flutter cannot rasterise one). The daemon
     // now renders pages server-side, so a PDF behaves exactly like an image —
     // which matters because a real vault is 93% PDF.
@@ -197,8 +229,9 @@ void main() {
     expect(api.markdownCalls, 0);
   });
 
-  testWidgets('an email with no attachment opens straight into markdown',
-      (tester) async {
+  testWidgets('an email with no attachment opens straight into markdown', (
+    tester,
+  ) async {
     // An email body has no page to render — its attachments are ingested as
     // their own documents. Markdown is the only view.
     final api = _FakeApi(
@@ -212,10 +245,12 @@ void main() {
     expect(find.textContaining('Closing balance: 41,000'), findsOneWidget);
   });
 
-  testWidgets('a document with no page image offers no view toggle at all',
-      (tester) async {
-    // Not a disabled half — no choice. A two-option control with one dead
-    // option invites clicks that cannot do anything.
+  testWidgets('a text-only document keeps the fixed tabs and opens Markdown', (
+    tester,
+  ) async {
+    // The locked Glaze header always exposes Document / Markdown. For an email
+    // the impossible Document view is disabled internally and Markdown is the
+    // selected, rendered surface.
     final api = _FakeApi(
       docs: [_doc('d1', 'alert.eml', ext: '.eml')],
       markdown: '# Alert',
@@ -223,42 +258,53 @@ void main() {
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
-    expect(find.text('Document'), findsNothing);
-    expect(find.text('Markdown only'), findsOneWidget);
+    expect(find.text('Document'), findsOneWidget);
+    expect(find.text('Markdown'), findsOneWidget);
+    expect(find.textContaining('# Alert'), findsOneWidget);
+    expect(api.pageInfoCalls, 0);
   });
 
-  testWidgets('switching between a pageable and a text-only document flips the view',
-      (tester) async {
-    // The regression this guards: _showMarkdown left over from the previous
-    // selection. Land on an image, then select an email — it must not stay on
-    // the image pane, and vice versa.
-    final api = _FakeApi(
-      docs: [
-        _doc('d1', 'receipt.png'),
-        _doc('d2', 'alert.eml', ext: '.eml'),
-      ],
-      markdown: '# Alert',
-    );
-    await tester.pumpWidget(_host(api));
-    await tester.pumpAndSettle();
+  testWidgets(
+    'switching between a pageable and a text-only document flips the view',
+    (tester) async {
+      // The regression this guards: _showMarkdown left over from the previous
+      // selection. Land on an image, then select an email — it must not stay on
+      // the image pane, and vice versa.
+      final api = _FakeApi(
+        docs: [
+          _doc('d1', 'receipt.png'),
+          _doc('d2', 'alert.eml', ext: '.eml'),
+        ],
+        markdown: '# Alert',
+      );
+      await tester.pumpWidget(_host(api));
+      await tester.pumpAndSettle();
 
-    // Starts on the image, with a full toggle.
-    expect(find.text('Document'), findsOneWidget);
+      // Starts on the image, with the fixed Glaze tabs and no text fetch.
+      expect(find.text('Document'), findsOneWidget);
+      expect(find.text('Markdown'), findsOneWidget);
+      expect(api.markdownCalls, 0);
 
-    await tester.tap(find.text('alert.eml'));
-    await tester.pumpAndSettle();
-    expect(find.text('Markdown only'), findsOneWidget);
-    expect(find.text('Document'), findsNothing);
+      await tester.tap(find.text('alert.eml'));
+      await tester.pumpAndSettle();
+      expect(find.text('Document'), findsOneWidget);
+      expect(find.text('Markdown'), findsOneWidget);
+      expect(find.textContaining('# Alert'), findsOneWidget);
+      expect(api.markdownCalls, 1);
 
-    // ...and back again.
-    await tester.tap(find.text('receipt.png').first);
-    await tester.pumpAndSettle();
-    expect(find.text('Document'), findsOneWidget);
-    expect(find.text('Markdown only'), findsNothing);
-  });
+      // ...and back again: page view is restored and stale email text disappears.
+      await tester.tap(find.text('receipt.png').first);
+      await tester.pumpAndSettle();
+      expect(find.text('Document'), findsOneWidget);
+      expect(find.text('Markdown'), findsOneWidget);
+      expect(find.textContaining('# Alert'), findsNothing);
+      expect(api.markdownCalls, 1);
+    },
+  );
 
-  testWidgets('a text-only document that is FIRST still opens on markdown',
-      (tester) async {
+  testWidgets('a text-only document that is FIRST still opens on markdown', (
+    tester,
+  ) async {
     // The auto-selected document is never clicked, so it bypasses _select().
     // Both paths must apply the same rule.
     final api = _FakeApi(
@@ -269,7 +315,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(api.markdownCalls, 1);
-    expect(find.text('Markdown only'), findsOneWidget);
+    expect(find.text('Document'), findsOneWidget);
+    expect(find.text('Markdown'), findsOneWidget);
+    expect(find.textContaining('# First'), findsOneWidget);
   });
 
   testWidgets('a single-page document shows no pager', (tester) async {
@@ -281,8 +329,9 @@ void main() {
     expect(find.byTooltip('Next page'), findsNothing);
   });
 
-  testWidgets('a multi-page document shows a pager and can advance',
-      (tester) async {
+  testWidgets('a multi-page document shows a pager and can advance', (
+    tester,
+  ) async {
     final api = _FakeApi(
       docs: [_doc('d1', 'statement.pdf', ext: '.pdf')],
       pages: {'d1': 5},
@@ -296,8 +345,9 @@ void main() {
     expect(find.text('2 / 5'), findsOneWidget);
   });
 
-  testWidgets('the pager is disabled at both boundaries, never wrapping',
-      (tester) async {
+  testWidgets('the pager is disabled at both boundaries, never wrapping', (
+    tester,
+  ) async {
     // Wrapping from page 1 to page 3 reads as a glitch rather than navigation.
     final api = _FakeApi(
       docs: [_doc('d1', 'three.pdf', ext: '.pdf')],
@@ -310,13 +360,14 @@ void main() {
     // ancestor, not its descendant. Getting this backwards yields "Bad state:
     // No element" rather than a useful failure.
     IconButton btn(String tip) => tester.widget<IconButton>(
-          find.ancestor(
-            of: find.byTooltip(tip),
-            matching: find.byType(IconButton),
-          ),
-        );
+      find.ancestor(of: find.byTooltip(tip), matching: find.byType(IconButton)),
+    );
 
-    expect(btn('Previous page').onPressed, isNull, reason: 'page 1 has no previous');
+    expect(
+      btn('Previous page').onPressed,
+      isNull,
+      reason: 'page 1 has no previous',
+    );
     expect(btn('Next page').onPressed, isNotNull);
 
     await tester.tap(find.byTooltip('Next page'));
@@ -329,8 +380,9 @@ void main() {
     expect(btn('Previous page').onPressed, isNotNull);
   });
 
-  testWidgets('no pager when the daemon cannot render pages beyond the first',
-      (tester) async {
+  testWidgets('no pager when the daemon cannot render pages beyond the first', (
+    tester,
+  ) async {
     // Without pdftoppm the daemon 501s for page 2+. Offering a pager that
     // cannot page is worse than offering none.
     final api = _FakeApi(
@@ -344,8 +396,9 @@ void main() {
     expect(find.text('1 / 5'), findsNothing);
   });
 
-  testWidgets('selecting another document resets the pager to page 1',
-      (tester) async {
+  testWidgets('selecting another document resets the pager to page 1', (
+    tester,
+  ) async {
     // Leftover page state would ask for page 4 of a 2-page document.
     final api = _FakeApi(
       docs: [
@@ -368,8 +421,9 @@ void main() {
     expect(find.text('1 / 2'), findsOneWidget);
   });
 
-  testWidgets('page info is not fetched for a document with no page image',
-      (tester) async {
+  testWidgets('page info is not fetched for a document with no page image', (
+    tester,
+  ) async {
     // An email has no page. Asking the daemon about its pages is a pointless
     // round trip on every selection.
     final api = _FakeApi(
@@ -381,13 +435,17 @@ void main() {
     expect(api.pageInfoCalls, 0);
   });
 
-  testWidgets('the unanalysed document is visibly distinguished', (tester) async {
+  testWidgets('the unanalysed document is visibly distinguished', (
+    tester,
+  ) async {
     // An unanalysed document contributes to NO total, so the list must not make
     // it look equivalent to an analysed one.
-    final api = _FakeApi(docs: [
-      _doc('d1', 'pending.png', analysedAt: null),
-      _doc('d2', 'done.png'),
-    ]);
+    final api = _FakeApi(
+      docs: [
+        _doc('d1', 'pending.png', analysedAt: null),
+        _doc('d2', 'done.png'),
+      ],
+    );
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
@@ -395,28 +453,41 @@ void main() {
     expect(find.byTooltip('Analysed'), findsOneWidget);
   });
 
-  testWidgets('the Learning-Mode queue stays reachable', (tester) async {
-    // The queue used to BE this tab. It must not become unreachable now that
-    // the browser is the default surface.
-    var opened = false;
-    final api = _FakeApi(docs: [_doc('d1', 'x.png')]);
-    await tester.pumpWidget(
-      _host(api, pending: 4, onQueue: () => opened = true),
+  testWidgets('cross-tab navigation selects the requested document', (
+    tester,
+  ) async {
+    final api = _FakeApi(
+      docs: [_doc('d1', 'newest.png'), _doc('d2', 'requested.png')],
     );
+    await tester.pumpWidget(_host(api, initialDocumentId: 'd2'));
     await tester.pumpAndSettle();
-
-    expect(find.text('4 to teach'), findsOneWidget);
-    await tester.tap(find.text('4 to teach'));
-    await tester.pumpAndSettle();
-    expect(opened, isTrue);
+    expect(find.text('requested.png'), findsWidgets);
+    expect(
+      find.textContaining('to teach'),
+      findsNothing,
+      reason: 'Learning belongs only in the header drawer',
+    );
   });
 
-  testWidgets('with no pending questions the queue button is absent',
-      (tester) async {
-    final api = _FakeApi(docs: [_doc('d1', 'x.png')]);
-    await tester.pumpWidget(_host(api, pending: 0, onQueue: () {}));
+  testWidgets('a later cross-tab jump replaces the previous selection', (
+    tester,
+  ) async {
+    final api = _FakeApi(
+      docs: [_doc('d1', 'first.png'), _doc('d2', 'second.png')],
+    );
+    await tester.pumpWidget(_host(api, initialDocumentId: 'd1'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('to teach'), findsNothing);
+    expect(find.text('first.png'), findsWidgets);
+
+    await tester.pumpWidget(_host(api, initialDocumentId: 'd2'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('second.png'), findsWidgets);
+    expect(
+      api.pageInfoCalls,
+      2,
+      reason: 'selecting the second image must load its page metadata',
+    );
   });
 
   testWidgets('an empty vault does not render an error', (tester) async {

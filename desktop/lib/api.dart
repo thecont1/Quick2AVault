@@ -24,10 +24,10 @@ class TreemapSource {
     required this.transactions,
   });
   factory TreemapSource.fromJson(Map<String, dynamic> j) => TreemapSource(
-        bucket: (j['bucket'] ?? '') as String,
-        amountMinor: (j['amount_minor'] ?? 0) as int,
-        transactions: (j['transactions'] ?? 0) as int,
-      );
+    bucket: (j['bucket'] ?? '') as String,
+    amountMinor: (j['amount_minor'] ?? 0) as int,
+    transactions: (j['transactions'] ?? 0) as int,
+  );
 }
 
 class TreemapNode {
@@ -46,15 +46,15 @@ class TreemapNode {
     this.sources = const [],
   });
   factory TreemapNode.fromJson(Map<String, dynamic> j) => TreemapNode(
-        id: (j['id'] ?? '') as String,
-        label: (j['label'] ?? '') as String,
-        amountMinor: (j['amount_minor'] ?? 0) as int,
-        transactions: (j['transactions'] ?? 0) as int,
-        known: j['known'] == true,
-        sources: ((j['sources'] ?? const []) as List)
-            .map((e) => TreemapSource.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
+    id: (j['id'] ?? '') as String,
+    label: (j['label'] ?? '') as String,
+    amountMinor: (j['amount_minor'] ?? 0) as int,
+    transactions: (j['transactions'] ?? 0) as int,
+    known: j['known'] == true,
+    sources: ((j['sources'] ?? const []) as List)
+        .map((e) => TreemapSource.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 }
 
 class TreemapData {
@@ -68,12 +68,12 @@ class TreemapData {
   });
   static const empty = TreemapData(nodes: [], totalMinor: 0, rawBuckets: 0);
   factory TreemapData.fromJson(Map<String, dynamic> j) => TreemapData(
-        nodes: ((j['nodes'] ?? const []) as List)
-            .map((e) => TreemapNode.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        totalMinor: (j['total_minor'] ?? 0) as int,
-        rawBuckets: (j['raw_buckets'] ?? 0) as int,
-      );
+    nodes: ((j['nodes'] ?? const []) as List)
+        .map((e) => TreemapNode.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    totalMinor: (j['total_minor'] ?? 0) as int,
+    rawBuckets: (j['raw_buckets'] ?? 0) as int,
+  );
 }
 
 /// The period a snapshot covers, as resolved by the daemon.
@@ -85,11 +85,11 @@ class Period {
   const Period({required this.key, required this.label, this.from, this.to});
 
   factory Period.fromJson(Map<String, dynamic>? j) => Period(
-        key: (j?['key'] ?? 'all') as String,
-        label: (j?['label'] ?? '') as String,
-        from: j?['from'] as String?,
-        to: j?['to'] as String?,
-      );
+    key: (j?['key'] ?? 'all') as String,
+    label: (j?['label'] ?? '') as String,
+    from: j?['from'] as String?,
+    to: j?['to'] as String?,
+  );
 }
 
 /// What the period selector should offer — months and financial years are
@@ -110,21 +110,27 @@ class Periods {
   });
 
   static const empty = Periods(
-    currentFy: '', currentMonth: '', quick: [], months: [], financialYears: [],
+    currentFy: '',
+    currentMonth: '',
+    quick: [],
+    months: [],
+    financialYears: [],
   );
 
   factory Periods.fromJson(Map<String, dynamic> j) => Periods(
-        currentFy: (j['current_fy'] ?? '') as String,
-        currentMonth: (j['current_month'] ?? '') as String,
-        quick: ((j['quick'] ?? const []) as List)
-            .map((e) => (
-                  key: (e['key'] ?? '') as String,
-                  label: (e['label'] ?? '') as String,
-                ))
-            .toList(),
-        months: ((j['months'] ?? const []) as List).cast<String>(),
-        financialYears: ((j['financial_years'] ?? const []) as List).cast<String>(),
-      );
+    currentFy: (j['current_fy'] ?? '') as String,
+    currentMonth: (j['current_month'] ?? '') as String,
+    quick: ((j['quick'] ?? const []) as List)
+        .map(
+          (e) => (
+            key: (e['key'] ?? '') as String,
+            label: (e['label'] ?? '') as String,
+          ),
+        )
+        .toList(),
+    months: ((j['months'] ?? const []) as List).cast<String>(),
+    financialYears: ((j['financial_years'] ?? const []) as List).cast<String>(),
+  );
 }
 
 /// A human the vault knows about. `isMember` marks people who share this
@@ -162,19 +168,19 @@ class Person {
   bool get confirmed => status == 'confirmed';
 
   factory Person.fromJson(Map<String, dynamic> j) => Person(
-        id: (j['id'] ?? '') as String,
-        displayName: (j['display_name'] ?? '') as String,
-        relationship: j['subtype'] as String?,
-        isMember: (j['is_member'] ?? 0) == 1,
-        isOwner: (j['is_owner'] ?? 0) == 1,
-        status: (j['status'] ?? 'candidate') as String,
-        documentCount: (j['document_count'] ?? 0) as int,
-        transactionCount: (j['transaction_count'] ?? 0) as int,
-        unresolvedAliasCount: (j['unresolved_alias_count'] ?? 0) as int,
-        aliasCount: (j['alias_count'] ?? 0) as int,
-        lastSeenAt: j['last_seen_at'] as String?,
-        roles: ((j['roles'] ?? const []) as List).cast<String>(),
-      );
+    id: (j['id'] ?? '') as String,
+    displayName: (j['display_name'] ?? '') as String,
+    relationship: j['subtype'] as String?,
+    isMember: (j['is_member'] ?? 0) == 1,
+    isOwner: (j['is_owner'] ?? 0) == 1,
+    status: (j['status'] ?? 'candidate') as String,
+    documentCount: (j['document_count'] ?? 0) as int,
+    transactionCount: (j['transaction_count'] ?? 0) as int,
+    unresolvedAliasCount: (j['unresolved_alias_count'] ?? 0) as int,
+    aliasCount: (j['alias_count'] ?? 0) as int,
+    lastSeenAt: j['last_seen_at'] as String?,
+    roles: ((j['roles'] ?? const []) as List).cast<String>(),
+  );
 }
 
 class Snapshot {
@@ -209,8 +215,13 @@ class Snapshot {
   });
 
   static const empty = Snapshot(
-    spendingMinor: 0, incomeMinor: 0, transfersMinor: 0,
-    documents: 0, transactions: 0, entities: 0, evidenceLinks: 0,
+    spendingMinor: 0,
+    incomeMinor: 0,
+    transfersMinor: 0,
+    documents: 0,
+    transactions: 0,
+    entities: 0,
+    evidenceLinks: 0,
   );
 
   factory Snapshot.fromJson(Map<String, dynamic> j) {
@@ -234,20 +245,26 @@ class Snapshot {
 
   /// What a document-counting tool would have reported: every document's
   /// amount added up, including the ones that describe the same rupee.
-  int naiveMinor(List<Txn> txns) =>
-      txns.fold(0, (a, t) => a + t.amountMinor * (t.evidence.isEmpty ? 1 : t.evidence.length));
+  int naiveMinor(List<Txn> txns) => txns.fold(
+    0,
+    (a, t) => a + t.amountMinor * (t.evidence.isEmpty ? 1 : t.evidence.length),
+  );
 }
 
 class Leg {
   final String leg;
   final int amountMinor;
   final String account;
-  const Leg({required this.leg, required this.amountMinor, required this.account});
+  const Leg({
+    required this.leg,
+    required this.amountMinor,
+    required this.account,
+  });
   factory Leg.fromJson(Map<String, dynamic> j) => Leg(
-        leg: (j['leg'] ?? '') as String,
-        amountMinor: (j['amount_minor'] ?? 0) as int,
-        account: (j['account'] ?? '') as String,
-      );
+    leg: (j['leg'] ?? '') as String,
+    amountMinor: (j['amount_minor'] ?? 0) as int,
+    account: (j['account'] ?? '') as String,
+  );
   bool get isDebit => leg == 'debit';
 }
 
@@ -269,13 +286,13 @@ class Evidence {
   });
 
   factory Evidence.fromJson(Map<String, dynamic> j) => Evidence(
-        id: (j['id'] ?? '') as String,
-        filename: (j['original_filename'] ?? '') as String,
-        role: (j['evidence_role'] ?? '') as String,
-        matchScore: (j['match_score'] as num?)?.toDouble(),
-        linkedBy: (j['linked_by'] ?? 'ai') as String,
-        extraction: j['extraction'] as Map<String, dynamic>?,
-      );
+    id: (j['id'] ?? '') as String,
+    filename: (j['original_filename'] ?? '') as String,
+    role: (j['evidence_role'] ?? '') as String,
+    matchScore: (j['match_score'] as num?)?.toDouble(),
+    linkedBy: (j['linked_by'] ?? 'ai') as String,
+    extraction: j['extraction'] as Map<String, dynamic>?,
+  );
 
   Map<String, String> get refs {
     final r = extraction?['reference_ids'];
@@ -288,6 +305,7 @@ class Txn {
   final String id;
   final String direction;
   final int amountMinor;
+
   /// ISO 4217 source currency, or null when the document stated none
   /// (work order 05 §A.2). Null is a REVIEW state — render it as
   /// "currency uncertain", never as a silent rupee figure.
@@ -327,28 +345,28 @@ class Txn {
   });
 
   factory Txn.fromJson(Map<String, dynamic> j) => Txn(
-        id: (j['id'] ?? '') as String,
-        direction: (j['direction'] ?? 'out') as String,
-        amountMinor: (j['amount_minor'] ?? 0) as int,
-        currency: (j['currency'] as String?)?.isNotEmpty == true
-            ? (j['currency'] as String)
-            : null,
-        homeAmountMinor: (j['home_amount_minor'] as num?)?.toInt(),
-        fxRate: (j['fx_rate'] as num?)?.toDouble(),
-        fxDate: j['fx_date'] as String?,
-        occurredAt: (j['occurred_at'] ?? '') as String,
-        fyKey: (j['fy_key'] ?? '') as String,
-        counterparty: j['counterparty_name'] as String?,
-        rail: j['payment_rail'] as String?,
-        status: (j['status'] ?? 'evidenced') as String,
-        linkedBy: j['linked_by'] as String?,
-        legs: ((j['legs'] ?? const []) as List)
-            .map((e) => Leg.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        evidence: ((j['evidence'] ?? const []) as List)
-            .map((e) => Evidence.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
+    id: (j['id'] ?? '') as String,
+    direction: (j['direction'] ?? 'out') as String,
+    amountMinor: (j['amount_minor'] ?? 0) as int,
+    currency: (j['currency'] as String?)?.isNotEmpty == true
+        ? (j['currency'] as String)
+        : null,
+    homeAmountMinor: (j['home_amount_minor'] as num?)?.toInt(),
+    fxRate: (j['fx_rate'] as num?)?.toDouble(),
+    fxDate: j['fx_date'] as String?,
+    occurredAt: (j['occurred_at'] ?? '') as String,
+    fyKey: (j['fy_key'] ?? '') as String,
+    counterparty: j['counterparty_name'] as String?,
+    rail: j['payment_rail'] as String?,
+    status: (j['status'] ?? 'evidenced') as String,
+    linkedBy: j['linked_by'] as String?,
+    legs: ((j['legs'] ?? const []) as List)
+        .map((e) => Leg.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    evidence: ((j['evidence'] ?? const []) as List)
+        .map((e) => Evidence.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 
   bool get isTransfer => direction == 'transfer';
   bool get multiEvidence => evidence.length > 1;
@@ -360,7 +378,8 @@ class Txn {
   /// never a replacement for the source amount. The daemon's aggregates are
   /// INR-denominated today; when multi-jurisdiction lands this takes the
   /// pack's currency from the payload instead.
-  String? get homeAmount => homeAmountMinor == null ? null : money(homeAmountMinor!, 'INR');
+  String? get homeAmount =>
+      homeAmountMinor == null ? null : money(homeAmountMinor!, 'INR');
 }
 
 class EvidenceCard {
@@ -379,17 +398,17 @@ class EvidenceCard {
   });
 
   factory EvidenceCard.fromJson(Map<String, dynamic> j) => EvidenceCard(
-        transaction: Txn.fromJson(j['transaction'] as Map<String, dynamic>),
-        legs: ((j['legs'] ?? const []) as List)
-            .map((e) => Leg.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        evidence: ((j['evidence'] ?? const []) as List)
-            .map((e) => Evidence.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        provenance: ((j['provenance'] ?? const []) as List)
-            .cast<Map<String, dynamic>>(),
-        summary: (j['summary'] ?? '') as String,
-      );
+    transaction: Txn.fromJson(j['transaction'] as Map<String, dynamic>),
+    legs: ((j['legs'] ?? const []) as List)
+        .map((e) => Leg.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    evidence: ((j['evidence'] ?? const []) as List)
+        .map((e) => Evidence.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    provenance: ((j['provenance'] ?? const []) as List)
+        .cast<Map<String, dynamic>>(),
+    summary: (j['summary'] ?? '') as String,
+  );
 
   /// Reference IDs appearing on MORE THAN ONE document — the join keys that
   /// collapsed several documents into one transaction. Highlighting these is
@@ -455,8 +474,8 @@ class HealthStatus {
       capabilities: caps is Map<String, dynamic>
           ? caps
           : caps is Map
-              ? Map<String, dynamic>.from(caps)
-              : const {},
+          ? Map<String, dynamic>.from(caps)
+          : const {},
     );
   }
 
@@ -464,18 +483,16 @@ class HealthStatus {
       HealthStatus(isReachable: false, statusCode: statusCode, error: error);
 
   /// Whether a specific capability is advertised as available.
-  bool hasCapability(String name) =>
-      capabilities[name] == true;
+  bool hasCapability(String name) => capabilities[name] == true;
 
   /// Whether the daemon's schema version is at least [required].
   bool isSchemaCompatible(int required) =>
       schemaVersion != null && schemaVersion! >= required;
 
   @override
-  String toString() =>
-      isReachable
-          ? 'HealthStatus(ok, v=$version, schema=$schemaVersion, caps=${capabilities.keys.join(",")})'
-          : 'HealthStatus(unreachable, status=$statusCode, error=$error)';
+  String toString() => isReachable
+      ? 'HealthStatus(ok, v=$version, schema=$schemaVersion, caps=${capabilities.keys.join(",")})'
+      : 'HealthStatus(unreachable, status=$statusCode, error=$error)';
 }
 
 /// Work order 06 — one intake event with full disposition detail.
@@ -534,8 +551,7 @@ class IntakeEvent {
   });
 
   /// Normalised disposition: 'added' (legacy) → 'accepted'.
-  String get disposition =>
-      kind == 'added' ? 'accepted' : kind;
+  String get disposition => kind == 'added' ? 'accepted' : kind;
 
   /// Work order 07 §B2: a user-readable terminal outcome, not raw job churn.
   /// Returns null if the item is not yet in a terminal state.
@@ -558,17 +574,28 @@ class IntakeEvent {
   /// Work order 07 §B2: the current stage as a user-readable label.
   String get stageLabel {
     switch (processingState) {
-      case 'received': return 'Received';
-      case 'stable': return 'Waiting for stability';
-      case 'hashed': return 'Hashed';
-      case 'triaged': return 'Triaging';
-      case 'archived': return 'Stored safely';
-      case 'queued': return 'Queued';
-      case 'processing': return detail ?? 'Processing';
-      case 'complete': return 'Completed';
-      case 'failed': return 'Failed';
-      case 'password_needed': return 'Password required';
-      default: return processingState;
+      case 'received':
+        return 'Received';
+      case 'stable':
+        return 'Waiting for stability';
+      case 'hashed':
+        return 'Hashed';
+      case 'triaged':
+        return 'Triaging';
+      case 'archived':
+        return 'Stored safely';
+      case 'queued':
+        return 'Queued';
+      case 'processing':
+        return detail ?? 'Processing';
+      case 'complete':
+        return 'Completed';
+      case 'failed':
+        return 'Failed';
+      case 'password_needed':
+        return 'Password required';
+      default:
+        return processingState;
     }
   }
 
@@ -729,6 +756,7 @@ class VaultError {
 class LearningQuestion {
   final int id;
   final String question;
+
   /// Why this was asked: 'unseen_entity', 'ambiguous_category', etc. Decides
   /// which rule kind an answer becomes.
   final String trigger;
@@ -755,15 +783,15 @@ class LearningQuestion {
   String? get documentId => context['document_id'] as String?;
 
   factory LearningQuestion.fromJson(Map<String, dynamic> j) => LearningQuestion(
-        id: (j['id'] ?? 0) as int,
-        question: (j['question'] ?? '') as String,
-        trigger: (j['trigger'] ?? '') as String,
-        context: (j['context'] as Map<String, dynamic>?) ?? const {},
-        options: ((j['options'] ?? const []) as List).cast<String>(),
-        createdAt: j['created_at'] == null
-            ? null
-            : DateTime.tryParse(j['created_at'] as String),
-      );
+    id: (j['id'] ?? 0) as int,
+    question: (j['question'] ?? '') as String,
+    trigger: (j['trigger'] ?? '') as String,
+    context: (j['context'] as Map<String, dynamic>?) ?? const {},
+    options: ((j['options'] ?? const []) as List).cast<String>(),
+    createdAt: j['created_at'] == null
+        ? null
+        : DateTime.tryParse(j['created_at'] as String),
+  );
 }
 
 /// A rule the vault has learned from an answer.
@@ -783,12 +811,12 @@ class LearnedRule {
   });
 
   factory LearnedRule.fromJson(Map<String, dynamic> j) => LearnedRule(
-        id: (j['id'] ?? 0) as int,
-        kind: (j['kind'] ?? '') as String,
-        matchKey: (j['match_key'] ?? '') as String,
-        value: (j['value'] ?? '') as String,
-        timesApplied: (j['times_applied'] ?? 0) as int,
-      );
+    id: (j['id'] ?? 0) as int,
+    kind: (j['kind'] ?? '') as String,
+    matchKey: (j['match_key'] ?? '') as String,
+    value: (j['value'] ?? '') as String,
+    timesApplied: (j['times_applied'] ?? 0) as int,
+  );
 }
 
 /// The whole learning surface in one shape.
@@ -797,6 +825,7 @@ class LearningState {
   final int budget;
   final List<LearningQuestion> questions;
   final List<LearnedRule> rules;
+
   /// How many questions have ever been answered — the vault's training count.
   final int answered;
 
@@ -809,20 +838,24 @@ class LearningState {
   });
 
   static const empty = LearningState(
-    enabled: true, budget: 0, questions: [], rules: [], answered: 0,
+    enabled: true,
+    budget: 0,
+    questions: [],
+    rules: [],
+    answered: 0,
   );
 
   factory LearningState.fromJson(Map<String, dynamic> j) => LearningState(
-        enabled: (j['enabled'] ?? true) as bool,
-        budget: (j['budget'] ?? 0) as int,
-        questions: ((j['questions'] ?? const []) as List)
-            .map((e) => LearningQuestion.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        rules: ((j['rules'] ?? const []) as List)
-            .map((e) => LearnedRule.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        answered: (j['answered'] ?? 0) as int,
-      );
+    enabled: (j['enabled'] ?? true) as bool,
+    budget: (j['budget'] ?? 0) as int,
+    questions: ((j['questions'] ?? const []) as List)
+        .map((e) => LearningQuestion.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    rules: ((j['rules'] ?? const []) as List)
+        .map((e) => LearnedRule.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    answered: (j['answered'] ?? 0) as int,
+  );
 }
 
 /// A document as the browser list needs it: enough to group, label and show
@@ -865,7 +898,14 @@ class VaultDoc {
   /// body has no page to render, and its attachments are ingested as their own
   /// documents.
   static const pageableExtensions = {
-    'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'heic', 'pdf',
+    'png',
+    'jpg',
+    'jpeg',
+    'gif',
+    'webp',
+    'bmp',
+    'heic',
+    'pdf',
   };
 
   /// True when this document can be shown as a magnifiable page image.
@@ -874,20 +914,21 @@ class VaultDoc {
   /// default-view choice and the pane that renders it need this answer, and two
   /// independent copies of the extension list would eventually disagree — which
   /// shows up as a document defaulting to a view it cannot render.
-  bool get hasPageImage => pageableExtensions
-      .contains((ext ?? '').toLowerCase().replaceFirst('.', ''));
+  bool get hasPageImage => pageableExtensions.contains(
+    (ext ?? '').toLowerCase().replaceFirst('.', ''),
+  );
 
   factory VaultDoc.fromJson(Map<String, dynamic> j) => VaultDoc(
-        id: j['id'] as String,
-        filename: (j['original_filename'] ?? '(unnamed)') as String,
-        ext: j['ext'] as String?,
-        byteSize: (j['byte_size'] as num?)?.toInt() ?? 0,
-        docType: j['doc_type'] as String?,
-        source: j['source'] as String?,
-        receivedAt: (j['received_at'] ?? '') as String,
-        analysedAt: j['analysed_at'] as String?,
-        markdownChars: (j['markdown_chars'] as num?)?.toInt() ?? 0,
-      );
+    id: j['id'] as String,
+    filename: (j['original_filename'] ?? '(unnamed)') as String,
+    ext: j['ext'] as String?,
+    byteSize: (j['byte_size'] as num?)?.toInt() ?? 0,
+    docType: j['doc_type'] as String?,
+    source: j['source'] as String?,
+    receivedAt: (j['received_at'] ?? '') as String,
+    analysedAt: j['analysed_at'] as String?,
+    markdownChars: (j['markdown_chars'] as num?)?.toInt() ?? 0,
+  );
 }
 
 /// How a document can be shown, and how many pages it has.
@@ -919,15 +960,14 @@ class PageInfo {
   /// daemon can actually render the others.
   bool get showPager => pages > 1 && pagerAvailable;
 
-  static const none =
-      PageInfo(kind: 'none', pages: 0, pagerAvailable: false);
+  static const none = PageInfo(kind: 'none', pages: 0, pagerAvailable: false);
 
   factory PageInfo.fromJson(Map<String, dynamic> j) => PageInfo(
-        kind: (j['kind'] as String?) ?? 'none',
-        pages: (j['pages'] as num?)?.toInt() ?? 0,
-        pagerAvailable: (j['pager_available'] as bool?) ?? false,
-        reason: j['reason'] as String?,
-      );
+    kind: (j['kind'] as String?) ?? 'none',
+    pages: (j['pages'] as num?)?.toInt() ?? 0,
+    pagerAvailable: (j['pager_available'] as bool?) ?? false,
+    reason: j['reason'] as String?,
+  );
 }
 
 /// One alias row, typed and with provenance (work order 05 §B.2).
@@ -956,15 +996,15 @@ class PersonAlias {
   bool get proposed => status == 'proposed';
 
   factory PersonAlias.fromJson(Map<String, dynamic> j) => PersonAlias(
-        id: (j['id'] as num).toInt(),
-        alias: (j['alias'] ?? '') as String,
-        aliasType: (j['alias_type'] ?? 'name_variant') as String,
-        source: j['source'] as String?,
-        status: (j['status'] ?? 'confirmed') as String,
-        createdAt: (j['created_at'] ?? '') as String,
-        lastSeenAt: j['last_seen_at'] as String?,
-        supportingDocuments: (j['supporting_documents'] ?? 0) as int,
-      );
+    id: (j['id'] as num).toInt(),
+    alias: (j['alias'] ?? '') as String,
+    aliasType: (j['alias_type'] ?? 'name_variant') as String,
+    source: j['source'] as String?,
+    status: (j['status'] ?? 'confirmed') as String,
+    createdAt: (j['created_at'] ?? '') as String,
+    lastSeenAt: j['last_seen_at'] as String?,
+    supportingDocuments: (j['supporting_documents'] ?? 0) as int,
+  );
 }
 
 /// The People-tab drill-down for one person (work order 05 §B.6).
@@ -984,16 +1024,18 @@ class PersonDetail {
   });
 
   factory PersonDetail.fromJson(Map<String, dynamic> j) => PersonDetail(
-        person: Person.fromJson(j['person'] as Map<String, dynamic>),
-        aliases: ((j['aliases'] ?? const []) as List)
-            .map((e) => PersonAlias.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        documents: ((j['documents'] ?? const []) as List).cast<Map<String, dynamic>>(),
-        transactions: ((j['transactions'] ?? const []) as List)
-            .map((e) => Txn.fromJson(e as Map<String, dynamic>))
-            .toList(),
-        questions: ((j['questions'] ?? const []) as List).cast<Map<String, dynamic>>(),
-      );
+    person: Person.fromJson(j['person'] as Map<String, dynamic>),
+    aliases: ((j['aliases'] ?? const []) as List)
+        .map((e) => PersonAlias.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    documents: ((j['documents'] ?? const []) as List)
+        .cast<Map<String, dynamic>>(),
+    transactions: ((j['transactions'] ?? const []) as List)
+        .map((e) => Txn.fromJson(e as Map<String, dynamic>))
+        .toList(),
+    questions: ((j['questions'] ?? const []) as List)
+        .cast<Map<String, dynamic>>(),
+  );
 }
 
 /// One effective field value on the evidence summary: the winning value and
@@ -1002,13 +1044,17 @@ class EffectiveValue {
   final String value;
   final String source;
   final String status;
-  const EffectiveValue({required this.value, required this.source, required this.status});
+  const EffectiveValue({
+    required this.value,
+    required this.source,
+    required this.status,
+  });
 
   factory EffectiveValue.fromJson(Map<String, dynamic> j) => EffectiveValue(
-        value: (j['value'] ?? '') as String,
-        source: (j['source'] ?? 'ai') as String,
-        status: (j['status'] ?? 'proposed') as String,
-      );
+    value: (j['value'] ?? '') as String,
+    source: (j['source'] ?? 'ai') as String,
+    status: (j['status'] ?? 'proposed') as String,
+  );
 }
 
 /// The document evidence summary (work order 05 §A.3).
@@ -1062,11 +1108,14 @@ class DocumentDetail {
       lineItems: ((raw['line_items'] ?? const []) as List)
           .whereType<Map<String, dynamic>>()
           .toList(),
-      parties: ((j['parties'] ?? const []) as List).cast<Map<String, dynamic>>(),
+      parties: ((j['parties'] ?? const []) as List)
+          .cast<Map<String, dynamic>>(),
       transactions: ((j['transactions'] ?? const []) as List)
           .map((e) => Txn.fromJson(e as Map<String, dynamic>))
           .toList(),
-      editableFields: ((j['editable_fields'] ?? const []) as List).cast<String>().toSet(),
+      editableFields: ((j['editable_fields'] ?? const []) as List)
+          .cast<String>()
+          .toSet(),
     );
   }
 }
@@ -1179,7 +1228,10 @@ class StatementLine {
       currency: (j['currency'] ?? 'INR') as String,
       fxOriginal: fx == null
           ? null
-          : (amountMinor: (fx['amount_minor'] as num).toInt(), currency: fx['currency'] as String),
+          : (
+              amountMinor: (fx['amount_minor'] as num).toInt(),
+              currency: fx['currency'] as String,
+            ),
       referenceId: j['reference_id'] as String?,
       status: (j['status'] ?? 'pending') as String,
       transactionId: j['transaction_id'] as String?,
@@ -1283,18 +1335,18 @@ class SearchHit {
   });
 
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
-        documentId: j['document_id'] as String,
-        filename: (j['filename'] as String?) ?? '(unnamed)',
-        snippet: (j['snippet'] as String?) ?? '',
-        rank: (j['rank'] as num?)?.toDouble() ?? 0,
-        docType: j['doc_type'] as String?,
-        transactionId: j['transaction_id'] as String?,
-        amountMinor: (j['amount_minor'] as num?)?.toInt(),
-        currency: (j['currency'] as String?)?.isNotEmpty == true
-            ? j['currency'] as String
-            : null,
-        occurredAt: j['occurred_at'] as String?,
-      );
+    documentId: j['document_id'] as String,
+    filename: (j['filename'] as String?) ?? '(unnamed)',
+    snippet: (j['snippet'] as String?) ?? '',
+    rank: (j['rank'] as num?)?.toDouble() ?? 0,
+    docType: j['doc_type'] as String?,
+    transactionId: j['transaction_id'] as String?,
+    amountMinor: (j['amount_minor'] as num?)?.toInt(),
+    currency: (j['currency'] as String?)?.isNotEmpty == true
+        ? j['currency'] as String
+        : null,
+    occurredAt: j['occurred_at'] as String?,
+  );
 }
 
 /// The winning claim for one field, with its provenance.
@@ -1318,12 +1370,12 @@ class FieldClaim {
   bool get isUser => source == 'user';
 
   factory FieldClaim.fromJson(Map<String, dynamic> j) => FieldClaim(
-        value: j['value'] as String?,
-        source: (j['source'] as String?) ?? 'ai',
-        status: (j['status'] as String?) ?? 'proposed',
-        confidence: (j['confidence'] as num?)?.toDouble(),
-        at: j['at'] as String?,
-      );
+    value: j['value'] as String?,
+    source: (j['source'] as String?) ?? 'ai',
+    status: (j['status'] as String?) ?? 'proposed',
+    confidence: (j['confidence'] as num?)?.toDouble(),
+    at: j['at'] as String?,
+  );
 }
 
 /// Every live claim on one subject, plus which fields may be edited.
@@ -1344,21 +1396,23 @@ class ClaimSet {
     required this.claims,
   });
 
-  static const empty =
-      ClaimSet(subjectType: '', subjectId: '', editableFields: [], claims: {});
+  static const empty = ClaimSet(
+    subjectType: '',
+    subjectId: '',
+    editableFields: [],
+    claims: {},
+  );
 
   FieldClaim? operator [](String field) => claims[field];
 
   factory ClaimSet.fromJson(Map<String, dynamic> j) => ClaimSet(
-        subjectType: (j['subject_type'] as String?) ?? '',
-        subjectId: (j['subject_id'] as String?) ?? '',
-        editableFields:
-            ((j['editable_fields'] ?? const []) as List).cast<String>(),
-        claims: ((j['claims'] ?? const {}) as Map<String, dynamic>).map(
-          (k, v) =>
-              MapEntry(k, FieldClaim.fromJson(v as Map<String, dynamic>)),
-        ),
-      );
+    subjectType: (j['subject_type'] as String?) ?? '',
+    subjectId: (j['subject_id'] as String?) ?? '',
+    editableFields: ((j['editable_fields'] ?? const []) as List).cast<String>(),
+    claims: ((j['claims'] ?? const {}) as Map<String, dynamic>).map(
+      (k, v) => MapEntry(k, FieldClaim.fromJson(v as Map<String, dynamic>)),
+    ),
+  );
 }
 
 /// A transaction the resolver touched after an edit.
@@ -1382,8 +1436,9 @@ class AffectedTransaction {
       AffectedTransaction(
         transactionId: j['transaction_id'] as String,
         changed: ((j['changed'] ?? const []) as List).cast<String>(),
-        reasons: ((j['reasons'] ?? const {}) as Map<String, dynamic>)
-            .map((k, v) => MapEntry(k, v.toString())),
+        reasons: ((j['reasons'] ?? const {}) as Map<String, dynamic>).map(
+          (k, v) => MapEntry(k, v.toString()),
+        ),
         mismatches: ((j['mismatches'] ?? const []) as List)
             .map((e) => ClaimMismatch.fromJson(e as Map<String, dynamic>))
             .toList(),
@@ -1404,11 +1459,11 @@ class ClaimMismatch {
   });
 
   factory ClaimMismatch.fromJson(Map<String, dynamic> j) => ClaimMismatch(
-        field: j['field'] as String,
-        documentId: (j['document_id'] as String?) ?? '',
-        documentValue: (j['document_value'] ?? '').toString(),
-        canonical: (j['canonical'] ?? '').toString(),
-      );
+    field: j['field'] as String,
+    documentId: (j['document_id'] as String?) ?? '',
+    documentValue: (j['document_value'] ?? '').toString(),
+    canonical: (j['canonical'] ?? '').toString(),
+  );
 }
 
 class ClaimWriteResult {
@@ -1426,16 +1481,15 @@ class ClaimWriteResult {
     this.previous,
   });
 
-  factory ClaimWriteResult.fromJson(Map<String, dynamic> j) =>
-      ClaimWriteResult(
-        claimId: (j['claim_id'] as num?)?.toInt() ?? 0,
-        field: (j['field'] as String?) ?? '',
-        value: j['value'] as String?,
-        previous: j['previous'] as String?,
-        affected: ((j['affected_transactions'] ?? const []) as List)
-            .map((e) => AffectedTransaction.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
+  factory ClaimWriteResult.fromJson(Map<String, dynamic> j) => ClaimWriteResult(
+    claimId: (j['claim_id'] as num?)?.toInt() ?? 0,
+    field: (j['field'] as String?) ?? '',
+    value: j['value'] as String?,
+    previous: j['previous'] as String?,
+    affected: ((j['affected_transactions'] ?? const []) as List)
+        .map((e) => AffectedTransaction.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 }
 
 class AuditEntry {
@@ -1458,14 +1512,14 @@ class AuditEntry {
   });
 
   factory AuditEntry.fromJson(Map<String, dynamic> j) => AuditEntry(
-        id: (j['id'] as num?)?.toInt() ?? 0,
-        field: (j['field'] as String?) ?? '',
-        action: (j['action'] as String?) ?? 'edit',
-        oldValue: j['old_value'] as String?,
-        newValue: j['new_value'] as String?,
-        source: (j['source'] as String?) ?? 'user',
-        at: (j['at'] as String?) ?? '',
-      );
+    id: (j['id'] as num?)?.toInt() ?? 0,
+    field: (j['field'] as String?) ?? '',
+    action: (j['action'] as String?) ?? 'edit',
+    oldValue: j['old_value'] as String?,
+    newValue: j['new_value'] as String?,
+    source: (j['source'] as String?) ?? 'user',
+    at: (j['at'] as String?) ?? '',
+  );
 }
 
 class VaultApi {
@@ -1474,7 +1528,7 @@ class VaultApi {
   final http.Client _client;
 
   VaultApi({required this.baseUrl, required this.token, http.Client? client})
-      : _client = client ?? http.Client();
+    : _client = client ?? http.Client();
 
   Map<String, String> get _headers => {'authorization': 'Bearer $token'};
 
@@ -1488,11 +1542,11 @@ class VaultApi {
 
   /// The document list for the Review browser.
   Future<List<VaultDoc>> documents({int limit = 200}) => _get(
-        '/v1/documents?limit=$limit',
-        (j) => ((j['documents'] ?? const []) as List)
-            .map((e) => VaultDoc.fromJson(e as Map<String, dynamic>))
-            .toList(),
-      );
+    '/v1/documents?limit=$limit',
+    (j) => ((j['documents'] ?? const []) as List)
+        .map((e) => VaultDoc.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 
   /// URL for a document's original bytes. Needs [imageHeaders] to fetch.
   Uri documentFileUrl(String id) => Uri.parse('$baseUrl/v1/documents/$id/file');
@@ -1506,7 +1560,8 @@ class VaultApi {
   /// Width defaults to the daemon's own default (2400px) by omission, so the
   /// resolution decision lives in ONE place rather than being duplicated here.
   Uri documentPageUrl(String id, {int page = 1, int? width}) => Uri.parse(
-      '$baseUrl/v1/documents/$id/page?n=$page${width == null ? '' : '&w=$width'}');
+    '$baseUrl/v1/documents/$id/page?n=$page${width == null ? '' : '&w=$width'}',
+  );
 
   /// Page count and render capability for a document.
   ///
@@ -1634,37 +1689,47 @@ class VaultApi {
     if (fy != null) q['fy'] = fy;
     if (bucket != null) q['bucket'] = bucket;
     final qs = q.isEmpty ? '' : '?${Uri(queryParameters: q).query}';
-    return _get('/v1/transactions$qs', (j) =>
-        ((j['transactions'] ?? const []) as List)
-            .map((e) => Txn.fromJson(e as Map<String, dynamic>))
-            .toList());
+    return _get(
+      '/v1/transactions$qs',
+      (j) => ((j['transactions'] ?? const []) as List)
+          .map((e) => Txn.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
   }
 
   Future<EvidenceCard> evidenceCard(String txnId) =>
       _get('/v1/transactions/$txnId/evidence', EvidenceCard.fromJson);
 
-  Future<List<Map<String, dynamic>>> intakeFeed() => _get('/v1/intake-feed',
-      (j) => ((j['events'] ?? const []) as List).cast<Map<String, dynamic>>());
+  Future<List<Map<String, dynamic>>> intakeFeed() => _get(
+    '/v1/intake-feed',
+    (j) => ((j['events'] ?? const []) as List).cast<Map<String, dynamic>>(),
+  );
 
   /// Work order 06 §8 — recent intake with full disposition detail.
-  Future<List<IntakeEvent>> intakeRecent({int limit = 50}) =>
-      _get('/v1/intake/recent?limit=$limit', (j) => ((j['events'] ?? const []) as List)
-          .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
-          .toList());
+  Future<List<IntakeEvent>> intakeRecent({int limit = 50}) => _get(
+    '/v1/intake/recent?limit=$limit',
+    (j) => ((j['events'] ?? const []) as List)
+        .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 
   /// Work order 06 §9 — irrelevant items only, for the Irrelevant view.
-  Future<List<IntakeEvent>> irrelevantItems({int limit = 200}) =>
-      _get('/v1/irrelevant?limit=$limit', (j) => ((j['events'] ?? const []) as List)
-          .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
-          .toList());
+  Future<List<IntakeEvent>> irrelevantItems({int limit = 200}) => _get(
+    '/v1/irrelevant?limit=$limit',
+    (j) => ((j['events'] ?? const []) as List)
+        .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 
   /// Work order 07 §B2 — aggregated user-facing intake status. Each row is
   /// one intake item with its current stage, terminal outcome, and actionable
   /// failure/retry information. Replaces raw Live Intake event churn.
-  Future<List<IntakeEvent>> intakeStatus({int limit = 100}) =>
-      _get('/v1/intake/status?limit=$limit', (j) => ((j['events'] ?? const []) as List)
-          .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
-          .toList());
+  Future<List<IntakeEvent>> intakeStatus({int limit = 100}) => _get(
+    '/v1/intake/status?limit=$limit',
+    (j) => ((j['events'] ?? const []) as List)
+        .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
 
   /// Work order 06 §8 — restore an irrelevant intake (re-triage and promote).
   Future<Map<String, dynamic>> restoreIntake(int id) async {
@@ -1687,7 +1752,10 @@ class VaultApi {
   /// Work order 07 §G — submit a password for an encrypted document.
   /// The intake must be in 'password_needed' state. The daemon stores the
   /// password on the document and re-enqueues the convert job.
-  Future<Map<String, dynamic>> submitIntakePassword(int id, String password) async {
+  Future<Map<String, dynamic>> submitIntakePassword(
+    int id,
+    String password,
+  ) async {
     final res = await _client.post(
       Uri.parse('$baseUrl/v1/intake/$id/password'),
       headers: {..._headers, 'content-type': 'application/json'},
@@ -1699,11 +1767,15 @@ class VaultApi {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
-  Future<List<Map<String, dynamic>>> entities() => _get('/v1/entities',
-      (j) => ((j['entities'] ?? const []) as List).cast<Map<String, dynamic>>());
+  Future<List<Map<String, dynamic>>> entities({String? kind}) => _get(
+    '/v1/entities${kind == null ? '' : '?kind=${Uri.encodeQueryComponent(kind)}'}',
+    (j) => ((j['entities'] ?? const []) as List).cast<Map<String, dynamic>>(),
+  );
 
-  Future<List<Map<String, dynamic>>> reviews() => _get('/v1/reviews',
-      (j) => ((j['reviews'] ?? const []) as List).cast<Map<String, dynamic>>());
+  Future<List<Map<String, dynamic>>> reviews() => _get(
+    '/v1/reviews',
+    (j) => ((j['reviews'] ?? const []) as List).cast<Map<String, dynamic>>(),
+  );
 
   /// People the vault knows about, with the owner first.
   ///
@@ -1724,7 +1796,9 @@ class VaultApi {
     Person? owner;
     if (ownerJson != null) {
       final ownerId = ownerJson['id'] as String?;
-      owner = ownerId != null ? list.where((p) => p.id == ownerId).firstOrNull : null;
+      owner = ownerId != null
+          ? list.where((p) => p.id == ownerId).firstOrNull
+          : null;
     } else {
       owner = list.where((p) => p.isOwner).firstOrNull;
     }
@@ -1739,10 +1813,7 @@ class VaultApi {
         // `p.isOwner` to ensure a single source of truth.
       });
     }
-    return (
-      people: list,
-      owner: owner,
-    );
+    return (people: list, owner: owner);
   }
 
   /// One person in full: aliases with provenance, documents, transactions,
@@ -1762,7 +1833,11 @@ class VaultApi {
   /// Add an alias to a person. The daemon classifies the type from the
   /// string, so an email can never be stored as a name variant. Throws
   /// [PersonConflict] when the value is already bound to another person.
-  Future<void> addPersonAlias(String personId, String alias, {String? aliasType}) async {
+  Future<void> addPersonAlias(
+    String personId,
+    String alias, {
+    String? aliasType,
+  }) async {
     final res = await _client.post(
       Uri.parse('$baseUrl/v1/people/$personId/aliases'),
       headers: {..._headers, 'content-type': 'application/json'},
@@ -1796,7 +1871,10 @@ class VaultApi {
   }
 
   /// Merge two people (never cross-kind — the daemon enforces it).
-  Future<void> mergePeople({required String fromId, required String intoId}) async {
+  Future<void> mergePeople({
+    required String fromId,
+    required String intoId,
+  }) async {
     final res = await _client.post(
       Uri.parse('$baseUrl/v1/people/merge'),
       headers: {..._headers, 'content-type': 'application/json'},
@@ -1819,7 +1897,9 @@ class VaultApi {
     if (res.statusCode != 200) {
       throw Exception('document detail failed: ${res.statusCode} ${res.body}');
     }
-    return DocumentDetail.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+    return DocumentDetail.fromJson(
+      jsonDecode(res.body) as Map<String, dynamic>,
+    );
   }
 
   /// Declare a person, or update an existing one.
@@ -1834,7 +1914,8 @@ class VaultApi {
       headers: {..._headers, 'content-type': 'application/json'},
       body: jsonEncode({
         'display_name': displayName,
-        if (relationship != null && relationship.isNotEmpty) 'relationship': relationship,
+        if (relationship != null && relationship.isNotEmpty)
+          'relationship': relationship,
         'is_member': isMember,
         'is_owner': isOwner,
       }),
@@ -1844,7 +1925,8 @@ class VaultApi {
 
   /// Begin Gmail authorisation. Returns the consent URL — the daemon also
   /// opens it, but a URL the user can click is the reliable path.
-  Future<({String? authUrl, String? error, String? detail})> gmailConnect() async {
+  Future<({String? authUrl, String? error, String? detail})>
+  gmailConnect() async {
     final res = await _client.post(
       Uri.parse('$baseUrl/v1/gmail/connect'),
       headers: _headers,
@@ -1858,24 +1940,32 @@ class VaultApi {
   }
 
   Future<Map<String, dynamic>> gmailSync() async {
-    final res = await _client.post(Uri.parse('$baseUrl/v1/gmail/sync'), headers: _headers);
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/gmail/sync'),
+      headers: _headers,
+    );
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
   Future<void> gmailDisconnect() async {
-    await _client.post(Uri.parse('$baseUrl/v1/gmail/disconnect'), headers: _headers);
+    await _client.post(
+      Uri.parse('$baseUrl/v1/gmail/disconnect'),
+      headers: _headers,
+    );
   }
 
   /// Learning state: open questions and whether the engine is on.
   ///
   /// Kept returning a record for existing callers; use [learningState] for the
   /// typed shape the review screen needs.
-  Future<({bool enabled, int budget, List<Map<String, dynamic>> questions})> learning() async {
+  Future<({bool enabled, int budget, List<Map<String, dynamic>> questions})>
+  learning() async {
     final j = await _get('/v1/learning', (x) => x);
     return (
       enabled: j['enabled'] == true,
       budget: (j['budget'] ?? 0) as int,
-      questions: ((j['questions'] ?? const []) as List).cast<Map<String, dynamic>>(),
+      questions: ((j['questions'] ?? const []) as List)
+          .cast<Map<String, dynamic>>(),
     );
   }
 
@@ -1914,7 +2004,9 @@ class VaultApi {
       throw VaultAuthException(res.statusCode, '/v1/learning/answer');
     }
     if (res.statusCode != 200) {
-      throw Exception('POST /v1/learning/answer -> ${res.statusCode}: ${res.body}');
+      throw Exception(
+        'POST /v1/learning/answer -> ${res.statusCode}: ${res.body}',
+      );
     }
     final j = jsonDecode(res.body) as Map<String, dynamic>;
     return (answered: j['answered'] == true, ruleId: j['rule_id'] as int?);
@@ -1945,8 +2037,7 @@ class VaultApi {
   }
 
   /// Setup page: AI provider config, vault paths, active jurisdiction.
-  Future<Map<String, dynamic>> settings() =>
-      _get('/v1/settings', (j) => j);
+  Future<Map<String, dynamic>> settings() => _get('/v1/settings', (j) => j);
 
   /// NOTE: the parameter is `aiBaseUrl`, not `baseUrl` — the latter would
   /// shadow the client's own field and build a nonsense URL.
@@ -1990,6 +2081,35 @@ class VaultApi {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  /// Desktop preferences introduced by WO09/WO10. This uses the existing
+  /// settings route, keeping the daemon as the source of truth.
+  Future<Map<String, dynamic>> saveDesktopPreferences(
+    Map<String, dynamic> values,
+  ) async {
+    const supported = {
+      'learning_enabled',
+      'question_budget',
+      'watcher_enabled',
+      'scan_on_launch',
+      'move_on_success',
+      'drop_folder',
+    };
+    final payload = Map<String, dynamic>.fromEntries(
+      values.entries.where((entry) => supported.contains(entry.key)),
+    );
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/settings'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode(payload),
+    );
+    if (res.statusCode != 200) {
+      throw Exception(
+        'save desktop settings failed: ${res.statusCode} ${res.body}',
+      );
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   /// Clear the stored API key.
   Future<Map<String, dynamic>> clearApiKey() => saveSettings(apiKey: '');
 
@@ -2022,10 +2142,8 @@ class VaultApi {
   }
 
   /// Per-field provenance for the evidence card: who claimed what, and how.
-  Future<ClaimSet> claims(String subjectType, String subjectId) => _get(
-        '/v1/$subjectType/$subjectId/claims',
-        ClaimSet.fromJson,
-      );
+  Future<ClaimSet> claims(String subjectType, String subjectId) =>
+      _get('/v1/$subjectType/$subjectId/claims', ClaimSet.fromJson);
 
   /// Write a user claim and re-resolve. [subjectType] is 'documents',
   /// 'transactions' or 'entities'.
@@ -2065,11 +2183,101 @@ class VaultApi {
 
   /// Append-only edit history for one subject.
   Future<List<AuditEntry>> audit(String subjectId, {int limit = 50}) => _get(
-        '/v1/audit?subject_id=${Uri.encodeQueryComponent(subjectId)}&limit=$limit',
-        (j) => ((j['audit'] ?? const []) as List)
-            .map((e) => AuditEntry.fromJson(e as Map<String, dynamic>))
-            .toList(),
+    '/v1/audit?subject_id=${Uri.encodeQueryComponent(subjectId)}&limit=$limit',
+    (j) => ((j['audit'] ?? const []) as List)
+        .map((e) => AuditEntry.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
+
+  /// ── WO09/WO10 P4.5: document parties + lifecycle (Glaze detail panel) ──────
+
+  /// Bind an entity to a document in a role (owner | counterparty | issuer |
+  /// source_of_funds). Writes a document-scoped party row on the daemon; the
+  /// old value is preserved in the audit trail. Throws [ClaimRefusedException]
+  /// on a 409 (e.g. a cross-kind role violation the daemon guards).
+  Future<void> setDocumentParty({
+    required String documentId,
+    required String role,
+    required String entityId,
+    double confidence = 1,
+  }) async {
+    final path = '/v1/documents/$documentId/parties';
+    final res = await _client
+        .put(
+          Uri.parse('$baseUrl$path'),
+          headers: {..._headers, 'content-type': 'application/json'},
+          body: jsonEncode({
+            'role': role,
+            'entity_id': entityId,
+            'confidence': confidence,
+            'edited_by': 'user',
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    if (res.statusCode == 409) {
+      final j = res.body.trim().isEmpty
+          ? const <String, dynamic>{}
+          : jsonDecode(res.body) as Map<String, dynamic>;
+      throw ClaimRefusedException(
+        j['error'] as String? ?? 'refused',
+        j['message'] as String? ?? 'the vault refused this party edit',
       );
+    }
+    if (res.statusCode != 200) {
+      throw Exception('PUT $path -> ${res.statusCode}');
+    }
+  }
+
+  /// Re-run analysis on a document (Glaze footer "Reprocess"). Idempotent on the
+  /// ledger: re-analysis upserts the same transaction rather than creating a
+  /// second economic event. Reactivates a soft-removed document.
+  Future<void> reprocessDocument(String id) async {
+    final path = '/v1/documents/$id/reprocess';
+    final res = await _client
+        .post(Uri.parse('$baseUrl$path'), headers: _headers)
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    if (res.statusCode != 200) {
+      throw Exception('POST $path -> ${res.statusCode}');
+    }
+  }
+
+  /// Soft-remove a document from the active vault (Glaze footer "Remove from
+  /// active"). The original file and every extracted claim are preserved; the
+  /// document is hidden from Review. Reversible via [reprocessDocument].
+  Future<void> removeFromActive(String id) async {
+    final path = '/v1/documents/$id/remove-from-active';
+    final res = await _client
+        .post(Uri.parse('$baseUrl$path'), headers: _headers)
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    if (res.statusCode != 200) {
+      throw Exception('POST $path -> ${res.statusCode}');
+    }
+  }
+
+  /// Permanently delete a document (Glaze footer "Delete permanently"). Unlinks
+  /// the raw + markdown bytes from disk and tombstones the row so the sha256
+  /// dedupe guard still rejects a re-drop. Not reversible.
+  Future<void> deleteDocument(String id) async {
+    final path = '/v1/documents/$id';
+    final res = await _client
+        .delete(Uri.parse('$baseUrl$path'), headers: _headers)
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    if (res.statusCode != 200) {
+      throw Exception('DELETE $path -> ${res.statusCode}');
+    }
+  }
 
   /// ── settings, reset, people editing ───────────────────────────────────────
 
@@ -2124,7 +2332,10 @@ class VaultApi {
 
   /// Delete a person. Without [force] the daemon refuses while documents still
   /// name them, rather than silently orphaning evidence.
-  Future<Map<String, dynamic>> deletePerson(String id, {bool force = false}) async {
+  Future<Map<String, dynamic>> deletePerson(
+    String id, {
+    bool force = false,
+  }) async {
     final res = await _client.delete(
       Uri.parse('$baseUrl/v1/people/$id${force ? '?force=1' : ''}'),
       headers: _headers,
@@ -2160,7 +2371,9 @@ class VaultApi {
     if (res.statusCode != 200) {
       throw Exception('statement fetch failed: ${res.statusCode} ${res.body}');
     }
-    return StatementSummary.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
+    return StatementSummary.fromJson(
+      jsonDecode(res.body) as Map<String, dynamic>,
+    );
   }
 
   /// Push a file into P0 intake. Used by drag-and-drop.
@@ -2179,7 +2392,9 @@ class VaultApi {
   Stream<VaultEvent> events() async* {
     final client = HttpClient();
     try {
-      final req = await client.getUrl(Uri.parse('$baseUrl/v1/events?token=$token'));
+      final req = await client.getUrl(
+        Uri.parse('$baseUrl/v1/events?token=$token'),
+      );
       req.headers.set('accept', 'text/event-stream');
       final res = await req.close();
 
@@ -2193,7 +2408,9 @@ class VaultApi {
           if (type != null && raw.isNotEmpty) {
             try {
               yield VaultEvent(type, jsonDecode(raw) as Map<String, dynamic>);
-            } catch (_) {/* keepalive or malformed frame */}
+            } catch (_) {
+              /* keepalive or malformed frame */
+            }
           }
         } else if (line.isEmpty) {
           type = null;

@@ -1,0 +1,18 @@
+{
+  "id": "fixture-h",
+  "filename": "fixture-H-paytm-contract-note.pdf",
+  "amount": "₹87,193.25",
+  "type": "contract_note",
+  "bucket": "investment_purchase",
+  "broker": "Paytm Money Limited",
+  "client": "Priya Nair",
+  "trade_date": "2026-07-01",
+  "contract_note_no": "2216643",
+  "advisory_hint": "Recognized as a broker contract note — mapped to investment activity, not a generic expense.",
+  "identity_reasoning": "Broker, client and contract-note identifiers resolve this as Priya Nair's investment activity.",
+  "audit_entries": ["broker resolved", "client resolved", "trade date confirmed", "impact bucket confirmed"],
+  "trades": [
+    {"description": "REC LIMITED", "isin": "INE020B01018", "direction": "BUY", "quantity": "100", "rate": "410.20", "amount": "₹41,020.00"},
+    {"description": "KALPATARU PROJECTS INTERNATION", "isin": "INE220B01022", "direction": "BUY", "quantity": "40", "rate": "1154.33125", "amount": "₹46,173.25"}
+  ]
+}

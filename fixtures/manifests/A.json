@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "A",
+  "order": 10,
+  "scenario": "ambiguous_alias",
+  "source": {
+    "filename": "a-ambiguous-alias.txt",
+    "text": "Invoice\nIssuer: Ananya Rao\nEmail: ananya.rao@example.test\nAlternative: ananya.work@example.test\nTotal: USD 100.00"
+  },
+  "expectations": {
+    "disposition": "accepted",
+    "sourcePolicy": "until_complete",
+    "capabilities": ["pipeline_events", "learning.question", "document_parties"]
+  }
+}

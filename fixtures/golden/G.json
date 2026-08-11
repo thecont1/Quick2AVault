@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "G",
+  "documentType": "tax_invoice",
+  "confidenceAtLeast": 0.9,
+  "fields": {
+    "issuer": {
+      "name": "PRIYA NAIR",
+      "kind": "organisation",
+      "address": "Invoice Date: April 1, 2026, Due Date: April 15, 2026",
+      "contact": "Priya Nair",
+      "email": "priya.nair@example.test",
+      "gstin": "29ABCDE1234F1Z5"
+    },
+    "vendor": {
+      "name": "PetaSight Inc. 8 The Green, Suite R, Dover, DE 19901, USA Contact Person: Alex Morgan",
+      "kind": "organisation",
+      "address": "Email: alex.morgan@petasight.example",
+      "email": "alex.morgan@petasight.example"
+    },
+    "documentNumber": "INV/2026-27/01",
+    "documentDate": "2026-04-01",
+    "dueDate": "2026-04-15",
+    "financialYear": "FY 2026-27",
+    "currency": "USD",
+    "amountMinor": 169131,
+    "subtotalMinor": 169131,
+    "taxMinor": 0,
+    "placeOfSupply": "Export of Service",
+    "lineItems": [
+      {
+        "description": "Data Science consulting services (March 4 - 31)",
+        "hsnSac": "998393",
+        "quantity": "0.3043",
+        "rateMinor": 539700,
+        "amountMinor": 164231
+      },
+      {
+        "description": "Kilo Pass subscription (Reimbursement)",
+        "hsnSac": "998393",
+        "quantity": "1",
+        "rateMinor": 4900,
+        "amountMinor": 4900
+      }
+    ],
+    "bank": {
+      "branch": "Indiranagar, Bengaluru - 560 038",
+      "accountNumber": "12345678901234",
+      "last4": "1234",
+      "type": "bank",
+      "ifsc": "EXAMP0001234",
+      "swift": "EXAMPINBB"
+    },
+    "currencyConversion": {
+      "required": true,
+      "originalAmountMinor": 169131,
+      "originalCurrency": "USD",
+      "targetCurrency": "INR",
+      "rateDate": "2026-04-01",
+      "source": "frankfurter"
+    }
+  }
+}

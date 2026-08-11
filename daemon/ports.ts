@@ -58,6 +58,15 @@ export type DomainEvent =
   | { type: "DocumentDuplicate"; sha256: string; filename: string; existing_document_id: string; at: string }
   | { type: "MarkdownReady"; document_id: string; markdown_path: string; chars: number; at: string }
   | { type: "AnalysisComplete"; document_id: string; extraction_version: number; at: string }
+  | {
+      type: "PipelineStateChanged";
+      document_id: string;
+      from_state: string | null;
+      to_state: string;
+      source: string;
+      reason: string | null;
+      at: string;
+    }
   | { type: "TransactionRecorded"; transaction_id: string; direction: string; amount_minor: number; currency: string | null; at: string }
   | { type: "MatchProposed"; transaction_id: string; document_id: string; score: number; at: string }
   /**
@@ -150,7 +159,12 @@ export type DomainEvent =
       new_disposition: "accepted" | "irrelevant" | "failed";
       document_id: string | null;
       at: string;
-    };
+    }
+  // WO09 adaptive-learning event stream. These are domain events, not a
+  // polling API; SSE clients receive them immediately.
+  | { type: "learning.question"; question_id: string; at: string; trigger: { kind: string; document_id: string; pipeline_state: string; novelty_score: number }; prompt: string; source_fact: Record<string, unknown>; predicted_rule: Record<string, unknown>; dedupe_key: string; why: string }
+  | { type: "learning.answer"; question_id: string; at: string; answer: string }
+  | { type: "learning.rule.applied"; rule_id: number; document_id?: string; at: string };
 
 export interface EventBus {
   publish(e: DomainEvent): void;

@@ -19,6 +19,7 @@ import type { Ports } from "./ports.js";
 import type { AiProvider } from "./ai-provider.js";
 import type { ExtractionResult } from "./extraction-contract.js";
 import { runAnalyseJob, runConvertJob, ingestFile, JobWorker } from "./pipeline.js";
+import { transitionPipeline } from "./workorders.js";
 
 let pass = 0;
 let fail = 0;
@@ -109,6 +110,16 @@ await check("a failed job marks the intake as failed with last_error", async () 
   db.prepare(
     `INSERT INTO intake_events (kind, filename, source, document_id, processing_state, created_at) VALUES ('accepted','test.pdf','folder',?,'queued','2026-08-10T00:00:00Z')`,
   ).run(docId);
+  // A directly-seeded analyse job still needs a legal canonical history. Real
+  // intake writes these events itself; this fixture bypasses intake on purpose.
+  for (const toState of ["received", "stable", "hashed", "triaged", "converting"] as const) {
+    transitionPipeline(db, {
+      documentId: docId,
+      toState,
+      timestamp: "2026-08-10T00:00:00Z",
+      source: "intake-state-smoke",
+    });
+  }
 
   // Enqueue a job that will fail (no markdown_path → runConvertJob may throw
   // or runAnalyseJob will skip; we force a failure by enqueuing analyse on

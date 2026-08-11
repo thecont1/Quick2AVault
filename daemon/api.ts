@@ -30,9 +30,11 @@ import {
   resolveTransaction,
   winningClaim,
   writeClaim,
+  setDocumentParty,
+  type DocumentPartyRole,
   type ResolvedTransaction,
 } from "./claims.js";
-import { rebuildSearchIndex, searchDocuments } from "./search.js";
+import { rebuildSearchIndex, searchDocuments, removeFromIndex } from "./search.js";
 import {
   backfillEmbeddings,
   hybridSearch,
@@ -50,9 +52,19 @@ import {
   applyPersonCorrection,
   classifyIdentifier,
   isGenericMailbox,
+  mergePeople,
   normaliseIdentifier,
   UNIDENTIFIED_PERSON_ID,
 } from "./identity.js";
+import {
+  DOC_TYPES,
+  IMPACT_BUCKETS,
+  createRegistryValue,
+  listVocabulary,
+  pipelineEventsFor,
+  transitionPipeline,
+  type Vocabulary,
+} from "./workorders.js";
 
 export interface ApiOptions {
   port: number;
@@ -404,6 +416,153 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, { linked: true, transaction_id: b.transaction_id, document_id: b.document_id });
       }
 
+      // ── WO09/WO10 selectable vocabularies + role-scoped parties ─────────
+      if (p === "/v1/vocabularies" && req.method === "GET") {
+        return send(res, 200, {
+          entities: listVocabulary(db, "entities"), accounts: listVocabulary(db, "accounts"),
+          categories: listVocabulary(db, "categories"), impact_buckets: [...IMPACT_BUCKETS], document_types: [...DOC_TYPES],
+        });
+      }
+      {
+        const vm = /^\/v1\/vocabularies\/([^/]+)$/.exec(p);
+        const map: Record<string, Vocabulary> = { entities:"entities",accounts:"accounts",categories:"categories",impactBuckets:"impactBuckets",impact_buckets:"impactBuckets",docTypes:"docTypes",document_types:"docTypes",settings:"settings" };
+        if (vm && req.method === "GET") {
+          const name = decodeURIComponent(vm[1]);
+          const vocabulary = map[name]; if (!vocabulary) return send(res,404,{error:"unknown_vocabulary"});
+          return send(res,200,{vocabulary,values:listVocabulary(db,vocabulary,url.searchParams.get("kind")??undefined)});
+        }
+        if (vm && req.method === "POST") {
+          const name=decodeURIComponent(vm[1]); const vocabulary=map[name];
+          if(!vocabulary)return send(res,404,{error:"unknown_vocabulary"});
+          if(vocabulary!=="categories")return send(res,405,{error:"vocabulary_read_only",allow:"GET"});
+          const b=await readJson(req); const value=typeof b.value==="string"?b.value:"";
+          if(!value)return send(res,400,{error:"value required"});
+          return send(res,200,createRegistryValue(db,ports,"category",value));
+        }
+      }
+      {
+        const pm = /^\/v1\/documents\/([^/]+)\/parties$/.exec(p);
+        if (pm && req.method === "GET") {
+          const documentId=decodeURIComponent(pm[1]);
+          return send(res,200,{document_id:documentId,parties:db.prepare(`SELECT dp.*,e.kind,e.display_name FROM document_parties dp JOIN entities e ON e.id=dp.entity_id WHERE dp.document_id=? ORDER BY dp.role,e.display_name`).all(documentId)});
+        }
+        if (pm && req.method === "PUT") {
+          const documentId=decodeURIComponent(pm[1]); const b=await readJson(req);
+          const role=String(b.role??"") as DocumentPartyRole, entityId=String(b.entity_id??"");
+          if(!["owner","counterparty","issuer","source_of_funds"].includes(role)||!entityId)return send(res,400,{error:"valid role and entity_id required"});
+          try{setDocumentParty(db,ports,{documentId,entityId,role,confidence:typeof b.confidence==="number"?b.confidence:1,editedBy:typeof b.edited_by==="string"?b.edited_by:undefined});}
+          catch(err){if(err instanceof ClaimRefused)return send(res,409,{error:err.code,message:err.message,...err.detail});throw err;}
+          return send(res,200,{updated:true,document_id:documentId,entity_id:entityId,role});
+        }
+      }
+      {
+        const em=/^\/v1\/documents\/([^/]+)\/pipeline-events$/.exec(p);
+        if(em&&req.method==="GET"){const documentId=decodeURIComponent(em[1]);return send(res,200,{document_id:documentId,events:pipelineEventsFor(db,documentId)});}
+      }
+
+      // ── WO09/WO10 P4.5: document lifecycle (Glaze manage footer) ──────────
+      //
+      // Three verbs behind the detail footer's "Reprocess", "Remove from
+      // active" and "Delete permanently". Each is deliberately conservative:
+      //   reprocess         re-enqueues the analyse phase; the JobWorker drains
+      //                     it and idempotency (transaction_documents unique on
+      //                     document_id+evidence_role) guarantees no second
+      //                     economic event. If markdown was never produced it
+      //                     re-runs convert first. Reactivates a removed doc.
+      //   remove-from-active soft state only: the original file and every claim
+      //                     stay on disk; the doc is hidden from Review and its
+      //                     search index entry is dropped. Fully reversible.
+      //   DELETE            permanent: raw + markdown bytes are unlinked from
+      //                     disk and the row is tombstoned as 'deleted' so the
+      //                     sha256 dedupe guard still rejects a re-drop.
+      {
+        const rm = /^\/v1\/documents\/([^/]+)\/reprocess$/.exec(p);
+        if (rm && req.method === "POST") {
+          const documentId = decodeURIComponent(rm[1]);
+          const doc = db
+            .prepare("SELECT id, markdown_path, markdown_chars, lifecycle FROM documents WHERE id=?")
+            .get(documentId) as
+            | { id: string; markdown_path: string | null; markdown_chars: number | null; lifecycle: string }
+            | undefined;
+          if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
+          if (doc.lifecycle === "deleted") return send(res, 409, { error: "document_deleted", document_id: documentId });
+          const phase = doc.markdown_path && doc.markdown_chars ? "analyse" : "convert";
+          // Reprocess is a new canonical pipeline epoch. Preserve the append-only
+          // event history, but reset the current-state pointer and replay the
+          // legal prefix up to the phase the worker will enter. Weakening the
+          // state machine here would hide illegal transitions everywhere else.
+          db.exec("BEGIN");
+          try {
+            if (doc.lifecycle !== "active") {
+              db.prepare("UPDATE documents SET lifecycle='active' WHERE id=?").run(documentId);
+            }
+            db.prepare("DELETE FROM document_pipeline WHERE document_id=?").run(documentId);
+            const prefix = phase === "analyse"
+              ? ["received", "stable", "hashed", "triaged", "converting"] as const
+              : ["received", "stable", "hashed", "triaged"] as const;
+            for (const toState of prefix) {
+              transitionPipeline(db, {
+                documentId,
+                toState,
+                timestamp: ports.clock.isoNow(),
+                source: "reprocess",
+              });
+            }
+            enqueue(db, ports, documentId, phase);
+            db.exec("COMMIT");
+          } catch (error) {
+            db.exec("ROLLBACK");
+            throw error;
+          }
+          return send(res, 200, { reprocessing: true, document_id: documentId, phase });
+        }
+      }
+      {
+        const rm = /^\/v1\/documents\/([^/]+)\/remove-from-active$/.exec(p);
+        if (rm && req.method === "POST") {
+          const documentId = decodeURIComponent(rm[1]);
+          const doc = db
+            .prepare("SELECT id, lifecycle FROM documents WHERE id=?")
+            .get(documentId) as { id: string; lifecycle: string } | undefined;
+          if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
+          if (doc.lifecycle === "deleted") return send(res, 409, { error: "document_deleted", document_id: documentId });
+          db.prepare("UPDATE documents SET lifecycle='removed' WHERE id=?").run(documentId);
+          try { removeFromIndex(db, documentId); } catch { /* index optional */ }
+          return send(res, 200, { removed: true, document_id: documentId });
+        }
+      }
+      {
+        const dm = /^\/v1\/documents\/([^/]+)$/.exec(p);
+        if (dm && req.method === "DELETE") {
+          const documentId = decodeURIComponent(dm[1]);
+          const doc = db
+            .prepare("SELECT id, raw_path, markdown_path, lifecycle FROM documents WHERE id=?")
+            .get(documentId) as
+            | { id: string; raw_path: string | null; markdown_path: string | null; lifecycle: string }
+            | undefined;
+          if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
+          if (doc.lifecycle === "deleted") return send(res, 200, { deleted: true, document_id: documentId, already: true });
+          // Unlink the on-disk bytes, but confine every path to the vault root
+          // first — the same arbitrary-file guard the /file route uses.
+          const vaultRoot = path.resolve(opts.vaultDir);
+          for (const candidate of [doc.raw_path, doc.markdown_path]) {
+            if (!candidate) continue;
+            const resolved = path.resolve(candidate);
+            if (resolved === vaultRoot || resolved.startsWith(vaultRoot + path.sep)) {
+              try { await fsp.unlink(resolved); } catch { /* already gone */ }
+            }
+          }
+          // Tombstone rather than DROP: the sha256 UNIQUE guard must keep
+          // rejecting a re-drop of the same bytes, and the audit trail stays
+          // intact. Clear the disk pointers so nothing tries to read them.
+          db.prepare(
+            "UPDATE documents SET lifecycle='deleted', raw_path='', markdown_path=NULL, markdown_chars=NULL WHERE id=?",
+          ).run(documentId);
+          try { removeFromIndex(db, documentId); } catch { /* index optional */ }
+          return send(res, 200, { deleted: true, document_id: documentId });
+        }
+      }
+
       // ── claims: the inline-editing surface (work order 03 §P2) ───────────
       //
       // Editing writes a CLAIM, never a direct column update. The stored value
@@ -443,6 +602,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                     source: c.source,
                     status: c.status,
                     confidence: c.confidence,
+                    provenance: c.source === "user" ? "user-confirmed" : c.source === "rule" ? "rule-derived" : "ai-derived",
+                    provenance_ref: c.provenance_ref ?? null,
+                    edited_at: c.edited_at ?? c.created_at,
+                    edited_by: c.edited_by ?? null,
                     at: c.created_at,
                   },
                 ]),
@@ -450,7 +613,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             });
           }
 
-          if (req.method === "PATCH") {
+          if (req.method === "PATCH" || req.method === "PUT") {
             const b = (await readJson(req)) as Record<string, unknown>;
             const field = typeof b.field === "string" ? b.field : "";
             if (!field) return send(res, 400, { error: "field required" });
@@ -552,7 +715,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             });
           }
 
-          return send(res, 405, { error: "method_not_allowed", allow: "GET, PATCH" });
+          return send(res, 405, { error: "method_not_allowed", allow: "GET, PATCH, PUT" });
         }
       }
 
@@ -1516,37 +1679,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           return send(res, 409, { error: "both entities must be people" });
         }
 
-        const now = ports.clock.isoNow();
-        db.exec("BEGIN");
-        try {
-          db.prepare("UPDATE OR IGNORE document_parties SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
-          db.prepare("UPDATE OR IGNORE entity_aliases SET entity_id=? WHERE entity_id=?").run(into.id, from.id);
-          // The absorbed spelling becomes an alias, so the same variant on a
-          // future document resolves without asking again. Normalised with
-          // normaliseName — a bare toLowerCase leaves punctuation in the key
-          // and the resolver would never find this alias again.
-          db.prepare(
-            `INSERT INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at, last_seen_at)
-             VALUES (?, 'person', ?, ?, 'name_variant', 'user-merge', 'confirmed', ?, ?)
-             ON CONFLICT(kind, normalised) DO UPDATE SET status='confirmed', last_seen_at=excluded.last_seen_at`,
-          ).run(into.id, from.display_name, normaliseName(from.display_name), now, now);
-          // Merging into a non-member keeps membership (and ownership) if
-          // either side had it.
-          db.prepare(
-            `UPDATE entities SET
-               is_member = MAX(is_member, (SELECT is_member FROM entities WHERE id=?)),
-               is_owner  = MAX(is_owner,  (SELECT is_owner  FROM entities WHERE id=?)),
-               updated_at=?
-             WHERE id=?`,
-          ).run(from.id, from.id, now, into.id);
-          db.prepare("DELETE FROM entities WHERE id=?").run(from.id);
-          db.exec("COMMIT");
-        } catch (e) {
-          db.exec("ROLLBACK");
-          throw e;
-        }
-        ports.logger.info("people merged", { from: from.display_name, into: into.display_name });
-        return send(res, 200, { merged: true, into: into.display_name });
+        return send(res, 200, mergePeople(db, ports, from.id, into.id));
       }
 
       // Every spelling the vault knows for one person, typed and with
@@ -1824,7 +1957,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               .prepare(
                 `SELECT id, original_filename, ext, byte_size, doc_type, source, sha256,
                         markdown_chars, received_at, converted_at, analysed_at
-                 FROM documents ORDER BY received_at DESC LIMIT ?`,
+                 FROM documents WHERE lifecycle='active' ORDER BY received_at DESC LIMIT ?`,
               )
               .all(Number(url.searchParams.get("limit") ?? 100)),
           });
@@ -2133,7 +2266,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 reference_ids: (x.reference_ids as Record<string, string> | undefined) ?? {},
                 subtotal_minor: x.subtotal_minor ?? null,
                 tax_minor: x.tax_minor ?? null,
-                line_items: x.line_items ?? null,
+                line_items: claims.line_items?.value ?? x.line_items ?? null,
+                trades: claims.trades?.value ?? x.trades ?? null,
+                financial_impact: claims.financial_impact?.value ?? x.financial_impact ?? null,
               },
               parties,
               transactions,

@@ -27,6 +27,7 @@ import {
   allowedFields,
   ClaimRefused,
   audit,
+  setDocumentParty,
 } from "./claims.js";
 import type { Ports } from "./ports.js";
 
@@ -182,6 +183,43 @@ check("document, transaction and entity scopes expose different fields", () => {
   assert.ok(!allowedFields("document").has("impact_bucket"));
   assert.ok(allowedFields("transaction").has("impact_bucket"));
   assert.ok(allowedFields("entity").has("display_name"));
+});
+
+check("setDocumentParty rolls back owner replacement when claim persistence fails", () => {
+  const db = freshDb();
+  seedDoc(db, "doc_party_txn");
+  db.prepare(
+    `INSERT INTO entities(id,kind,display_name,status,confidence,created_at)
+     VALUES(?, 'person', ?, 'confirmed', 1, ?)`,
+  ).run("person_old", "Old Owner", "2026-08-10T00:00:00Z");
+  db.prepare(
+    `INSERT INTO entities(id,kind,display_name,status,confidence,created_at)
+     VALUES(?, 'person', ?, 'confirmed', 1, ?)`,
+  ).run("person_new", "New Owner", "2026-08-10T00:00:00Z");
+  db.prepare(
+    `INSERT INTO document_parties(document_id,entity_id,role,confidence,provenance)
+     VALUES(?, ?, 'owner', 1, 'user-confirmed')`,
+  ).run("doc_party_txn", "person_old");
+  db.exec(`
+    CREATE TRIGGER refuse_party_claim
+    BEFORE INSERT ON field_claims
+    WHEN NEW.subject_type='document_party'
+    BEGIN SELECT RAISE(ABORT, 'forced claim failure'); END;
+  `);
+
+  assert.throws(
+    () => setDocumentParty(db, ports, {
+      documentId: "doc_party_txn",
+      entityId: "person_new",
+      role: "owner",
+    }),
+    /forced claim failure/,
+  );
+  const owners = db.prepare(
+    "SELECT entity_id FROM document_parties WHERE document_id=? AND role='owner'",
+  ).all("doc_party_txn") as Array<{ entity_id: string }>;
+  assert.deepEqual(owners.map((row) => row.entity_id), ["person_old"]);
+  db.close();
 });
 
 // ── acceptance 1: edit vendor → linked transaction's counterparty updates ────

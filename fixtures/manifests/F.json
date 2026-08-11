@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "F",
+  "order": 60,
+  "scenario": "cross_kind_collision",
+  "source": {
+    "filename": "f-cross-kind.txt",
+    "text": "Invoice\nPerson: Kavya Menon <shared@example.test>\nOrganisation: PetaSight Inc. <shared@example.test>\nTotal INR 100.00"
+  },
+  "expectations": {
+    "disposition": "accepted",
+    "capabilities": ["cross_kind_conflict", "entity_resolution"]
+  }
+}

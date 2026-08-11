@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "C",
+  "order": 30,
+  "scenario": "reanalysis_preservation",
+  "source": {
+    "filename": "c-user-confirmed.txt",
+    "text": "Invoice\nVendor: PetaSight Inc.\nCategory: consulting\nTotal USD 100.00"
+  },
+  "expectations": {
+    "disposition": "accepted",
+    "capabilities": [
+      "claim_provenance",
+      "reanalysis_preservation",
+      "document_parties",
+      "learned_rules"
+    ]
+  }
+}

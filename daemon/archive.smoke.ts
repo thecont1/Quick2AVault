@@ -19,7 +19,8 @@ import * as crypto from "node:crypto";
 import * as assert from "node:assert";
 
 import { openDatabase } from "./schema.js";
-import { ingestFile } from "./pipeline.js";
+import { ingestFile, JobWorker } from "./pipeline.js";
+import { nullAiProvider } from "./ai-provider.js";
 import { createLogger, createEventBus, systemClock, createPaths } from "./adapters.js";
 import type { Ports } from "./ports.js";
 
@@ -65,6 +66,9 @@ const rawFiles = (root: string) => {
     return fs.statSync(dir).isDirectory() ? fs.readdirSync(dir) : [];
   });
 };
+const settle = async (db: ReturnType<typeof openDatabase>, ports: Ports) => {
+  await new JobWorker(db, ports, nullAiProvider).drain();
+};
 
 console.log("\nArchive lifecycle\n");
 
@@ -80,7 +84,9 @@ await check("a processed file LEAVES Drop and keeps its name in Raw/", async () 
 
   const r = await ingestFile(db, ports, src, { source: "folder", consumeSource: true });
   assert.strictEqual(r.status, "added");
-  assert.ok(!fs.existsSync(src), "source still in Drop — inbox would accumulate");
+  assert.ok(fs.existsSync(src), "source removed before conversion and analysis completed");
+  await settle(db, ports);
+  assert.ok(!fs.existsSync(src), "source still in Drop after the pipeline completed");
   assert.deepStrictEqual(rawFiles(root), ["Proton Mail invoice 21145650.pdf"]);
 });
 
@@ -132,6 +138,7 @@ await check("same filename, different content, never overwrites", async () => {
     const src = path.join(drop, "invoice.pdf");
     await fsp.writeFile(src, body);
     await ingestFile(db, ports, src, { source: "folder", consumeSource: true });
+    await settle(db, ports);
   }
   const files = rawFiles(root).sort();
   assert.strictEqual(files.length, 2, `expected 2 archived files, got ${files.join(", ")}`);

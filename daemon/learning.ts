@@ -131,6 +131,15 @@ export function answer(
 
   db.prepare("UPDATE training_reviews SET answer=?, answered_at=?, rule_id=? WHERE id=?")
     .run(chosen, now, ruleId, reviewId);
+  if (ruleId !== null) {
+    ports.bus.publish({ type: "learning.rule.applied", rule_id: ruleId, at: now });
+  }
+  ports.bus.publish({
+    type: "learning.answer",
+    question_id: String(reviewId),
+    at: now,
+    answer: chosen,
+  });
   return { rule_id: ruleId };
 }
 
@@ -166,7 +175,7 @@ export function applyRule(
 /**
  * A vendor correction is evidence for a rule (work order 03 §P2).
  *
- * When the user fixes "SHANTARAM MAHESH" to "Petasight Inc." on an invoice,
+ * When the user fixes "PRIYA NAIR" to "Petasight Inc." on an invoice,
  * the interesting fact is not that one document was wrong — it is that the
  * DESCRIPTOR maps to that entity, and will keep arriving. This proposes the
  * descriptor→entity rule so the same correction stops recurring.

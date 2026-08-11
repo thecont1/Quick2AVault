@@ -17,22 +17,21 @@ import 'api.dart';
 import 'menubar.dart';
 import 'window_store.dart';
 import 'theme.dart';
-import 'widgets/hero_row.dart';
-import 'widgets/txn_card.dart';
-import 'widgets/evidence_panel.dart';
-import 'widgets/feed_rail.dart';
 import 'widgets/drop_target.dart';
 import 'widgets/popup_view.dart';
-import 'widgets/setup_view.dart';
 import 'widgets/period_bar.dart';
 import 'widgets/vault_tabs.dart';
-import 'widgets/intake_queue_view.dart';
 import 'widgets/ledger_tab.dart';
-import 'widgets/treemap.dart';
-import 'widgets/people_view.dart';
 import 'widgets/review_browser.dart';
-import 'widgets/review_view.dart';
-import 'widgets/irrelevant_view.dart';
+import 'features/adapters.dart';
+import 'features/intake/view.dart' as wo_intake;
+import 'features/intake/state.dart' as wo_intake_state;
+import 'features/learning/state.dart' as wo_learning;
+import 'features/learning/view.dart' as wo_learning_view;
+import 'features/people/view.dart' as wo_people;
+import 'features/people/state.dart' as wo_people_state;
+import 'features/settings/settings_panel.dart';
+import 'features/settings/state.dart' as wo_settings;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -52,11 +51,11 @@ class Quick2AVaultApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Quick2AVault',
-        debugShowCheckedModeBanner: false,
-        theme: vaultTheme,
-        home: const VaultHome(),
-      );
+    title: 'Quick2AVault',
+    debugShowCheckedModeBanner: false,
+    theme: vaultTheme,
+    home: const VaultHome(),
+  );
 }
 
 class VaultHome extends StatefulWidget {
@@ -71,10 +70,12 @@ class _VaultHomeState extends State<VaultHome> {
 
   Snapshot _snap = Snapshot.empty;
   TreemapData _treemap = TreemapData.empty;
+
   /// Set when the daemon rejects our token. Non-null means the numbers on
   /// screen are meaningless and must not be presented as the vault's state.
   String? _authError;
   Periods _periods = Periods.empty;
+
   /// Defaults to the current month — the period a user checks most often.
   PeriodSelection _period = PeriodSelection.thisMonth;
   List<Txn> _txns = const [];
@@ -83,13 +84,10 @@ class _VaultHomeState extends State<VaultHome> {
   String? _selectedId;
   bool _connected = false;
   bool _daemonUp = false;
+
   /// Popup (menubar panel) vs the full resizable window.
   bool _fullWindow = false;
 
-  /// Which Review surface is showing: false = document browser (default),
-  /// true = the Learning-Mode question queue. Reset on tab change, so returning
-  /// to Review always lands on the browser.
-  bool _reviewQueue = false;
   /// Which surface the full window is showing.
   ///
   /// Replaces three mutually-exclusive booleans (_setup / _review / _people).
@@ -99,12 +97,27 @@ class _VaultHomeState extends State<VaultHome> {
   VaultTab _tab = VaultTab.ledger;
   bool _learningOn = true;
   int _reviewCount = 0;
+  List<wo_learning.LearningPrompt> _learningQuestions = const [];
+  List<wo_intake_state.IntakeItem> _intakeItems = const [];
+  List<wo_people_state.EntitySummary> _entities = const [];
+  wo_settings.AppSettings _appSettings = const wo_settings.AppSettings(
+    learningEnabled: true,
+    questionBudget: null,
+  );
+  wo_settings.JurisdictionPack _jurisdiction =
+      wo_settings.JurisdictionPack.india;
+  int _intakeArrivals = 0;
+  String? _selectedIntakeId;
+  bool _learningDrawerOpen = false;
+
   /// True when the last fetch failed, so the figures on screen describe an
   /// older request than the period the user has selected. Surfaced in the UI —
   /// silently stale numbers are worse than an error.
   bool _stale = false;
+
   /// Guards against overlapping reconnect loops.
   bool _reconnecting = false;
+
   /// Which hero figure the receipts list is explaining.
   ///
   /// Defaults to spending: it is the figure people actually interrogate, and
@@ -122,7 +135,10 @@ class _VaultHomeState extends State<VaultHome> {
     // MUST agree: a release build bakes this in, so a mismatch produces an app
     // that connects to nothing and looks like an empty vault rather than a
     // configuration error.
-    const base = String.fromEnvironment('Q2AV_URL', defaultValue: 'http://127.0.0.1:4477');
+    const base = String.fromEnvironment(
+      'Q2AV_URL',
+      defaultValue: 'http://127.0.0.1:4477',
+    );
     const token = String.fromEnvironment('Q2AV_TOKEN');
     _api = VaultApi(baseUrl: base, token: token);
     // Errors MUST be surfaced. This was fire-and-forget, so any throw inside
@@ -228,14 +244,7 @@ class _VaultHomeState extends State<VaultHome> {
         _daemonUp = true;
         _stale = false;
       });
-      final l = await _api.learning();
-      if (mounted) {
-        setState(() {
-          _learningOn = l.enabled;
-          _reviewCount = l.questions.length;
-          _authError = null;
-        });
-      }
+      await _refreshFeatureData();
     } on VaultAuthException catch (e) {
       // NEVER fall through to zeros here. Rendering Rs 0 for an auth failure
       // reads as "your vault is empty" — indistinguishable from real data loss,
@@ -258,6 +267,61 @@ class _VaultHomeState extends State<VaultHome> {
       });
       _scheduleReconnect();
     }
+  }
+
+  Future<void> _refreshFeatureData() async {
+    try {
+      final learning = await _api.learning();
+      if (mounted) {
+        setState(() {
+          _learningOn = learning.enabled;
+          _reviewCount = learning.questions.length;
+          _learningQuestions = learning.questions
+              .map(
+                (q) => wo_learning.LearningPrompt(
+                  id: '${q['id'] ?? ''}',
+                  prompt: '${q['question'] ?? ''}',
+                  why: q['context']?.toString() ?? '${q['trigger'] ?? ''}',
+                  trigger: '${q['trigger'] ?? ''}',
+                  novelty: (q['novelty_score'] as num?)?.toDouble() ?? 1,
+                ),
+              )
+              .toList();
+        });
+      }
+    } catch (_) {
+      // Feature failures must not hide a successfully loaded ledger.
+    }
+
+    try {
+      final intake = await _api.featureIntakeStatus();
+      if (mounted) {
+        setState(() {
+          _intakeItems = intake;
+          _intakeArrivals = intake
+              .where(
+                (item) => item.state != wo_intake_state.PipelineState.complete,
+              )
+              .length;
+        });
+      }
+    } catch (_) {}
+
+    try {
+      final entities = await _api.featureEntities();
+      if (mounted) setState(() => _entities = entities);
+    } catch (_) {}
+
+    try {
+      final bundle = await _api.featureSettingsBundle();
+      if (mounted) {
+        setState(() {
+          _appSettings = bundle.settings;
+          _jurisdiction = bundle.jurisdiction;
+          _learningOn = bundle.settings.learningEnabled;
+        });
+      }
+    } catch (_) {}
   }
 
   /// Poll for the daemon after a failed fetch.
@@ -290,6 +354,32 @@ class _VaultHomeState extends State<VaultHome> {
     } catch (_) {
       if (mounted) setState(() => _learningOn = !next);
     }
+  }
+
+  Future<void> _handleLearningAction(String action) async {
+    final split = action.indexOf(':');
+    if (split < 0) return;
+    final verb = action.substring(0, split);
+    final id = int.tryParse(action.substring(split + 1));
+    if (id == null) return;
+    if (verb == 'confirm') {
+      await _api.answerLearning(id, 'yes');
+    } else if (verb == 'later') {
+      await _api.dismissLearning(id);
+    } else {
+      setState(() {
+        _tab = VaultTab.review;
+        _learningDrawerOpen = false;
+      });
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _learningQuestions = _learningQuestions
+          .where((question) => question.id != '$id')
+          .toList();
+      _reviewCount = _learningQuestions.length;
+    });
   }
 
   /// Open the full window on a given tab.
@@ -331,6 +421,35 @@ class _VaultHomeState extends State<VaultHome> {
           _connected = true;
           if (e.type != 'Ready') _feed.insert(0, e);
           if (_feed.length > 60) _feed.removeLast();
+          if (e.type == 'learning.question') {
+            final id = '${e.data['question_id'] ?? ''}';
+            if (!_learningQuestions.any((question) => question.id == id)) {
+              _learningQuestions = [
+                wo_learning.LearningPrompt(
+                  id: id,
+                  prompt: '${e.data['prompt'] ?? ''}',
+                  why: '${e.data['why'] ?? ''}',
+                  trigger: '${(e.data['trigger'] as Map?)?['kind'] ?? ''}',
+                  novelty:
+                      ((e.data['trigger'] as Map?)?['noveltyScore'] as num?)
+                          ?.toDouble() ??
+                      1,
+                ),
+                ..._learningQuestions,
+              ];
+              _reviewCount = _learningQuestions.length;
+            }
+          } else if (e.type == 'learning.answer') {
+            final id = '${e.data['question_id'] ?? ''}';
+            _learningQuestions = _learningQuestions
+                .where((question) => question.id != id)
+                .toList();
+            _reviewCount = _learningQuestions.length;
+          } else if (e.type == 'PipelineStateChanged' &&
+              e.data['to_state'] == 'received') {
+            _intakeArrivals += 1;
+            _selectedIntakeId = '${e.data['document_id'] ?? ''}';
+          }
         });
         // Verified against the daemon's actual emissions (probe: drop a
         // fixture, read the SSE stream). The daemon emits nine types; these
@@ -351,6 +470,8 @@ class _VaultHomeState extends State<VaultHome> {
           // promotes an irrelevant item into the ledger.
           'IntakeAccepted', 'IntakeIrrelevant', 'IntakeDuplicate',
           'IntakeFailed', 'IntakeRestored',
+          'PipelineStateChanged', 'learning.question', 'learning.answer',
+          'learning.rule.applied',
         };
         // 'Ready' is the daemon's hello — it arrives on every (re)connect.
         // Refreshing on it is how the app recovers after the daemon restarts:
@@ -401,9 +522,11 @@ class _VaultHomeState extends State<VaultHome> {
     final txnId = hit.transactionId;
     if (txnId == null) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${hit.filename} is not linked to a transaction yet'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('${hit.filename} is not linked to a transaction yet'),
+        ),
+      );
       return;
     }
     final existing = _txns.where((t) => t.id == txnId).firstOrNull;
@@ -455,11 +578,11 @@ class _VaultHomeState extends State<VaultHome> {
             // screen do not describe the period the user asked for.
             authError: _authError != null
                 ? 'Cannot read the vault — the daemon rejected this app\'s '
-                    'token. Your data is intact; the totals below are not real.'
+                      'token. Your data is intact; the totals below are not real.'
                 : (_stale
-                    ? 'Daemon unreachable — showing the last figures fetched, '
-                        'not ${_period.month ?? _period.fy ?? _period.quick ?? "the selected period"}.'
-                    : null),
+                      ? 'Daemon unreachable — showing the last figures fetched, '
+                            'not ${_period.month ?? _period.fy ?? _period.quick ?? "the selected period"}.'
+                      : null),
             // The popup renders the same treemap data as the viewer, as a
             // compact band. Without this the data was fetched and discarded.
             treemap: _treemap,
@@ -494,15 +617,29 @@ class _VaultHomeState extends State<VaultHome> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _TitleBar(connected: _connected, daemonUp: _daemonUp),
+            _TitleBar(
+              connected: _connected,
+              daemonUp: _daemonUp,
+              learningOn: _learningOn,
+              learningPending: _reviewCount,
+              intakeArrivals: _intakeArrivals,
+              onLearning: _learningOn
+                  ? () => setState(
+                      () => _learningDrawerOpen = !_learningDrawerOpen,
+                    )
+                  : null,
+              onIntake: _intakeArrivals == 0
+                  ? null
+                  : () => setState(() {
+                      _tab = VaultTab.intake;
+                      _selectedIntakeId = _intakeItems.firstOrNull?.id;
+                      _intakeArrivals = 0;
+                    }),
+            ),
             VaultTabBar(
               current: _tab,
               onChanged: (t) => setState(() {
                 _tab = t;
-                // Leaving Review discards the queue sub-view, so coming back
-                // always lands on the document browser rather than resuming a
-                // question list the user had already navigated away from.
-                if (t != VaultTab.review) _reviewQueue = false;
               }),
               reviewCount: _reviewCount,
               // Charts is declared but unbuilt. Shown disabled rather than
@@ -513,7 +650,32 @@ class _VaultHomeState extends State<VaultHome> {
             if (!_daemonUp)
               const Expanded(child: _WaitingForDaemon())
             else
-              Expanded(child: _tabBody()),
+              Expanded(
+                child: Stack(
+                  children: [
+                    Positioned.fill(child: _tabBody()),
+                    if (_learningDrawerOpen)
+                      Positioned(
+                        top: 0,
+                        right: 0,
+                        bottom: 0,
+                        width: 440,
+                        child: Material(
+                          elevation: 12,
+                          child: wo_learning_view.LearningPanel(
+                            enabled: _learningOn,
+                            questions: _learningQuestions,
+                            onAction: _handleLearningAction,
+                            onOpenReview: () => setState(() {
+                              _tab = VaultTab.review;
+                              _learningDrawerOpen = false;
+                            }),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
@@ -523,109 +685,129 @@ class _VaultHomeState extends State<VaultHome> {
   /// The body for the selected tab.
   ///
   /// Every surface is built from state the shell already holds, so switching
-  /// tabs never refetches and never loses the selected transaction. Only the
-  /// ledger keeps the feed rail — the other surfaces are not event streams and
-  /// the rail would just steal width.
+  /// tabs never refetches and never loses the selected transaction. Pipeline
+  /// events remain subscribed for Intake and Learning, but Ledger deliberately
+  /// has no live-intake rail.
   Widget _tabBody() => switch (_tab) {
-        VaultTab.ledger => Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                flex: 3,
-                child: LedgerTab(
-                  snapshot: _snap,
-                  treemap: _treemap,
-                  txns: _txns,
-                  selectedId: _selectedId,
-                  card: _card,
-                  onSelect: _select,
-                  api: _api,
-                  onSearchHit: _openSearchHit,
-                  onEdited: _refresh,
-                ),
-              ),
-              FeedRail(events: _feed, connected: _connected),
-            ],
-          ),
-        // Review has two surfaces: the document browser (default — inspect what
-        // the vault understood) and the Learning-Mode queue (teach it). The
-        // queue used to BE the Review tab, which meant there was no way to look
-        // at a document at all.
-        VaultTab.review => _reviewQueue
-            ? ReviewView(
-                api: _api,
-                // In tab mode "close" means "back to the browser", not "leave
-                // the tab" — the tab bar handles that.
-                onClose: () => setState(() => _reviewQueue = false),
-                // The badge must drop the moment a question is answered, not on
-                // the next poll — otherwise the count lies about work already
-                // done.
-                onChanged: _refresh,
-              )
-            : ReviewBrowser(
-                api: _api,
-                pendingQuestions: _reviewCount,
-                onOpenQueue: () => setState(() => _reviewQueue = true),
-              ),
-        VaultTab.people => Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 720),
-              child: PeopleView(api: _api, onClose: null),
-            ),
-          ),
-        // Work order 07 §G — Intake tab: the unified intake queue.
-        // Shows every incoming file with its state. Encrypted PDFs show an
-        // inline password field. Irrelevant items show Restore. Nothing is
-        // held up by a password-needed item — the rest of the queue keeps
-        // processing.
-        VaultTab.intake => IntakeQueueView(
-            api: _api,
-            onChanged: _refresh,
-          ),
-        VaultTab.settings => Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 720),
-              child: SetupView(
-                api: _api,
-                onClose: null,
-                onOpenPeople: () => setState(() => _tab = VaultTab.people),
-              ),
-            ),
-          ),
-        VaultTab.charts => const ComingSoon(
-            title: 'Charts',
-            detail: 'Spending over time, category trends and counterparty '
-                'concentration. The data is already in the vault — this tab is '
-                'the view that has not been built yet.',
-          ),
-      };
+    VaultTab.ledger => LedgerTab(
+      snapshot: _snap,
+      treemap: _treemap,
+      txns: _txns,
+      selectedId: _selectedId,
+      card: _card,
+      onSelect: _select,
+      api: _api,
+      onSearchHit: _openSearchHit,
+      onEdited: _refresh,
+    ),
+    VaultTab.review => ReviewBrowser(
+      api: _api,
+      initialDocumentId: _selectedIntakeId,
+    ),
+    VaultTab.people => wo_people.EntityDesk(entities: _entities),
+    // Work order 07 §G — Intake tab: the unified intake queue.
+    // Shows every incoming file with its state. Encrypted PDFs show an
+    // inline password field. Irrelevant items show Restore. Nothing is
+    // held up by a password-needed item — the rest of the queue keeps
+    // processing.
+    VaultTab.intake => wo_intake.IntakeView(
+      key: ValueKey('intake-${_selectedIntakeId ?? "none"}'),
+      items: _intakeItems,
+      onOpenDocument: (item) => setState(() {
+        _selectedIntakeId = item.documentId ?? item.id;
+        _tab = VaultTab.review;
+      }),
+    ),
+    VaultTab.settings => SettingsPanel(
+      settings: _appSettings,
+      pack: _jurisdiction,
+      onSettingsChanged: (next) async {
+        final previous = _appSettings;
+        setState(() {
+          _appSettings = next;
+          _learningOn = next.learningEnabled;
+        });
+        try {
+          await _api.saveFeatureSettings(previous, next);
+        } catch (_) {
+          if (mounted) {
+            setState(() {
+              _appSettings = previous;
+              _learningOn = previous.learningEnabled;
+            });
+          }
+        }
+      },
+    ),
+    VaultTab.charts => const ComingSoon(
+      title: 'Charts',
+      detail:
+          'Spending over time, category trends and counterparty '
+          'concentration. The data is already in the vault — this tab is '
+          'the view that has not been built yet.',
+    ),
+  };
 }
 
 class _TitleBar extends StatelessWidget {
   final bool connected;
   final bool daemonUp;
-  const _TitleBar({required this.connected, required this.daemonUp});
+  final bool learningOn;
+  final int learningPending;
+  final int intakeArrivals;
+  final VoidCallback? onLearning;
+  final VoidCallback? onIntake;
+  const _TitleBar({
+    required this.connected,
+    required this.daemonUp,
+    required this.learningOn,
+    required this.learningPending,
+    required this.intakeArrivals,
+    this.onLearning,
+    this.onIntake,
+  });
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.fromLTRB(28, 26, 24, 14),
-        decoration: const BoxDecoration(
-          border: Border(bottom: BorderSide(color: VaultColors.line)),
+    padding: const EdgeInsets.fromLTRB(28, 26, 24, 14),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: VaultColors.line)),
+    ),
+    child: Row(
+      children: [
+        const Text(
+          'Quick2AVault',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: VaultColors.ink,
+          ),
         ),
-        child: Row(
-          children: [
-            const Text('Quick2AVault',
-                style: TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600, color: VaultColors.ink)),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text('— every rupee a transaction, every transaction evidenced',
-                  style: TextStyle(fontSize: 13.5, color: VaultColors.faint)),
-            ),
-            _StatusDot(connected: connected, daemonUp: daemonUp),
-          ],
+        const SizedBox(width: 10),
+        const Expanded(
+          child: Text(
+            '— every rupee a transaction, every transaction evidenced',
+            style: TextStyle(fontSize: 13.5, color: VaultColors.faint),
+          ),
         ),
-      );
+        TextButton.icon(
+          onPressed: onLearning,
+          icon: const Icon(Icons.auto_awesome_outlined, size: 15),
+          label: Text(
+            learningOn
+                ? 'Learning on · $learningPending pending'
+                : 'Learning off',
+          ),
+        ),
+        TextButton.icon(
+          onPressed: onIntake,
+          icon: const Icon(Icons.inbox_outlined, size: 15),
+          label: Text('$intakeArrivals arrivals'),
+        ),
+        _StatusDot(connected: connected, daemonUp: daemonUp),
+      ],
+    ),
+  );
 }
 
 class _StatusDot extends StatelessWidget {
@@ -638,59 +820,51 @@ class _StatusDot extends StatelessWidget {
     final (color, label) = !daemonUp
         ? (VaultColors.out, 'daemon offline')
         : connected
-            ? (VaultColors.ok, 'live')
-            : (VaultColors.warn, 'reconnecting');
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(width: 7, height: 7,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-      const SizedBox(width: 7),
-      Text(label,
-          style: TextStyle(fontSize: 11, color: color, fontFamily: VaultType.mono)),
-    ]);
-  }
-}
-
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-  @override
-  Widget build(BuildContext context) => Text(text.toUpperCase(),
-      style: const TextStyle(
-          fontSize: 10.5, letterSpacing: 1.1,
-          fontWeight: FontWeight.w600, color: VaultColors.dim));
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 44),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          border: Border.all(color: VaultColors.line),
-          color: VaultColors.panel,
+        ? (VaultColors.ok, 'live')
+        : (VaultColors.warn, 'reconnecting');
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 7,
+          height: 7,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
-        child: const Column(children: [
-          Text('No transactions yet',
-              style: TextStyle(color: VaultColors.dim, fontSize: 13.5)),
-          SizedBox(height: 6),
-          Text('Drop a document anywhere in this window',
-              style: TextStyle(color: VaultColors.faint, fontSize: 12)),
-        ]),
-      );
+        const SizedBox(width: 7),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            color: color,
+            fontFamily: VaultType.mono,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _WaitingForDaemon extends StatelessWidget {
   const _WaitingForDaemon();
   @override
   Widget build(BuildContext context) => Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Text('Waiting for the vault daemon',
-              style: TextStyle(color: VaultColors.dim, fontSize: 14)),
-          const SizedBox(height: 8),
-          Text('npx tsx daemon/main.ts',
-              style: TextStyle(
-                  color: VaultColors.faint, fontSize: 12, fontFamily: VaultType.mono)),
-        ]),
-      );
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text(
+          'Waiting for the vault daemon',
+          style: TextStyle(color: VaultColors.dim, fontSize: 14),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'npx tsx daemon/main.ts',
+          style: TextStyle(
+            color: VaultColors.faint,
+            fontSize: 12,
+            fontFamily: VaultType.mono,
+          ),
+        ),
+      ],
+    ),
+  );
 }

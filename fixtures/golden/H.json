@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "H",
+  "documentType": "contract_note",
+  "confidenceAtLeast": 0.9,
+  "fields": {
+    "broker": {
+      "name": "PAYTM MONEY LIMITED",
+      "kind": "organisation",
+      "pan": "AAJCP4398N",
+      "gstin": "29AAJCP4398N1ZE"
+    },
+    "client": {
+      "name": "PRIYA NAIR",
+      "kind": "person",
+      "ucc": "TEST1234",
+      "pan": "AB******1C",
+      "mobile": "****1234"
+    },
+    "contractNoteNumber": "2216643",
+    "tradeDate": "2026-07-01",
+    "settlementNumber": "2026662",
+    "settlementDate": "2026-07-02",
+    "financialYear": "FY 2026-27",
+    "currency": "INR",
+    "amountMinor": 1212196,
+    "payInOutObligationMinor": 1208480,
+    "ledgerBalanceMinor": 28166,
+    "ledgerBalanceDirection": "CR",
+    "amountDirection": "DR",
+    "totalAmountInWords": "TWELVE THOUSAND ONE HUNDRED TWENTY ONE RUPEES AND NINETY SIX PAISE ONLY",
+    "defaultImpactBucket": "investment_purchase",
+    "trades": [
+      {
+        "security": "REC LIMITED/532955",
+        "isin": "INE020B01018",
+        "quantity": 7,
+        "priceMinor": 37020,
+        "netObligationMinor": 259140,
+        "side": "buy"
+      },
+      {
+        "security": "KALPATARU PROJECTS INTERNATION/527",
+        "isin": "INE220B01022",
+        "quantity": 7,
+        "priceMinor": 135620,
+        "netObligationMinor": 949340,
+        "side": "buy"
+      }
+    ],
+    "charges": {
+      "brokerageMinor": 2000,
+      "cgstMinor": 208,
+      "sgstMinor": 208,
+      "stampDutyMinor": 100,
+      "securitiesTransactionTaxMinor": 1208
+    }
+  }
+}

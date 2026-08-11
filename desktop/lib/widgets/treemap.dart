@@ -3,7 +3,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../api.dart';
-import '../theme.dart';
 
 /// Squarified treemap of spending by category.
 ///
@@ -111,10 +110,18 @@ Map<TreemapNode, Rect> _squarify(List<TreemapNode> nodes, Rect bounds) {
 
     // Shrink the canvas by the strip we just filled.
     rect = rect.width >= rect.height
-        ? Rect.fromLTWH(rect.left + rowThickness, rect.top,
-            math.max(0, rect.width - rowThickness), rect.height)
-        : Rect.fromLTWH(rect.left, rect.top + rowThickness, rect.width,
-            math.max(0, rect.height - rowThickness));
+        ? Rect.fromLTWH(
+            rect.left + rowThickness,
+            rect.top,
+            math.max(0, rect.width - rowThickness),
+            rect.height,
+          )
+        : Rect.fromLTWH(
+            rect.left,
+            rect.top + rowThickness,
+            rect.width,
+            math.max(0, rect.height - rowThickness),
+          );
     if (rect.width <= 0.5 || rect.height <= 0.5) break;
   }
   return out;
@@ -167,7 +174,6 @@ class _Tile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // One hue, tint by rank: largest darkest. Encodes order, invents nothing.
-    final t = count <= 1 ? 0.0 : rank / (count - 1);
     final fill = treemapFill(rank, count);
     final onFill = treemapInk(rank, count);
 
@@ -177,14 +183,15 @@ class _Tile extends StatelessWidget {
     final showValue = rect.width > 76 && rect.height > 46;
 
     return Semantics(
-      label: '${node.label}, ${_inr(node.amountMinor)}, '
+      label:
+          '${node.label}, ${_inr(node.amountMinor)}, '
           '${(share * 100).toStringAsFixed(1)} percent, '
           '${node.transactions} transactions',
       button: onTap != null,
       child: Tooltip(
         message: node.sources.length > 1
             ? '${node.label} · ${_inr(node.amountMinor)} · ${node.transactions} txns\n'
-                'folded: ${node.sources.map((s) => s.bucket).join(", ")}'
+                  'folded: ${node.sources.map((s) => s.bucket).join(", ")}'
             : '${node.label} · ${_inr(node.amountMinor)} · ${node.transactions} txns',
         waitDuration: const Duration(milliseconds: 400),
         child: GestureDetector(
@@ -238,17 +245,17 @@ class _TreemapEmpty extends StatelessWidget {
   const _TreemapEmpty();
   @override
   Widget build(BuildContext context) => Container(
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: const Color(0xFFE7EAEF)),
-        ),
-        child: const Text(
-          'No spending in this period',
-          style: TextStyle(color: Color(0xFF8A9099), fontSize: 12.5),
-        ),
-      );
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: const Color(0xFFF8FAFC),
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: const Color(0xFFE7EAEF)),
+    ),
+    child: const Text(
+      'No spending in this period',
+      style: TextStyle(color: Color(0xFF8A9099), fontSize: 12.5),
+    ),
+  );
 }
 
 /// Compact spending band for the 420px menubar popup.
@@ -268,54 +275,62 @@ class TreemapBand extends StatelessWidget {
   Widget build(BuildContext context) {
     if (nodes.isEmpty || totalMinor <= 0) return const SizedBox.shrink();
 
-    final ranked = [...nodes]..sort((a, b) => b.amountMinor.compareTo(a.amountMinor));
+    final ranked = [...nodes]
+      ..sort((a, b) => b.amountMinor.compareTo(a.amountMinor));
 
     return Semantics(
-      label: 'Spending by category, ${_inr(totalMinor)} total across '
+      label:
+          'Spending by category, ${_inr(totalMinor)} total across '
           '${ranked.length} categories',
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        // The bar. Every category gets a segment — the data is never truncated.
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: SizedBox(
-            height: 10,
-            child: Row(
-              children: [
-                for (var i = 0; i < ranked.length; i++)
-                  Expanded(
-                    // Integer flex from minor units: rounding to a percentage
-                    // would let the segments fail to fill the bar.
-                    flex: ranked[i].amountMinor,
-                    child: Tooltip(
-                      message: '${ranked[i].label} · ${_inr(ranked[i].amountMinor)} · '
-                          '${(ranked[i].amountMinor / totalMinor * 100).toStringAsFixed(1)}%',
-                      // SizedBox.expand is REQUIRED. Tooltip passes loose
-                      // constraints to its child, and a childless ColoredBox
-                      // sizes to constraints.smallest under those — i.e. zero
-                      // height. The bar rendered completely invisible while a
-                      // width-only test passed, because the widths were right
-                      // and only the height had collapsed.
-                      child: SizedBox.expand(
-                        child: ColoredBox(color: treemapFill(i, ranked.length)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // The bar. Every category gets a segment — the data is never truncated.
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: SizedBox(
+              height: 10,
+              child: Row(
+                children: [
+                  for (var i = 0; i < ranked.length; i++)
+                    Expanded(
+                      // Integer flex from minor units: rounding to a percentage
+                      // would let the segments fail to fill the bar.
+                      flex: ranked[i].amountMinor,
+                      child: Tooltip(
+                        message:
+                            '${ranked[i].label} · ${_inr(ranked[i].amountMinor)} · '
+                            '${(ranked[i].amountMinor / totalMinor * 100).toStringAsFixed(1)}%',
+                        // SizedBox.expand is REQUIRED. Tooltip passes loose
+                        // constraints to its child, and a childless ColoredBox
+                        // sizes to constraints.smallest under those — i.e. zero
+                        // height. The bar rendered completely invisible while a
+                        // width-only test passed, because the widths were right
+                        // and only the height had collapsed.
+                        child: SizedBox.expand(
+                          child: ColoredBox(
+                            color: treemapFill(i, ranked.length),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 10),
-        // Every category gets a legend row — even small ones. The user
-        // explicitly wants to see all spending categories, not just the top
-        // few, because a small category can still be important.
-        for (var i = 0; i < ranked.length; i++)
-          _BandRow(
-            swatch: treemapFill(i, ranked.length),
-            label: ranked[i].label,
-            amountMinor: ranked[i].amountMinor,
-            share: ranked[i].amountMinor / totalMinor,
-          ),
-      ]),
+          const SizedBox(height: 10),
+          // Every category gets a legend row — even small ones. The user
+          // explicitly wants to see all spending categories, not just the top
+          // few, because a small category can still be important.
+          for (var i = 0; i < ranked.length; i++)
+            _BandRow(
+              swatch: treemapFill(i, ranked.length),
+              label: ranked[i].label,
+              amountMinor: ranked[i].amountMinor,
+              share: ranked[i].amountMinor / totalMinor,
+            ),
+        ],
+      ),
     );
   }
 }
@@ -325,62 +340,61 @@ class _BandRow extends StatelessWidget {
   final String label;
   final int amountMinor;
   final double share;
-  final bool muted;
 
   const _BandRow({
     required this.swatch,
     required this.label,
     required this.amountMinor,
     required this.share,
-    this.muted = false,
   });
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.only(bottom: 5),
-        child: Row(children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(color: swatch, borderRadius: BorderRadius.circular(2)),
+    padding: const EdgeInsets.only(bottom: 5),
+    child: Row(
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            color: swatch,
+            borderRadius: BorderRadius.circular(2),
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12,
-                color: muted ? const Color(0xFF8A9099) : const Color(0xFF2B2F36),
-                fontStyle: muted ? FontStyle.italic : FontStyle.normal,
-              ),
-            ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, color: const Color(0xFF2B2F36)),
           ),
-          const SizedBox(width: 6),
-          Text(
-            _inr(amountMinor),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          _inr(amountMinor),
+          style: const TextStyle(
+            fontSize: 12,
+            color: Color(0xFF2B2F36),
+            fontFeatures: [FontFeature.tabularFigures()],
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 34,
+          child: Text(
+            '${(share * 100).toStringAsFixed(0)}%',
+            textAlign: TextAlign.right,
             style: const TextStyle(
-              fontSize: 12,
-              color: Color(0xFF2B2F36),
+              fontSize: 11.5,
+              color: Color(0xFF8A9099),
               fontFeatures: [FontFeature.tabularFigures()],
             ),
           ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 34,
-            child: Text(
-              '${(share * 100).toStringAsFixed(0)}%',
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                fontSize: 11.5,
-                color: Color(0xFF8A9099),
-                fontFeatures: [FontFeature.tabularFigures()],
-              ),
-            ),
-          ),
-        ]),
-      );
+        ),
+      ],
+    ),
+  );
 }
 
 String _inr(int minor) {

@@ -9,8 +9,6 @@
 ///   window_manager — frameless/always-on-top/skip-taskbar, positioning
 library;
 
-
-
 import 'package:flutter/material.dart';
 import 'package:screen_retriever/screen_retriever.dart';
 import 'package:tray_manager/tray_manager.dart';
@@ -48,10 +46,12 @@ class MenubarController with TrayListener, WindowListener {
   final VoidCallback? onShowPopup;
 
   bool _popupVisible = false;
+
   /// True while WE are positioning the window. Suppresses persistence so our
   /// own restore is never mistaken for the user placing the window — without
   /// it, every launch overwrote the remembered position with the default.
   bool _restoring = false;
+
   /// False until a window has been shown DELIBERATELY (tray click or Open
   /// Vault). Startup fires resize/move events of its own — waitUntilReadyToShow
   /// applies kPopupSize before any mode is chosen — and _popupVisible is false
@@ -67,11 +67,15 @@ class MenubarController with TrayListener, WindowListener {
 
     await _installTrayIcon();
     await trayManager.setToolTip('Quick2AVault');
-    await trayManager.setContextMenu(Menu(items: [
-      MenuItem(key: 'open', label: 'Open Vault'),
-      MenuItem.separator(),
-      MenuItem(key: 'quit', label: 'Quit Quick2AVault'),
-    ]));
+    await trayManager.setContextMenu(
+      Menu(
+        items: [
+          MenuItem(key: 'open', label: 'Open Vault'),
+          MenuItem.separator(),
+          MenuItem(key: 'quit', label: 'Quit Quick2AVault'),
+        ],
+      ),
+    );
 
     // Start hidden: a menubar app should not steal a window on launch.
     // preventClose is required for onWindowClose to fire at all — without it
@@ -240,12 +244,14 @@ class MenubarController with TrayListener, WindowListener {
     try {
       final screens = await ScreenRetriever.instance.getAllDisplays();
       return screens
-          .map((d) => Rect.fromLTWH(
-                d.visiblePosition?.dx ?? 0,
-                d.visiblePosition?.dy ?? 0,
-                d.visibleSize?.width ?? d.size.width,
-                d.visibleSize?.height ?? d.size.height,
-              ))
+          .map(
+            (d) => Rect.fromLTWH(
+              d.visiblePosition?.dx ?? 0,
+              d.visiblePosition?.dy ?? 0,
+              d.visibleSize?.width ?? d.size.width,
+              d.visibleSize?.height ?? d.size.height,
+            ),
+          )
           .toList();
     } catch (_) {
       // Without display info, accept the saved position rather than discarding
@@ -263,12 +269,14 @@ class MenubarController with TrayListener, WindowListener {
     try {
       final pos = await windowManager.getPosition();
       final size = await windowManager.getSize();
-      await _store!.save(
+      await _store.save(
         _popupVisible ? 'popup' : 'full',
         position: pos,
         size: size,
       );
-    } catch (_) {/* geometry is best-effort */}
+    } catch (_) {
+      /* geometry is best-effort */
+    }
   }
 
   @override
