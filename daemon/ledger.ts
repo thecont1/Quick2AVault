@@ -360,6 +360,28 @@ export function recordTransaction(
   const now = ports.clock.isoNow();
   const isReanalysis = !!existing;
 
+  // WO12 phase 2: refund linking. A refund_note (direction='in') that matches
+  // an existing outbound transaction by amount and currency sets
+  // reverses_transaction_id, so snapshot totals can net the pair instead of
+  // counting the refund as separate income. The match is deliberately simple:
+  // exact amount + same currency + direction='out'. The matcher's full scoring
+  // is overkill here — a refund for the wrong amount is a partial refund, which
+  // the plan defers to a future work order.
+  let reversesTransactionId: string | null = null;
+  if (x.doc_type === "refund_note" && !isReanalysis) {
+    const original = db
+      .prepare(
+        `SELECT t.id FROM transactions t
+         WHERE t.direction='out' AND t.amount_minor=? AND t.currency IS ?
+           AND t.reverses_transaction_id IS NULL
+         ORDER BY t.occurred_at DESC LIMIT 1`,
+      )
+      .get(x.amount_minor, x.currency?.trim() ? x.currency.trim().toUpperCase() : null) as
+      | { id: string }
+      | undefined;
+    reversesTransactionId = original?.id ?? null;
+  }
+
   if (isReanalysis) {
     // UPDATE the existing transaction in place. User-confirmed claims are NOT
     // touched — the resolver keeps them (§A3: user corrections survive
@@ -397,8 +419,8 @@ export function recordTransaction(
       `INSERT INTO transactions
         (id, occurred_at, posted_at, fy_key, amount_minor, currency, direction,
          counterparty_entity_id, payment_rail, impact_bucket, purpose_text,
-         status, confidence, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+         status, confidence, reverses_transaction_id, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(
       id,
       occurred,
@@ -416,6 +438,7 @@ export function recordTransaction(
       x.purpose_text ?? null,
       "evidenced",
       x.confidence,
+      reversesTransactionId,
       now,
     );
   }

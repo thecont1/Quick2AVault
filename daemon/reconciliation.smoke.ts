@@ -407,12 +407,13 @@ await check("step 8: refund creates a separate credit transaction", async () => 
   assert.ok(rec, "refund transaction should be created");
   assert.equal(rec!.direction, "in", "refund should be a credit (direction=in)");
   assert.equal(rec!.amount_minor, 472287);
-  // Spending unchanged (refund is income, not a reduction of spending)
+  // WO12 phase 2: refund nets against spending, not counted as income.
+  // Spending = (invoice 472287 + diff slip 99999) - refund 472287 = 99999
   const r = await req("GET", "/v1/snapshot?period=all");
   assert.equal(r.status, 200);
-  // Spending = invoice (472287) + diff slip (99999) = 572286
-  // Refund is direction='in', so not in spending
-  assert.equal(r.json.spending_minor, 472287 + 99999, "spending includes both out transactions, refund is credit");
+  assert.equal(r.json.spending_minor, 99999, "refund nets against spending — net spending is diff slip only");
+  // Income excludes refunds (the refund reversed a spending transaction)
+  assert.equal(r.json.income_minor, 0, "refund is not income — it reversed a spending transaction");
 });
 
 // ── Step 9: Remove an evidence document — transaction hides when all evidence removed ──
@@ -422,22 +423,24 @@ await check("step 9: removing evidence document hides transaction when all evide
   db.prepare("UPDATE documents SET lifecycle='removed' WHERE id='doc_invoice'").run();
 
   // Transaction should still be visible (slip + card confirmation are active)
-  // Spending = invoice(472287) + diff_slip(99999) = 572286
+  // WO12 phase 2: refund nets against the main txn, so spending = 99999
   let r = await req("GET", "/v1/snapshot?period=all");
   assert.equal(r.status, 200);
-  assert.equal(r.json.spending_minor, 472287 + 99999, "both transactions still visible — slip and card are active");
+  assert.equal(r.json.spending_minor, 99999, "both transactions still visible — slip and card are active; refund nets");
 
   // Remove doc_slip — main transaction still visible (card confirmation active)
   db.prepare("UPDATE documents SET lifecycle='removed' WHERE id='doc_slip'").run();
   r = await req("GET", "/v1/snapshot?period=all");
   assert.equal(r.status, 200);
-  assert.equal(r.json.spending_minor, 472287 + 99999, "main txn still visible — card confirmation is active");
+  assert.equal(r.json.spending_minor, 99999, "main txn still visible — card confirmation is active; refund nets");
 
   // Now remove doc_card (the only remaining evidence for the main txn)
   db.prepare("UPDATE documents SET lifecycle='removed' WHERE id='doc_card'").run();
   r = await req("GET", "/v1/snapshot?period=all");
   assert.equal(r.status, 200);
   // Main txn hidden (all evidence removed), diff slip transaction still visible
+  // Refund no longer nets (original is hidden) — but refund is direction='in',
+  // so it doesn't affect spending. Spending is just the diff slip.
   assert.equal(r.json.spending_minor, 99999, "main transaction hidden — all evidence removed; diff slip remains");
 });
 
@@ -451,8 +454,8 @@ await check("step 10: delete lifecycle behaves same as removed", async () => {
   const r = await req("GET", "/v1/snapshot?period=all");
   assert.equal(r.status, 200);
   // doc_card is now deleted, but doc_invoice and doc_slip are still active, so main txn still visible
-  // Plus the diff slip txn
-  assert.equal(r.json.spending_minor, 472287 + 99999, "transaction still visible — invoice + slip are active, card deleted");
+  // WO12 phase 2: refund nets against the main txn, so spending = 99999
+  assert.equal(r.json.spending_minor, 99999, "transaction still visible — invoice + slip are active, card deleted; refund nets");
 });
 
 // ── E2E scenarios (F5) ──────────────────────────────────────────────────────
@@ -539,21 +542,35 @@ await check("E2E D: slip-only transaction → no_invoice on file", async () => {
   assert.ok(rec, "slip-only transaction should be created");
 });
 
-// E — Refund against an invoice → totals net correctly
-await check("E2E E: refund against invoice → net to zero in spending", async () => {
+// E — Refund against an invoice → linked and totals net correctly
+await check("E2E E: refund against invoice → linked, net to zero in spending", async () => {
   const { db: dbE, ports: portsE } = freshDb();
   const x1 = makeInvoice();
   const docId1 = seedDoc(dbE, "e2e_e_invoice", x1);
-  recordTransaction(dbE, portsE, docId1, x1);
+  const invRec = recordTransaction(dbE, portsE, docId1, x1);
+  assert.ok(invRec, "invoice transaction should be created");
 
   const x2 = makeRefund();
   const docId2 = seedDoc(dbE, "e2e_e_refund", x2);
-  recordTransaction(dbE, portsE, docId2, x2);
+  const refundRec = recordTransaction(dbE, portsE, docId2, x2);
+  assert.ok(refundRec, "refund transaction should be created");
 
-  const spend = (dbE.prepare("SELECT COALESCE(SUM(amount_minor),0) v FROM transactions WHERE direction='out'").get() as { v: number }).v;
-  const income = (dbE.prepare("SELECT COALESCE(SUM(amount_minor),0) v FROM transactions WHERE direction='in'").get() as { v: number }).v;
-  assert.equal(spend, 472287, "spending is the invoice amount");
-  assert.equal(income, 472287, "income is the refund amount");
+  // WO12 phase 2: the refund should be linked to the original transaction
+  const refundTxn = dbE.prepare("SELECT reverses_transaction_id FROM transactions WHERE id=?").get(refundRec!.transaction_id) as { reverses_transaction_id: string | null };
+  assert.equal(refundTxn.reverses_transaction_id, invRec!.transaction_id, "refund should be linked to the original invoice transaction");
+
+  // WO12 phase 2: snapshot totals net the refund against spending
+  const vaultE = fs.mkdtempSync(path.join(os.tmpdir(), "q2v-refund-e2e-"));
+  const PORT_E = 47960;
+  const apiE = createApi(dbE, portsE, { port: PORT_E, token: "test", version: "test", vaultDir: vaultE, ai: noAi });
+  await apiE.listen();
+  const res = await fetch(`http://127.0.0.1:${PORT_E}/v1/snapshot?period=all`, {
+    headers: { Authorization: "Bearer test" },
+  });
+  const snap = (await res.json()) as { spending_minor: number; income_minor: number };
+  await apiE.close();
+  assert.equal(snap.spending_minor, 0, "net spending is zero — refund fully reverses the invoice");
+  assert.equal(snap.income_minor, 0, "refund is not income — it reversed a spending transaction");
   dbE.close();
 });
 

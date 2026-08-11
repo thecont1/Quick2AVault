@@ -3003,6 +3003,30 @@ export function snapshot(
   const invested = sum("out", true);
   const divested = sum("in", true);
 
+  // WO12 phase 2: refund netting. A refund (direction='in' with
+  // reverses_transaction_id) reduces spending, not increases income.
+  // The net spending figure is: outbound non-investment transactions minus
+  // refunds that reverse outbound transactions. Income excludes refunds.
+  // A refund only nets if the original transaction it reverses is still
+  // visible — if the original's evidence was removed/deleted, the refund
+  // becomes regular income (you can't reverse a transaction that doesn't
+  // exist in the ledger anymore).
+  const REFUND_VISIBLE = `EXISTS (
+    SELECT 1 FROM transactions t2
+    WHERE t2.id = transactions.reverses_transaction_id
+      AND ${activeTransactionSql("t2")}
+  )`;
+  const refundsNetted = (
+    db
+      .prepare(
+        `SELECT COALESCE(SUM(${HOME_AMOUNT}),0) v FROM transactions
+         WHERE direction='in' AND status <> 'scheduled'
+           AND reverses_transaction_id IS NOT NULL AND ${REFUND_VISIBLE}
+           AND ${VISIBLE} ${where}`,
+      )
+      .get(...args) as { v: number }
+  ).v;
+
   // Documents backing each bucket — the reference design shows "N documents
   // processed" under every figure, which is also the honest answer to
   // "where did this number come from?"
@@ -3023,8 +3047,8 @@ export function snapshot(
   return {
     period: { key: period.key, label: period.label, from: period.from, to: period.to },
     fy_key: period.key,
-    spending_minor: sum("out", false),
-    income_minor: sum("in", false),
+    spending_minor: sum("out", false) - refundsNetted,
+    income_minor: sum("in", false) - refundsNetted,
     transfers_minor: plainSum("transfer"),
     investments_minor: invested,
     investments_out_minor: invested,
