@@ -140,28 +140,52 @@ class _PromptCard extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 14),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            FilledButton(
-              onPressed: () => onAction?.call('confirm:${question.id}'),
-              child: const Text('Confirm'),
-            ),
-            OutlinedButton(
-              onPressed: () => onAction?.call('choose:${question.id}'),
-              child: const Text('Choose from list'),
-            ),
-            OutlinedButton(
-              onPressed: () => onAction?.call('create:${question.id}'),
-              child: const Text('Create new'),
-            ),
-            TextButton(
-              onPressed: () => onAction?.call('later:${question.id}'),
-              child: const Text('Later'),
-            ),
-          ],
-        ),
+        // WO12 phase 2: reconciliation-ambiguity questions get
+        // Link / Don't link / Later buttons instead of the generic
+        // Confirm / Choose / Create / Later set. The trigger field
+        // distinguishes the two question types.
+        if (question.trigger == 'reconciliation-ambiguity')
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton(
+                onPressed: () => onAction?.call('link:${question.id}'),
+                child: const Text('Link'),
+              ),
+              OutlinedButton(
+                onPressed: () => onAction?.call('dismiss:${question.id}'),
+                child: const Text("Don't link"),
+              ),
+              TextButton(
+                onPressed: () => onAction?.call('later:${question.id}'),
+                child: const Text('Later'),
+              ),
+            ],
+          )
+        else
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              FilledButton(
+                onPressed: () => onAction?.call('confirm:${question.id}'),
+                child: const Text('Confirm'),
+              ),
+              OutlinedButton(
+                onPressed: () => onAction?.call('choose:${question.id}'),
+                child: const Text('Choose from list'),
+              ),
+              OutlinedButton(
+                onPressed: () => onAction?.call('create:${question.id}'),
+                child: const Text('Create new'),
+              ),
+              TextButton(
+                onPressed: () => onAction?.call('later:${question.id}'),
+                child: const Text('Later'),
+              ),
+            ],
+          ),
       ],
     ),
   );

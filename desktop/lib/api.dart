@@ -323,6 +323,11 @@ class Txn {
   /// import (work order 05 §Track C). Only present on rows returned inside a
   /// document detail payload.
   final String? linkedBy;
+
+  /// WO12 phase 2: the transaction this refund reverses, or null when this
+  /// transaction is not a refund. Set by recordTransaction when a refund_note
+  /// matches an existing outbound transaction by amount and currency.
+  final String? reversesTransactionId;
   final List<Leg> legs;
   final List<Evidence> evidence;
 
@@ -340,6 +345,7 @@ class Txn {
     this.rail,
     this.status = 'evidenced',
     this.linkedBy,
+    this.reversesTransactionId,
     this.legs = const [],
     this.evidence = const [],
   });
@@ -360,6 +366,7 @@ class Txn {
     rail: j['payment_rail'] as String?,
     status: (j['status'] ?? 'evidenced') as String,
     linkedBy: j['linked_by'] as String?,
+    reversesTransactionId: j['reverses_transaction_id'] as String?,
     legs: ((j['legs'] ?? const []) as List)
         .map((e) => Leg.fromJson(e as Map<String, dynamic>))
         .toList(),
@@ -367,6 +374,18 @@ class Txn {
         .map((e) => Evidence.fromJson(e as Map<String, dynamic>))
         .toList(),
   );
+
+  /// WO12 phase 2: true when this transaction is a refund that reverses
+  /// another transaction. The UI shows a "Reverses" badge on such rows.
+  bool get isRefund => reversesTransactionId != null;
+
+  /// WO12 phase 2: true when the transaction has an invoice but no settlement
+  /// evidence yet — the "Awaiting settlement" flag.
+  bool get isAwaitingSettlement => status == 'awaiting_settlement';
+
+  /// WO12 phase 2: true when a settlement document arrived with no invoice —
+  /// the "No invoice on file" gap flag.
+  bool get isNoInvoice => status == 'no_invoice';
 
   bool get isTransfer => direction == 'transfer';
   bool get multiEvidence => evidence.length > 1;
@@ -2338,6 +2357,32 @@ class VaultApi {
     if (res.statusCode != 200) {
       throw Exception('POST $path -> ${res.statusCode}');
     }
+  }
+
+  /// WO12 phase 2: unlink a document from a transaction. Removes the
+  /// evidence row from transaction_documents so the document is no longer
+  /// proof for this transaction. The document itself is preserved — only
+  /// the link is removed. Reversible by re-linking via the matcher.
+  Future<bool> unlinkEvidence(String transactionId, String documentId) async {
+    const path = '/v1/unlink';
+    final res = await _client
+        .post(
+          Uri.parse('$baseUrl$path'),
+          headers: {..._headers, 'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'transaction_id': transactionId,
+            'document_id': documentId,
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+    if (res.statusCode == 401 || res.statusCode == 403) {
+      throw VaultAuthException(res.statusCode, path);
+    }
+    if (res.statusCode != 200) {
+      throw Exception('POST $path -> ${res.statusCode}');
+    }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    return body['unlinked'] == true;
   }
 
   /// Permanently delete a document (Glaze footer "Delete permanently"). Unlinks

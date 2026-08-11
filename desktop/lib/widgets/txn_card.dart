@@ -60,6 +60,31 @@ class TxnCard extends StatelessWidget {
                 const SizedBox(width: 10),
                 _OneRupeeBadge(count: txn.evidence.length),
               ],
+              // WO12 phase 2: status flag badges
+              if (txn.isAwaitingSettlement) ...[
+                const SizedBox(width: 8),
+                _StatusBadge(
+                  label: 'AWAITING SETTLEMENT',
+                  color: const Color(0xFFB07A00),
+                  bgColor: const Color(0xFFE0A800),
+                ),
+              ],
+              if (txn.isNoInvoice) ...[
+                const SizedBox(width: 8),
+                _StatusBadge(
+                  label: 'NO INVOICE',
+                  color: const Color(0xFFB91C1C),
+                  bgColor: const Color(0xFFEF4444),
+                ),
+              ],
+              if (txn.isRefund) ...[
+                const SizedBox(width: 8),
+                _StatusBadge(
+                  label: 'REVERSAL',
+                  color: const Color(0xFFB07A00),
+                  bgColor: const Color(0xFFE0A800),
+                ),
+              ],
               const Spacer(),
               Flexible(
                 child: Text(
@@ -176,5 +201,33 @@ class _OneRupeeBadge extends StatelessWidget {
                 fontWeight: FontWeight.w700,
                 fontFamily: VaultType.mono,
                 color: VaultColors.ok)),
+      );
+}
+
+/// WO12 phase 2: a colored status flag badge for awaiting_settlement,
+/// no_invoice, and refund/reversal transactions.
+class _StatusBadge extends StatelessWidget {
+  final String label;
+  final Color color;
+  final Color bgColor;
+  const _StatusBadge({
+    required this.label,
+    required this.color,
+    required this.bgColor,
+  });
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+          color: bgColor.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(3),
+        ),
+        child: Text(label,
+            style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                fontFamily: VaultType.mono,
+                color: color)),
       );
 }
