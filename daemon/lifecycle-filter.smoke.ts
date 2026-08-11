@@ -177,6 +177,31 @@ await check("list: removed is hidden by default, visible via ?include=removed", 
   assert.ok(allIds.includes("doc_spend"));
 });
 
+// ── mixed evidence: some active, some removed → the transaction survives ───
+seedDoc("doc_mixed_a");
+seedDoc("doc_mixed_b");
+seedTxn("txn_mixed", { direction: "out", amount: 30000 });
+link("txn_mixed", "doc_mixed_a");
+// A document may only be evidence for ONE transaction per role — the second
+// link uses a corroborating role.
+db.prepare(
+  `INSERT INTO transaction_documents (transaction_id, document_id, evidence_role, linked_by, linked_at)
+   VALUES ('txn_mixed', 'doc_mixed_b', 'receipt', 'ai', '2026-08-09T00:00:00.000Z')`,
+).run();
+await req("POST", "/v1/documents/doc_mixed_b/remove-from-active");
+await check("mixed evidence: the transaction stays visible and still counts", async () => {
+  const txns = await req("GET", "/v1/transactions?limit=100");
+  const mixed = (txns.json.transactions ?? []).find((t: { id: string }) => t.id === "txn_mixed");
+  assert.ok(mixed, "a transaction with SOME active evidence must survive");
+  assert.deepEqual(
+    (mixed.evidence as Array<{ id: string }>).map((e) => e.id),
+    ["doc_mixed_a"],
+    "the evidence list shows only the active document",
+  );
+  const snap = await req("GET", "/v1/snapshot");
+  assert.equal(snap.json.spending_minor, 70000 + 30000, "the mixed-evidence spend still counts");
+});
+
 // ── remove the trade evidence → the holding drops out of the portfolio ─────
 await req("POST", "/v1/documents/doc_trade/remove-from-active");
 await check("portfolio: a holding backed only by a removed document is gone", async () => {
@@ -199,10 +224,10 @@ await check("reprocess reactivates the document and its holding returns", async 
 
 // ── delete permanently → 410, tombstone stays out of every surface ─────────
 await req("DELETE", "/v1/documents/doc_trade");
-await check("detail: a deleted document answers 410 document_not_available", async () => {
+await check("detail: a deleted document answers 410 document_deleted", async () => {
   const r = await req("GET", "/v1/documents/doc_trade/detail");
   assert.equal(r.status, 410);
-  assert.equal(r.json?.error, "document_not_available");
+  assert.equal(r.json?.error, "document_deleted");
   assert.equal(r.json?.lifecycle, "deleted");
 });
 await check("deleted documents never list, even with ?include=removed", async () => {

@@ -1078,6 +1078,16 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, source, created_at) VALUES (?,?,?,?, 'user-merge', ?)",
           ).run(into.id, into.kind, from.display_name, from.display_name.toLowerCase(), now);
           db.prepare("DELETE FROM entities WHERE id=?").run(from.id);
+          // WO11 A2: a user-confirmed merge is durable evidence — a passive
+          // learning candidate, inactive until consistently confirmed (the
+          // claims.ts pattern; standing rules are reserved for explicit
+          // decisions like keep-separate).
+          db.prepare(
+            `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
+             VALUES('entity_merge',?, ?, ?,'passive-correction',1,0,?)
+             ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET
+               value=excluded.value, source='passive-correction', confidence=1, created_at=excluded.created_at`,
+          ).run(`entity:${from.id}`, into.kind, into.id, now);
           db.exec("COMMIT");
         } catch (e) {
           db.exec("ROLLBACK");
@@ -2292,7 +2302,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             // sha256 dedup still holds).
             if (!isActive(doc as { lifecycle: string })) {
               return send(res, doc.lifecycle === "deleted" ? 410 : 404, {
-                error: "document_not_available",
+                error: doc.lifecycle === "deleted" ? "document_deleted" : "document_not_available",
                 lifecycle: doc.lifecycle,
                 document_id: docId,
               });

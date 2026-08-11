@@ -498,6 +498,15 @@ export function mergePeople(
        WHERE id=?`,
     ).run(from.id, from.id, now, into.id);
     db.prepare("DELETE FROM entities WHERE id=?").run(from.id);
+    // WO11 A2: a user-confirmed merge emits a passive-learning candidate
+    // (same pattern as the owner toggle — inactive until consistently
+    // confirmed; NOT a standing rule).
+    db.prepare(
+      `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
+       VALUES('entity_merge',?, 'person', ?,'passive-correction',1,0,?)
+       ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET
+         value=excluded.value, source='passive-correction', confidence=1, created_at=excluded.created_at`,
+    ).run(`entity:${from.id}`, into.id, now);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");

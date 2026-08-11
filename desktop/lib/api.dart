@@ -1141,18 +1141,18 @@ class PersonInUse implements Exception {
 }
 
 /// WO11 Track B — the document detail endpoint serves ACTIVE documents only.
-/// A removed document answers 404 (`lifecycle: 'removed'` — Reprocess brings
-/// it back); a deleted one answers 410 (`lifecycle: 'deleted'` — the row is a
-/// tombstone; ingesting the file again creates a fresh document).
+/// A removed document answers 404 (`document_not_available` — Reprocess
+/// brings it back); a deleted one answers 410 (`document_deleted` — the row
+/// is a tombstone; ingesting the file again creates a fresh document).
 class DocumentUnavailable implements Exception {
-  DocumentUnavailable(this.documentId, {required this.lifecycle});
+  DocumentUnavailable(this.documentId, {required this.kind});
   final String documentId;
 
   /// 'removed' or 'deleted'.
-  final String lifecycle;
-  bool get reprocessable => lifecycle == 'removed';
+  final String kind;
+  bool get reprocessable => kind == 'removed';
   @override
-  String toString() => lifecycle == 'deleted'
+  String toString() => kind == 'deleted'
       ? 'This document was permanently deleted.'
       : 'This document was removed from the active ledger.';
 }
@@ -1951,10 +1951,11 @@ class VaultApi {
     // instead of an error string.
     if (res.statusCode == 404 || res.statusCode == 410) {
       final j = jsonDecode(res.body) as Map<String, dynamic>;
-      if (j['error'] == 'document_not_available') {
+      if (j['error'] == 'document_not_available' ||
+          j['error'] == 'document_deleted') {
         throw DocumentUnavailable(
           id,
-          lifecycle: (j['lifecycle'] ?? 'removed').toString(),
+          kind: (j['lifecycle'] ?? 'removed').toString(),
         );
       }
       throw Exception('document not found: $id');

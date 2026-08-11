@@ -427,6 +427,35 @@ await check("merging two people keeps every alias and the audit survives re-anal
     .all() as { alias: string }[];
   assert.ok(aliases.some((a) => a.alias === "A Kamath"), "absorbed name is an alias");
   assert.ok(aliases.some((a) => a.alias === "arun@example.com"), "identifier aliases survive");
+  // WO11 A2: the merge emits a passive-learning candidate, not a standing rule.
+  const rule = db
+    .prepare("SELECT value, source, active FROM learned_rules WHERE kind='entity_merge' AND match_key='entity:ent_dup'")
+    .get() as { value: string; source: string; active: number } | undefined;
+  assert.ok(rule, "entity_merge passive candidate missing");
+  assert.equal(rule!.value, "ent_m");
+  assert.equal(rule!.source, "passive-correction");
+  assert.equal(rule!.active, 0);
+});
+
+await check("WO11 A2: /v1/entities/merge emits the same passive-learning candidate", async () => {
+  db.prepare(
+    `INSERT INTO entities (id, kind, display_name, status, confidence, created_at)
+     VALUES ('ent_gm1','organisation','Merged Org','confirmed',1.0,?)`,
+  ).run(now);
+  db.prepare(
+    `INSERT INTO entities (id, kind, display_name, status, confidence, created_at)
+     VALUES ('ent_gm2','organisation','Merged Org Ltd','confirmed',1.0,?)`,
+  ).run(now);
+  const r = await call("POST", "/v1/entities/merge", { from_id: "ent_gm1", into_id: "ent_gm2" });
+  assert.equal(r.status, 200);
+  const rule = db
+    .prepare("SELECT value, source, active, match_kind FROM learned_rules WHERE kind='entity_merge' AND match_key='entity:ent_gm1'")
+    .get() as { value: string; source: string; active: number; match_kind: string } | undefined;
+  assert.ok(rule, "entity_merge passive candidate missing for generic merge");
+  assert.equal(rule!.value, "ent_gm2");
+  assert.equal(rule!.match_kind, "organisation");
+  assert.equal(rule!.source, "passive-correction");
+  assert.equal(rule!.active, 0);
 });
 
 // ── WO11 Track A: owner passive learning + cross-kind conflicts ────────────
@@ -489,6 +518,66 @@ await check("keep-separate refuses a same-kind pair (that is a merge candidate)"
     entity_ids: ["ent_m", "ent_v"],
   });
   assert.equal(r.status, 409);
+});
+
+await check("the dismissal survives a full daemon restart (file-backed vault)", async () => {
+  // The API smoke above runs on :memory:; durability needs a real file. Boot
+  // a throwaway daemon on a file-backed vault, seed a collision, dismiss it,
+  // close everything, reopen the same file with a fresh daemon, and confirm
+  // the conflict does not resurface.
+  const restartVault = fs.mkdtempSync(path.join(os.tmpdir(), "q2v-people-restart-"));
+  const dbFile = path.join(restartVault, "vault.db");
+  const boot = async (port: number) => {
+    const conn = openDatabase(dbFile);
+    const instance = createApi(conn, testPorts(restartVault), {
+      port,
+      token: TOKEN,
+      version: "test",
+      vaultDir: restartVault,
+    });
+    await instance.listen();
+    return { conn, instance };
+  };
+  const get = async (port: number) => {
+    const r = await fetch(`http://127.0.0.1:${port}/v1/entities`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    return (await r.json()) as { entities: Array<{ id: string; conflicts?: unknown[] }> };
+  };
+  try {
+    const first = await boot(47938);
+    const nowIso = new Date().toISOString();
+    for (const [id, kind] of [["ent_rp", "person"], ["ent_ro", "organisation"]] as const) {
+      first.conn
+        .prepare(
+          `INSERT INTO entities (id, kind, display_name, status, confidence, identifiers_json, created_at)
+           VALUES (?,?,?,'confirmed',1.0,?,?)`,
+        )
+        .run(id, kind, `Restart ${kind}`, JSON.stringify({ email: "restart@example.com" }), nowIso);
+    }
+    const before = await get(47938);
+    assert.ok(before.entities.find((e) => e.id === "ent_rp")?.conflicts?.length, "collision seeded");
+    await fetch(`http://127.0.0.1:47938/v1/entities/keep-separate`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ identifier: "restart@example.com", entity_ids: ["ent_rp", "ent_ro"] }),
+    });
+    await first.instance.close();
+    first.conn.close();
+
+    const second = await boot(47939);
+    try {
+      const after = await get(47939);
+      assert.equal(after.entities.find((e) => e.id === "ent_rp")?.conflicts?.length ?? 0, 0,
+        "the conflict must NOT resurface after a restart");
+      assert.equal(after.entities.find((e) => e.id === "ent_ro")?.conflicts?.length ?? 0, 0);
+    } finally {
+      await second.instance.close();
+      second.conn.close();
+    }
+  } finally {
+    fs.rmSync(restartVault, { recursive: true, force: true });
+  }
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
