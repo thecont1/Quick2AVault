@@ -13,6 +13,8 @@
 ///
 /// The queue is read-only for everything else — you can see a file is
 /// processing, but you can't rush it.
+library;
+
 import 'package:flutter/material.dart';
 
 import '../api.dart';

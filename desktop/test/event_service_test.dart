@@ -93,7 +93,7 @@ void main() {
       final completer = Completer<void>();
       service.events.listen((e) {
         events.add(e);
-        if (events.length >= 1) completer.complete();
+        if (events.isNotEmpty) completer.complete();
       });
 
       await service.connect();

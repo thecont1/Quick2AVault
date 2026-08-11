@@ -7,7 +7,6 @@ import 'package:quick2avault_desktop/api.dart';
 import 'package:quick2avault_desktop/widgets/txn_card.dart';
 import 'package:quick2avault_desktop/widgets/evidence_panel.dart';
 import 'package:quick2avault_desktop/features/learning/view.dart';
-import 'package:quick2avault_desktop/features/learning/state.dart';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 

@@ -58,5 +58,7 @@ Dio createDio(AppConfig config, Logger logger) {
 final Provider<Dio> dioProvider = Provider<Dio>((ref) {
   final config = ref.watch(appConfigProvider);
   final logger = ref.watch(appLoggerProvider);
-  return createDio(config, logger);
+  final dio = createDio(config, logger);
+  ref.onDispose(dio.close);
+  return dio;
 });

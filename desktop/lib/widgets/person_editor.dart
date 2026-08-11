@@ -85,7 +85,7 @@ class _PersonEditorState extends State<PersonEditor> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('Delete ${_originalName}?'),
+        title: Text('Delete $_originalName?'),
         content: const Text(
           'The person is removed from the vault. Documents that name them stay, '
           'but lose the link.',

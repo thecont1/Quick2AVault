@@ -81,7 +81,7 @@ void main() {
     final api = VaultApi(
       baseUrl: 'http://127.0.0.1:9',
       token: 't',
-      client: MockClient((_) async => throw const SocketException_('refused')),
+      client: MockClient((_) async => throw const FakeSocketException('refused')),
     );
     await expectLater(
       api.snapshot(period: 'month', month: '2026-08'),
@@ -93,7 +93,7 @@ void main() {
     final api = VaultApi(
       baseUrl: 'http://127.0.0.1:9',
       token: 't',
-      client: MockClient((_) async => throw const SocketException_('refused')),
+      client: MockClient((_) async => throw const FakeSocketException('refused')),
     );
     expect(await api.health(), isFalse,
         reason: 'the reconnect loop depends on this returning false, not throwing');
@@ -134,9 +134,9 @@ void main() {
 }
 
 /// Minimal stand-in so the test does not depend on dart:io in a widget test.
-class SocketException_ implements Exception {
+class FakeSocketException implements Exception {
   final String message;
-  const SocketException_(this.message);
+  const FakeSocketException(this.message);
   @override
   String toString() => 'SocketException: $message';
 }

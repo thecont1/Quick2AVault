@@ -97,12 +97,18 @@ class _VaultHomeState extends ConsumerState<VaultHome> {
     _initMenubar().catchError((Object e, StackTrace st) {
       appLogger.e('Menubar init failed', error: e, stackTrace: st);
     });
-    // Start the connection check and SSE subscription.
+    // Start the connection check. The SSE subscription is started by
+    // watching eventDispatcherProvider in build(), which keeps it alive
+    // for the widget's lifetime.
     Future.microtask(() {
       ref.read(connectionStatusProvider.notifier).start();
-      // Watching eventDispatcherProvider starts the SSE subscription.
-      ref.watch(eventDispatcherProvider);
     });
+  }
+
+  @override
+  void dispose() {
+    _menubar?.dispose();
+    super.dispose();
   }
 
   Future<void> _initMenubar() async {
