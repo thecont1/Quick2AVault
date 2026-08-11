@@ -11,8 +11,13 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
+// core/providers exports the DI surface (AppConfig, Dio, Logger, services).
+// QAV-FLT-02 provides the boundary; QAV-FLT-03–05 migrate callers onto it.
+// ignore: unused_import
+import 'core/providers.dart';
 import 'api.dart';
 import 'menubar.dart';
 import 'window_store.dart';
@@ -43,7 +48,7 @@ Future<void> main() async {
       titleBarStyle: TitleBarStyle.hidden,
     ),
   );
-  runApp(const Quick2AVaultApp());
+  runApp(const ProviderScope(child: Quick2AVaultApp()));
 }
 
 class Quick2AVaultApp extends StatelessWidget {
