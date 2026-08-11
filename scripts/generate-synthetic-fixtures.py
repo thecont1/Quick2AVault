@@ -19,7 +19,7 @@ def write_pdf(name: str, pages: list[str]) -> None:
     pdf = canvas.Canvas(str(path), pagesize=A4, pageCompression=0)
     pdf.setTitle("Quick2AVault synthetic QA fixture")
     pdf.setAuthor("Quick2AVault")
-    width, height = A4
+    _, height = A4
     for page in pages:
         text = pdf.beginText(42, height - 42)
         text.setFont("Helvetica", 9)
