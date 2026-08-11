@@ -224,7 +224,7 @@ export class FrankfurterFx {
     const targetScale = 10 ** minorUnitDigits(to);
     const convertedAmount = Math.round((amount / sourceScale) * rate * targetScale);
     if (!Number.isSafeInteger(convertedAmount)) throw new RangeError("converted amount exceeds the safe-integer range");
-    return { originalAmount: amount, originalCurrency: from, convertedAmount, rate, rateDate: date, rateSource: "frankfurter", provenance: "ai-derived", freshness };
+    return { originalAmount: amount, originalCurrency: from, convertedAmount, rate, rateDate: date, rateSource: "frankfurter", provenance: "rule-derived", freshness };
   }
 }
 
@@ -290,7 +290,7 @@ export function generateLearningQuestions(
   if (remaining <= 0) return [];
   const out: LearningQuestion[] = [];
   for (const ambiguity of input.ambiguities) {
-    if (remaining-- <= 0) break;
+    if (remaining <= 0) break;
     if (!LEARNING_TRIGGERS.includes(ambiguity.kind)) continue;
     if (!(ambiguity.noveltyScore >= 0 && ambiguity.noveltyScore <= 1) || !ambiguity.why.trim()) continue;
     const existing = db.prepare("SELECT 1 FROM training_reviews WHERE dedupe_key=?").get(ambiguity.dedupeKey);
@@ -301,6 +301,7 @@ export function generateLearningQuestions(
        VALUES(?,?,?,?,?,?,?,?,?)`,
     ).run(ambiguity.prompt, JSON.stringify({ document_id: input.documentId, pipeline_state: input.pipelineState, source_fact: ambiguity.sourceFact }), ambiguity.kind,
       JSON.stringify(["Yes", "No", "Later"]), ambiguity.dedupeKey, ambiguity.noveltyScore, JSON.stringify(ambiguity.predictedRule), ambiguity.why, askedAt);
+    remaining--;
     const q: LearningQuestion = { type: "learning.question", question_id: String(inserted.lastInsertRowid), at: askedAt,
       trigger: { kind: ambiguity.kind, document_id: input.documentId, pipeline_state: input.pipelineState, novelty_score: ambiguity.noveltyScore },
       prompt: ambiguity.prompt, source_fact: ambiguity.sourceFact, predicted_rule: ambiguity.predictedRule,
@@ -319,22 +320,37 @@ export function answerLearningQuestion(
   if (!row) throw new Error("learning question not found");
   if (row.answered_at || row.dismissed) return { ruleId: null };
   const now = ports.clock.isoNow(); let ruleId: number | null = null;
+  let appliedRuleId: number | null = null;
+  let contextForEvent: Record<string, unknown> | null = null;
   if (/^(yes|confirm|accept)/i.test(answer) && row.predicted_rule) {
     const predicted = JSON.parse(row.predicted_rule) as LearningAmbiguity["predictedRule"];
     const resolved = PREDICTED_RULE_KINDS[predicted.kind];
     if (!resolved) throw new Error(`unsupported predicted rule kind: ${predicted.kind}`);
     const key = String(predicted.payload.match_key ?? predicted.payload.alias ?? questionId);
     const value = String(predicted.payload.value ?? predicted.payload.entity_id ?? answer);
-    const info = db.prepare(
-      `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
-       VALUES(?,?,?,?, 'user',1,1,?)
-       ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET value=excluded.value,active=1,confidence=1`,
-    ).run(resolved.kind, key, resolved.matchKind ?? null, value, now);
-    ruleId = Number(info.lastInsertRowid);
-    const context = row.context ? JSON.parse(row.context) as Record<string, unknown> : {};
-    ports.bus.publish({ type: "learning.rule.applied", rule_id: ruleId, document_id: context.document_id as string | undefined, at: now });
+    contextForEvent = row.context ? JSON.parse(row.context) as Record<string, unknown> : {};
+    db.exec("BEGIN");
+    try {
+      const row2 = db.prepare(
+        `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
+         VALUES(?,?,?,?, 'user',1,1,?)
+         ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET value=excluded.value,active=1,confidence=1
+         RETURNING id`,
+      ).get(resolved.kind, key, resolved.matchKind ?? null, value, now) as { id: number };
+      ruleId = row2.id;
+      db.prepare("UPDATE training_reviews SET answer=?,answered_at=?,rule_id=? WHERE id=?").run(answer, now, ruleId, row.id);
+      db.exec("COMMIT");
+      appliedRuleId = ruleId;
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
+  } else {
+    db.prepare("UPDATE training_reviews SET answer=?,answered_at=?,rule_id=? WHERE id=?").run(answer, now, ruleId, row.id);
   }
-  db.prepare("UPDATE training_reviews SET answer=?,answered_at=?,rule_id=? WHERE id=?").run(answer, now, ruleId, row.id);
+  if (appliedRuleId !== null && contextForEvent !== null) {
+    ports.bus.publish({ type: "learning.rule.applied", rule_id: appliedRuleId, document_id: contextForEvent.document_id as string | undefined, at: now });
+  }
   ports.bus.publish({ type: "learning.answer", question_id: String(row.id), at: now, answer });
   return { ruleId };
 }
@@ -542,17 +558,25 @@ export function extractTypedDocument(text: string): TypedExtraction {
         email: [...structuredText.matchAll(/[\w.+-]+@[\w.-]+/g)].map((m) => m[0]).find((email) => email !== out.issuer?.email),
       };
     }
-    const bankText = capture(/bank\s+details\s*:(.+?)(?=notes|terms|supply meant|$)/is) ?? structuredText;
-    const accountNumber = clean(/(?:account\s*(?:no\.?|number)|current\s+account\s+no\.?)\s*:\s*(\d+)/i.exec(bankText)?.[1]);
-    out.bank = {
-      type: "bank",
-      institution: capture(/bank\s*:\s*([^\n*]+?)(?=branch|current|account|$)/i),
-      branch: capture(/branch\s*:\s*(.+?)(?=,\s*INDIA|current|account|terms|$)/i),
-      accountNumber,
-      last4: accountNumber?.slice(-4),
-      ifsc: capture(/(?:ifsc|ifs\s+code)\s*:\s*([A-Z0-9]+)/i),
-      swift: capture(/swift\s*:\s*([A-Z0-9]+)/i),
-    };
+    const bankText = capture(/bank\s+details\s*:(.+?)(?=notes|terms|supply meant|$)/is);
+    if (bankText) {
+      const accountNumber = clean(/(?:account\s*(?:no\.?|number)|current\s+account\s+no\.?)\s*:\s*(\d+)/i.exec(bankText)?.[1]);
+      const institution = capture(/bank\s*:\s*([^\n*]+?)(?=branch|current|account|$)/i);
+      const branch = capture(/branch\s*:\s*(.+?)(?=,\s*INDIA|current|account|terms|$)/i);
+      const ifsc = capture(/(?:ifsc|ifs\s+code)\s*:\s*([A-Z0-9]+)/i);
+      const swift = capture(/swift\s*:\s*([A-Z0-9]+)/i);
+      if (institution || branch || accountNumber || ifsc || swift) {
+        out.bank = {
+          type: "bank",
+          institution,
+          branch,
+          accountNumber,
+          last4: accountNumber?.slice(-4),
+          ifsc,
+          swift,
+        };
+      }
+    }
     const descriptions = /description\s+amount\s*\n+([^\n]+)/i.exec(structuredText)?.[1] ?? "";
     const hsnRows = [...structuredText.matchAll(/([^\n|]+?)\s*\|\s*(\d{4,8})\s*\|\s*([\d.]+)\s*\|\s*[$₹€£]?\s*([\d,.]+)\s*\|\s*[$₹€£]?\s*([\d,.]+)(?=\s+(?:[^\n|]+?\s*\|\s*\d{4,8}\s*\|)|\s+(?:subtotal|tax|total)\s*:|$)/gi)];
     const itemAmounts = [...descriptions.matchAll(/(.+?)\s+[$₹€£]\s*([\d,]+(?:\.\d{2})?)(?=\s+[A-Z]|$)/g)];
@@ -658,6 +682,7 @@ export function extractTypedDocument(text: string): TypedExtraction {
         netObligationMinor: Math.round(amountValue * 100),
         side: "buy",
       });
+      seenTradeIsins.add(isin[1]);
     }
     for (const line of structuredText.split(/\r?\n/)) {
       const wrapped = /^(.*?)\s*(INE[A-Z0-9]{9})\s+(.+?)\s+(\d+(?:\.\d+)?)\s+([\d,.]+)\s+[\d,.]+\s+([\d,.]+)\s+\d+-([\d,.]+)\s+(.+)$/.exec(clean(line) ?? "");

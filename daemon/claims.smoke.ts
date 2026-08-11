@@ -207,19 +207,22 @@ check("setDocumentParty rolls back owner replacement when claim persistence fail
     BEGIN SELECT RAISE(ABORT, 'forced claim failure'); END;
   `);
 
-  assert.throws(
-    () => setDocumentParty(db, ports, {
-      documentId: "doc_party_txn",
-      entityId: "person_new",
-      role: "owner",
-    }),
-    /forced claim failure/,
-  );
-  const owners = db.prepare(
-    "SELECT entity_id FROM document_parties WHERE document_id=? AND role='owner'",
-  ).all("doc_party_txn") as Array<{ entity_id: string }>;
-  assert.deepEqual(owners.map((row) => row.entity_id), ["person_old"]);
-  db.close();
+  try {
+    assert.throws(
+      () => setDocumentParty(db, ports, {
+        documentId: "doc_party_txn",
+        entityId: "person_new",
+        role: "owner",
+      }),
+      /forced claim failure/,
+    );
+    const owners = db.prepare(
+      "SELECT entity_id FROM document_parties WHERE document_id=? AND role='owner'",
+    ).all("doc_party_txn") as Array<{ entity_id: string }>;
+    assert.deepEqual(owners.map((row) => row.entity_id), ["person_old"]);
+  } finally {
+    db.close();
+  }
 });
 
 // ── acceptance 1: edit vendor → linked transaction's counterparty updates ────
