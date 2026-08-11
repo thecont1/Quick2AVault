@@ -9,4 +9,5 @@ library;
 export 'config/app_config.dart';
 export 'logging/app_logger.dart';
 export 'network/dio_client.dart';
+export 'network/http_client_adapter.dart';
 export 'services/platform_services.dart';

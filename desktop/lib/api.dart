@@ -9,7 +9,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:http/http.dart' as http;
+
+import 'core/network/http_client_adapter.dart';
 
 /// One tile of the spending treemap: a category, its total, and the raw
 /// impact_buckets that were folded into it (kept so the fold is auditable
@@ -1561,12 +1564,47 @@ class AuditEntry {
 class VaultApi {
   final String baseUrl;
   final String token;
-  final http.Client _client;
+  final Dio _dio;
 
-  VaultApi({required this.baseUrl, required this.token, http.Client? client})
-    : _client = client ?? http.Client();
+  /// Constructor — accepts an optional [Dio] for production/test injection,
+  /// or an [http.Client] via the legacy [client] parameter for backward
+  /// compatibility with existing test mocks (QAV-FLT-03 migration).
+  VaultApi({
+    required this.baseUrl,
+    required this.token,
+    Dio? dio,
+    // Reuses the name `client` from the old http-based constructor so
+    // existing tests that pass an http.MockClient still compile.
+    http.Client? client,
+  })  : _dio = dio ??
+            (client != null
+                ? _buildDio(baseUrl, token, client)
+                : _buildDio(baseUrl, token, null));
 
-  Map<String, String> get _headers => {'authorization': 'Bearer $token'};
+  static Dio _buildDio(String baseUrl, String token, [http.Client? httpClient]) {
+    final dio = Dio(
+      BaseOptions(
+        baseUrl: baseUrl,
+        connectTimeout: kDefaultTimeout,
+        receiveTimeout: kDefaultTimeout,
+        sendTimeout: kMutationTimeout,
+        headers: {
+          'authorization': 'Bearer $token',
+          'accept': 'application/json',
+        },
+      ),
+    );
+    if (httpClient != null) {
+      dio.httpClientAdapter = HttpClienDioAdapter(httpClient);
+    }
+    return dio;
+  }
+
+  /// Timeout applied to all read requests.
+  static const Duration kDefaultTimeout = Duration(seconds: 10);
+
+  /// Timeout applied to mutations (POST/PUT/PATCH/DELETE).
+  static const Duration kMutationTimeout = Duration(seconds: 15);
 
   /// Headers for loading a document image via Image.network.
   ///
@@ -1574,18 +1612,81 @@ class VaultApi {
   /// are refused everywhere except /v1/events (they leak into logs, history and
   /// Referer headers). Image.network takes explicit headers, so the preview can
   /// authenticate without a URL token.
-  Map<String, String> get imageHeaders => _headers;
+  Map<String, String> get imageHeaders => {'authorization': 'Bearer $token'};
+
+  /// Auth headers for Dio requests (the Bearer token is in BaseOptions, but
+  /// some endpoints need it explicitly).
+  Map<String, String> get _authHeaders => {'authorization': 'Bearer $token'};
+
+  /// Auth + JSON content-type headers for POST/PUT/PATCH with a body.
+  Map<String, String> get _jsonHeaders => {
+        'authorization': 'Bearer $token',
+        'content-type': 'application/json',
+      };
+
+  // ─── Internal helpers ────────────────────────────────────────────────
+
+  /// Generic typed GET: fetches [path], maps the JSON response via [parse],
+  /// and maps HTTP errors to domain exceptions (auth, timeout, malformed).
+  Future<T> _get<T>(String path, T Function(Map<String, dynamic>) parse,
+      {CancelToken? cancelToken}) async {
+    try {
+      final res = await _dio.get(
+        path,
+        options: Options(headers: _authHeaders),
+        cancelToken: cancelToken,
+      );
+      if (res.statusCode != 200) {
+        throw Exception('GET $path -> ${res.statusCode}');
+      }
+      return parse(Map<String, dynamic>.from(res.data as Map));
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) throw VaultAuthException(sc ?? 0, path);
+      if (sc != 200 && sc != null) throw Exception('GET $path -> $sc');
+      throw Exception('GET $path -> ${e.message}');
+    }
+  }
+
+  /// Generic POST returning a Map, with auth error mapping.
+  Future<Map<String, dynamic>> _post(
+    String path,
+    Map<String, dynamic>? body,
+  ) async {
+    try {
+      final res = await _dio.post(
+        path,
+        data: body,
+        options: Options(
+          headers: body == null
+              ? _authHeaders
+              : {..._authHeaders, 'content-type': 'application/json'},
+        ),
+      );
+      if (res.statusCode != 200) {
+        throw Exception('POST $path -> ${res.statusCode} ${res.data}');
+      }
+      return Map<String, dynamic>.from(res.data as Map);
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) throw VaultAuthException(sc ?? 0, path);
+      throw Exception('POST $path -> $sc ${e.response?.data}');
+    }
+  }
+
+  // ─── Endpoints ───────────────────────────────────────────────────────
 
   /// The document list for the Review browser.
   Future<List<VaultDoc>> documents({int limit = 200}) => _get(
-    '/v1/documents?limit=$limit',
-    (j) => ((j['documents'] ?? const []) as List)
-        .map((e) => VaultDoc.fromJson(e as Map<String, dynamic>))
-        .toList(),
-  );
+        '/v1/documents?limit=$limit',
+        (j) => ((j['documents'] ?? const []) as List)
+            .map((e) => VaultDoc.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
   /// URL for a document's original bytes. Needs [imageHeaders] to fetch.
-  Uri documentFileUrl(String id) => Uri.parse('$baseUrl/v1/documents/$id/file');
+  Uri documentFileUrl(String id) =>
+      Uri.parse('$baseUrl/v1/documents/$id/file');
 
   /// URL for a magnifiable PAGE IMAGE — the preview source.
   ///
@@ -1596,22 +1697,31 @@ class VaultApi {
   /// Width defaults to the daemon's own default (2400px) by omission, so the
   /// resolution decision lives in ONE place rather than being duplicated here.
   Uri documentPageUrl(String id, {int page = 1, int? width}) => Uri.parse(
-    '$baseUrl/v1/documents/$id/page?n=$page${width == null ? '' : '&w=$width'}',
-  );
+        '$baseUrl/v1/documents/$id/page?n=$page${width == null ? '' : '&w=$width'}',
+      );
 
   /// Page count and render capability for a document.
   ///
   /// Never throws for an unpageable document — a 409 means "no page image",
   /// which is a legitimate answer (an email with no attachment), not a failure.
   Future<PageInfo> pageInfo(String id) async {
-    final res = await _client
-        .get(Uri.parse('$baseUrl/v1/documents/$id/pageinfo'), headers: _headers)
-        .timeout(const Duration(seconds: 10));
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, '/v1/documents/$id/pageinfo');
+    try {
+      final res = await _dio.get(
+        '/v1/documents/$id/pageinfo',
+        options: Options(headers: _authHeaders),
+      );
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        throw VaultAuthException(res.statusCode ?? 0, '/v1/documents/$id/pageinfo');
+      }
+      if (res.statusCode != 200) return PageInfo.none;
+      return PageInfo.fromJson(Map<String, dynamic>.from(res.data as Map));
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) {
+        throw VaultAuthException(sc ?? 0, '/v1/documents/$id/pageinfo');
+      }
+      return PageInfo.none;
     }
-    if (res.statusCode != 200) return PageInfo.none;
-    return PageInfo.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   /// The extracted text, for the Document/Markdown toggle.
@@ -1620,31 +1730,28 @@ class VaultApi {
   /// unconverted document is a normal state, not an error, and the caller shows
   /// "not converted yet" instead of an error banner.
   Future<String?> documentMarkdown(String id) async {
-    final res = await _client
-        .get(Uri.parse('$baseUrl/v1/documents/$id/markdown'), headers: _headers)
-        .timeout(const Duration(seconds: 10));
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, '/v1/documents/$id/markdown');
+    try {
+      final res = await _dio.get(
+        '/v1/documents/$id/markdown',
+        options: Options(headers: _authHeaders),
+      );
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        throw VaultAuthException(res.statusCode ?? 0, '/v1/documents/$id/markdown');
+      }
+      if (res.statusCode == 409 || res.statusCode == 410) return null;
+      if (res.statusCode != 200) {
+        throw Exception('GET /v1/documents/$id/markdown -> ${res.statusCode}');
+      }
+      final j = Map<String, dynamic>.from(res.data as Map);
+      return j['markdown'] as String?;
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) {
+        throw VaultAuthException(sc ?? 0, '/v1/documents/$id/markdown');
+      }
+      if (sc == 409 || sc == 410) return null;
+      throw Exception('GET /v1/documents/$id/markdown -> $sc');
     }
-    if (res.statusCode == 409 || res.statusCode == 410) return null;
-    if (res.statusCode != 200) {
-      throw Exception('GET /v1/documents/$id/markdown -> ${res.statusCode}');
-    }
-    final j = jsonDecode(res.body) as Map<String, dynamic>;
-    return j['markdown'] as String?;
-  }
-
-  Future<T> _get<T>(String path, T Function(Map<String, dynamic>) parse) async {
-    final res = await _client
-        .get(Uri.parse('$baseUrl$path'), headers: _headers)
-        .timeout(const Duration(seconds: 10));
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, path);
-    }
-    if (res.statusCode != 200) {
-      throw Exception('GET $path -> ${res.statusCode}');
-    }
-    return parse(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   /// Work order 07 §C1: structured health status. Replaces the bare bool
@@ -1653,13 +1760,13 @@ class VaultApi {
   /// masquerade as an empty vault.
   Future<HealthStatus> healthStatus() async {
     try {
-      final res = await _client
-          .get(Uri.parse('$baseUrl/v1/health'))
+      final res = await _dio
+          .get('/v1/health', options: Options(headers: _authHeaders))
           .timeout(const Duration(seconds: 3));
       if (res.statusCode != 200) {
         return HealthStatus.unreachable(statusCode: res.statusCode);
       }
-      final j = Map<String, dynamic>.from(jsonDecode(res.body) as Map);
+      final j = Map<String, dynamic>.from(res.data as Map);
       return HealthStatus.fromJson(j);
     } catch (e) {
       return HealthStatus.unreachable(error: e.toString());
@@ -1737,53 +1844,43 @@ class VaultApi {
       _get('/v1/transactions/$txnId/evidence', EvidenceCard.fromJson);
 
   Future<List<Map<String, dynamic>>> intakeFeed() => _get(
-    '/v1/intake-feed',
-    (j) => ((j['events'] ?? const []) as List).cast<Map<String, dynamic>>(),
-  );
+        '/v1/intake-feed',
+        (j) => ((j['events'] ?? const []) as List).cast<Map<String, dynamic>>(),
+      );
 
   /// Work order 06 §8 — recent intake with full disposition detail.
   Future<List<IntakeEvent>> intakeRecent({int limit = 50}) => _get(
-    '/v1/intake/recent?limit=$limit',
-    (j) => ((j['events'] ?? const []) as List)
-        .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
-        .toList(),
-  );
+        '/v1/intake/recent?limit=$limit',
+        (j) => ((j['events'] ?? const []) as List)
+            .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
   /// Work order 06 §9 — irrelevant items only, for the Irrelevant view.
   Future<List<IntakeEvent>> irrelevantItems({int limit = 200}) => _get(
-    '/v1/irrelevant?limit=$limit',
-    (j) => ((j['events'] ?? const []) as List)
-        .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
-        .toList(),
-  );
+        '/v1/irrelevant?limit=$limit',
+        (j) => ((j['events'] ?? const []) as List)
+            .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
   /// Work order 07 §B2 — aggregated user-facing intake status. Each row is
   /// one intake item with its current stage, terminal outcome, and actionable
   /// failure/retry information. Replaces raw Live Intake event churn.
   Future<List<IntakeEvent>> intakeStatus({int limit = 100}) => _get(
-    '/v1/intake/status?limit=$limit',
-    (j) => ((j['events'] ?? const []) as List)
-        .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
-        .toList(),
-  );
+        '/v1/intake/status?limit=$limit',
+        (j) => ((j['events'] ?? const []) as List)
+            .map((e) => IntakeEvent.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
   /// Work order 06 §8 — restore an irrelevant intake (re-triage and promote).
-  Future<Map<String, dynamic>> restoreIntake(int id) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/intake/$id/restore'),
-      headers: _headers,
-    );
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
+  Future<Map<String, dynamic>> restoreIntake(int id) =>
+      _post('/v1/intake/$id/restore', null);
 
   /// Work order 06 §8 — reclassify an intake (force re-triage).
-  Future<Map<String, dynamic>> reclassifyIntake(int id) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/intake/$id/reclassify'),
-      headers: _headers,
-    );
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
+  Future<Map<String, dynamic>> reclassifyIntake(int id) =>
+      _post('/v1/intake/$id/reclassify', null);
 
   /// Work order 07 §G — submit a password for an encrypted document.
   /// The intake must be in 'password_needed' state. The daemon stores the
@@ -1791,27 +1888,22 @@ class VaultApi {
   Future<Map<String, dynamic>> submitIntakePassword(
     int id,
     String password,
-  ) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/intake/$id/password'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({'password': password}),
-    );
-    if (res.statusCode != 200) {
-      throw Exception('submit password failed: ${res.statusCode} ${res.body}');
-    }
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
+  ) =>
+      _post(
+        '/v1/intake/$id/password',
+        {'password': password},
+      );
 
   Future<List<Map<String, dynamic>>> entities({String? kind}) => _get(
-    '/v1/entities${kind == null ? '' : '?kind=${Uri.encodeQueryComponent(kind)}'}',
-    (j) => ((j['entities'] ?? const []) as List).cast<Map<String, dynamic>>(),
-  );
+        '/v1/entities${kind == null ? '' : '?kind=${Uri.encodeQueryComponent(kind)}'}',
+        (j) => ((j['entities'] ?? const []) as List).cast<Map<String, dynamic>>(),
+      );
 
-  Future<List<Map<String, dynamic>>> reviews() => _get(
-    '/v1/reviews',
-    (j) => ((j['reviews'] ?? const []) as List).cast<Map<String, dynamic>>(),
-  );
+  Future<List<Map<String, dynamic>>> reviews() =>
+      _get(
+        '/v1/reviews',
+        (j) => ((j['reviews'] ?? const []) as List).cast<Map<String, dynamic>>(),
+      );
 
   /// People the vault knows about, with the owner first.
   ///
@@ -1841,29 +1933,30 @@ class VaultApi {
     // Work order 07 §E: if the daemon reports an owner, ensure only that
     // person is marked as owner in the list. This prevents multiple OWNER
     // badges when the database has stale is_owner=1 on multiple rows.
-    if (owner != null) {
-      list.forEach((p) {
-        // Person is immutable, so we can't mutate isOwner directly. The
-        // UI uses the `owner` field from this method for the banner, and
-        // the per-row badge logic checks `p.id == owner.id` instead of
-        // `p.isOwner` to ensure a single source of truth.
-      });
-    }
+    // The UI uses the `owner` field from this method for the banner, and
+    // the per-row badge logic checks `p.id == owner.id` instead of
+    // `p.isOwner` to ensure a single source of truth.
     return (people: list, owner: owner);
   }
 
   /// One person in full: aliases with provenance, documents, transactions,
   /// open identity questions (work order 05 §B.6 drill-down).
   Future<PersonDetail> personDetail(String id) async {
-    final res = await _client.get(
-      Uri.parse('$baseUrl/v1/people/$id'),
-      headers: _headers,
-    );
-    if (res.statusCode == 404) throw Exception('no such person');
-    if (res.statusCode != 200) {
-      throw Exception('person fetch failed: ${res.statusCode} ${res.body}');
+    try {
+      final res = await _dio.get(
+        '/v1/people/$id',
+        options: Options(headers: _authHeaders),
+      );
+      if (res.statusCode == 404) throw Exception('no such person');
+      if (res.statusCode != 200) {
+        throw Exception('person fetch failed: ${res.statusCode} ${res.data}');
+      }
+      return PersonDetail.fromJson(Map<String, dynamic>.from(res.data as Map));
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 404) throw Exception('no such person');
+      throw Exception('person fetch failed: $sc ${e.response?.data}');
     }
-    return PersonDetail.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
   /// Add an alias to a person. The daemon classifies the type from the
@@ -1874,128 +1967,41 @@ class VaultApi {
     String alias, {
     String? aliasType,
   }) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/people/$personId/aliases'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({
-        'alias': alias,
-        if (aliasType != null) 'alias_type': aliasType,
-      }),
-    );
-    if (res.statusCode == 409) {
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
-      throw PersonConflict(
-        (j['message'] as String?) ?? 'Already on file for another person.',
-        existingId: j['bound_to'] as String?,
+    final body = <String, dynamic>{'alias': alias};
+    if (aliasType != null) body['alias_type'] = aliasType;
+    try {
+      await _dio.post(
+        '/v1/people/$personId/aliases',
+        data: body,
+        options: Options(headers: _jsonHeaders),
       );
-    }
-    if (res.statusCode != 200) {
-      throw Exception('add alias failed: ${res.statusCode} ${res.body}');
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 409) {
+        final j = e.response?.data as Map<String, dynamic>? ?? {};
+        throw PersonConflict(
+          (j['message'] as String?) ?? 'Already on file for another person.',
+          existingId: j['bound_to'] as String?,
+        );
+      }
+      throw Exception('add alias failed: $sc ${e.response?.data}');
     }
   }
 
   /// Reject an alias. The row is kept (status=rejected) so the same string
   /// is never re-proposed — rejection is durable, not deletion.
   Future<void> rejectPersonAlias(String personId, int aliasId) async {
-    final res = await _client.delete(
-      Uri.parse('$baseUrl/v1/people/$personId/aliases/$aliasId'),
-      headers: _headers,
-    );
-    if (res.statusCode != 200) {
-      throw Exception('reject alias failed: ${res.statusCode} ${res.body}');
-    }
-  }
-
-  /// Merge two people (never cross-kind — the daemon enforces it).
-  Future<void> mergePeople({
-    required String fromId,
-    required String intoId,
-  }) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/people/merge'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({'from_id': fromId, 'into_id': intoId}),
-    );
-    if (res.statusCode != 200) {
-      throw Exception('merge failed: ${res.statusCode} ${res.body}');
-    }
-  }
-
-  /// WO11 A2 — merge two confirmed entities OF THE SAME KIND (people, orgs,
-  /// or accounts). The daemon refuses cross-kind merges with 409.
-  Future<void> mergeEntities({
-    required String fromId,
-    required String intoId,
-  }) async {
-    final res = await _client
-        .post(
-          Uri.parse('$baseUrl/v1/entities/merge'),
-          headers: {..._headers, 'content-type': 'application/json'},
-          body: jsonEncode({'from_id': fromId, 'into_id': intoId}),
-        )
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode != 200) {
-      throw Exception('merge failed: ${res.statusCode} ${res.body}');
-    }
-  }
-
-  /// WO11 A3 — confirm a cross-kind identifier collision is two distinct
-  /// entities. Recorded as a standing rule so the conflict stays dismissed.
-  Future<void> keepEntitiesSeparate({
-    required String identifier,
-    required String entityId,
-    required String otherId,
-  }) async {
-    final res = await _client
-        .post(
-          Uri.parse('$baseUrl/v1/entities/keep-separate'),
-          headers: {..._headers, 'content-type': 'application/json'},
-          body: jsonEncode({
-            'identifier': identifier,
-            'entity_ids': [entityId, otherId],
-          }),
-        )
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode != 200) {
-      throw Exception('keep-separate failed: ${res.statusCode} ${res.body}');
-    }
-  }
-
-  /// The Document Review evidence summary (work order 05 §A.3): raw
-  /// extraction, winning claims with provenance, resolved parties, and the
-  /// linked transactions — all with source amounts AND source currencies.
-  Future<DocumentDetail> documentDetail(String id) async {
-    final res = await _client.get(
-      Uri.parse('$baseUrl/v1/documents/$id/detail'),
-      headers: _headers,
-    );
-    // WO11 Track B: a removed/deleted document is a typed "not available",
-    // not a generic failure — the caller renders a Reprocess affordance
-    // instead of an error string. The error CODE decides the kind (never a
-    // default), and a non-JSON body (a proxy error page, say) degrades to
-    // the plain not-found exception rather than a FormatException.
-    if (res.statusCode == 404 || res.statusCode == 410) {
-      Map<String, dynamic> j = const {};
-      try {
-        final decoded = jsonDecode(res.body);
-        if (decoded is Map) j = decoded.cast<String, dynamic>();
-      } catch (_) {
-        // Non-JSON error body — fall through to the generic not-found.
+    try {
+      await _dio.delete(
+        '/v1/people/$personId/aliases/$aliasId',
+        options: Options(headers: _authHeaders),
+      );
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc != 200) {
+        throw Exception('reject alias failed: $sc ${e.response?.data}');
       }
-      if (j['error'] == 'document_not_available') {
-        throw DocumentUnavailable(id, kind: 'removed');
-      }
-      if (j['error'] == 'document_deleted') {
-        throw DocumentUnavailable(id, kind: 'deleted');
-      }
-      throw Exception('document not found: $id');
     }
-    if (res.statusCode != 200) {
-      throw Exception('document detail failed: ${res.statusCode} ${res.body}');
-    }
-    return DocumentDetail.fromJson(
-      jsonDecode(res.body) as Map<String, dynamic>,
-    );
   }
 
   /// Declare a person, or update an existing one.
@@ -2004,64 +2010,235 @@ class VaultApi {
     String? relationship,
     bool isMember = false,
     bool isOwner = false,
+  }) =>
+      _post(
+        '/v1/people',
+        {
+          'display_name': displayName,
+          if (relationship != null && relationship.isNotEmpty)
+            'relationship': relationship,
+          'is_member': isMember,
+          'is_owner': isOwner,
+        },
+      );
+
+  /// Edit one person. Any omitted field is left unchanged.
+  ///
+  /// Throws [PersonConflict] when the new name already belongs to somebody
+  /// else — that is a merge, not a rename, and the caller must decide.
+  Future<Map<String, dynamic>> editPerson(
+    String id, {
+    String? displayName,
+    String? relationship,
+    bool? isOwner,
   }) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/people'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({
-        'display_name': displayName,
-        if (relationship != null && relationship.isNotEmpty)
-          'relationship': relationship,
-        'is_member': isMember,
-        'is_owner': isOwner,
-      }),
-    );
-    return jsonDecode(res.body) as Map<String, dynamic>;
+    final body = <String, dynamic>{};
+    if (displayName != null) body['display_name'] = displayName;
+    if (relationship != null) body['relationship'] = relationship;
+    if (isOwner != null) body['is_owner'] = isOwner;
+    try {
+      final res = await _dio.patch(
+        '/v1/people/$id',
+        data: body,
+        options: Options(headers: _jsonHeaders),
+      );
+      final sc = res.statusCode;
+      final j = Map<String, dynamic>.from(res.data as Map);
+      if (sc == 409) {
+        throw PersonConflict(
+          (j['message'] as String?) ?? 'That name is already taken.',
+          existingId: j['existing_id'] as String?,
+        );
+      }
+      if (sc != 200) {
+        throw Exception('edit person failed: $sc ${res.data}');
+      }
+      return j;
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      final j = e.response?.data as Map<String, dynamic>? ?? {};
+      if (sc == 409) {
+        throw PersonConflict(
+          (j['message'] as String?) ?? 'That name is already taken.',
+          existingId: j['existing_id'] as String?,
+        );
+      }
+      throw Exception('edit person failed: $sc ${e.response?.data}');
+    }
+  }
+
+  /// Delete a person. Without [force] the daemon refuses while documents still
+  /// name them, rather than silently orphaning evidence.
+  Future<Map<String, dynamic>> deletePerson(
+    String id, {
+    bool force = false,
+  }) async {
+    try {
+      final res = await _dio.delete(
+        '/v1/people/$id${force ? '?force=1' : ''}',
+        options: Options(headers: _authHeaders),
+      );
+      final sc = res.statusCode;
+      final j = Map<String, dynamic>.from(res.data as Map);
+      if (sc == 409) {
+        throw PersonInUse(
+          (j['message'] as String?) ?? 'That person is named on documents.',
+          documents: (j['documents'] as num?)?.toInt() ?? 0,
+        );
+      }
+      if (sc != 200) {
+        throw Exception('delete person failed: $sc ${res.data}');
+      }
+      return j;
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      final j = e.response?.data as Map<String, dynamic>? ?? {};
+      if (sc == 409) {
+        throw PersonInUse(
+          (j['message'] as String?) ?? 'That person is named on documents.',
+          documents: (j['documents'] as num?)?.toInt() ?? 0,
+        );
+      }
+      throw Exception('delete person failed: $sc ${e.response?.data}');
+    }
+  }
+
+  /// Statement import summary + per-line drill-down (work order 04 §A.6).
+  /// Throws [NotAStatement] for any other document type, so callers can
+  /// simply omit the card rather than parse an error string.
+  Future<StatementSummary> statementFor(String documentId) async {
+    try {
+      final res = await _dio.get(
+        '/v1/documents/$documentId/statement',
+        options: Options(headers: _authHeaders),
+      );
+      final sc = res.statusCode;
+      if (sc == 400) {
+        final j = res.data as Map<String, dynamic>? ?? {};
+        throw NotAStatement((j['message'] as String?) ?? 'Not a statement.');
+      }
+      if (sc == 404) throw Exception('document not found: $documentId');
+      if (sc != 200) {
+        throw Exception('statement fetch failed: $sc ${res.data}');
+      }
+      return StatementSummary.fromJson(Map<String, dynamic>.from(res.data as Map));
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 400) {
+        final j = e.response?.data as Map<String, dynamic>? ?? {};
+        throw NotAStatement((j['message'] as String?) ?? 'Not a statement.');
+      }
+      throw Exception('statement fetch failed: $sc ${e.response?.data}');
+    }
+  }
+
+  /// Merge two people (never cross-kind — the daemon enforces it).
+  Future<void> mergePeople({
+    required String fromId,
+    required String intoId,
+  }) =>
+      _post(
+        '/v1/people/merge',
+        {'from_id': fromId, 'into_id': intoId},
+      ).then((_) {});
+
+  /// WO11 A2 — merge two confirmed entities OF THE SAME KIND (people, orgs,
+  /// or accounts). The daemon refuses cross-kind merges with 409.
+  Future<void> mergeEntities({
+    required String fromId,
+    required String intoId,
+  }) =>
+      _post(
+        '/v1/entities/merge',
+        {'from_id': fromId, 'into_id': intoId},
+      ).then((_) {});
+
+  /// WO11 A3 — confirm a cross-kind identifier collision is two distinct
+  /// entities. Recorded as a standing rule so the conflict stays dismissed.
+  Future<void> keepEntitiesSeparate({
+    required String identifier,
+    required String entityId,
+    required String otherId,
+  }) =>
+      _post(
+        '/v1/entities/keep-separate',
+        {'identifier': identifier, 'entity_ids': [entityId, otherId]},
+      ).then((_) {});
+
+  /// The Document Review evidence summary (work order 05 §A.3): raw
+  /// extraction, winning claims with provenance, resolved parties, and the
+  /// linked transactions — all with source amounts AND source currencies.
+  Future<DocumentDetail> documentDetail(String id) async {
+    try {
+      final res = await _dio.get(
+        '/v1/documents/$id/detail',
+        options: Options(headers: _authHeaders),
+      );
+      if (res.statusCode == 404 || res.statusCode == 410) {
+        Map<String, dynamic> j = const {};
+        final decoded = res.data;
+        if (decoded is Map) j = Map<String, dynamic>.from(decoded);
+        if (j['error'] == 'document_not_available') {
+          throw DocumentUnavailable(id, kind: 'removed');
+        }
+        if (j['error'] == 'document_deleted') {
+          throw DocumentUnavailable(id, kind: 'deleted');
+        }
+        throw Exception('document not found: $id');
+      }
+      if (res.statusCode != 200) {
+        throw Exception('document detail failed: ${res.statusCode} ${res.data}');
+      }
+      return DocumentDetail.fromJson(
+        Map<String, dynamic>.from(res.data as Map),
+      );
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 404 || sc == 410) {
+        Map<String, dynamic> j = const {};
+        final decoded = e.response?.data;
+        if (decoded is Map) j = Map<String, dynamic>.from(decoded);
+        if (j['error'] == 'document_not_available') {
+          throw DocumentUnavailable(id, kind: 'removed');
+        }
+        if (j['error'] == 'document_deleted') {
+          throw DocumentUnavailable(id, kind: 'deleted');
+        }
+        throw Exception('document not found: $id');
+      }
+      throw Exception('document detail failed: $sc ${e.response?.data}');
+    }
   }
 
   /// Begin Gmail authorisation. Returns the consent URL — the daemon also
   /// opens it, but a URL the user can click is the reliable path.
-  Future<({String? authUrl, String? error, String? detail})>
-  gmailConnect() async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/gmail/connect'),
-      headers: _headers,
-    );
-    final j = jsonDecode(res.body) as Map<String, dynamic>;
+  Future<({String? authUrl, String? error, String? detail})> gmailConnect() async {
+    final res = await _post('/v1/gmail/connect', null);
     return (
-      authUrl: j['auth_url'] as String?,
-      error: j['error'] as String?,
-      detail: j['detail'] as String?,
+      authUrl: res['auth_url'] as String?,
+      error: res['error'] as String?,
+      detail: res['detail'] as String?,
     );
   }
 
-  Future<Map<String, dynamic>> gmailSync() async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/gmail/sync'),
-      headers: _headers,
-    );
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
+  Future<Map<String, dynamic>> gmailSync() =>
+      _post('/v1/gmail/sync', null);
 
-  Future<void> gmailDisconnect() async {
-    await _client.post(
-      Uri.parse('$baseUrl/v1/gmail/disconnect'),
-      headers: _headers,
-    );
-  }
+  Future<void> gmailDisconnect() =>
+      _post('/v1/gmail/disconnect', null).then((_) {});
 
   /// Learning state: open questions and whether the engine is on.
   ///
   /// Kept returning a record for existing callers; use [learningState] for the
   /// typed shape the review screen needs.
   Future<({bool enabled, int budget, List<Map<String, dynamic>> questions})>
-  learning() async {
+      learning() async {
     final j = await _get('/v1/learning', (x) => x);
     return (
       enabled: j['enabled'] == true,
       budget: (j['budget'] ?? 0) as int,
-      questions: ((j['questions'] ?? const []) as List)
-          .cast<Map<String, dynamic>>(),
+      questions:
+          ((j['questions'] ?? const []) as List).cast<Map<String, dynamic>>(),
     );
   }
 
@@ -2084,62 +2261,78 @@ class VaultApi {
     String? matchKind,
     String? value,
   }) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/learning/answer'),
-      headers: {..._headers, 'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'review_id': reviewId,
-        'answer': answer,
-        if (ruleKind != null) 'rule_kind': ruleKind,
-        if (matchKey != null) 'match_key': matchKey,
-        if (matchKind != null) 'match_kind': matchKind,
-        if (value != null) 'value': value,
-      }),
-    );
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, '/v1/learning/answer');
-    }
-    if (res.statusCode != 200) {
-      throw Exception(
-        'POST /v1/learning/answer -> ${res.statusCode}: ${res.body}',
+    final body = <String, dynamic>{
+      'review_id': reviewId,
+      'answer': answer,
+    };
+    if (ruleKind != null) body['rule_kind'] = ruleKind;
+    if (matchKey != null) body['match_key'] = matchKey;
+    if (matchKind != null) body['match_kind'] = matchKind;
+    if (value != null) body['value'] = value;
+    try {
+      final res = await _dio.post(
+        '/v1/learning/answer',
+        data: body,
+        options: Options(headers: _jsonHeaders),
       );
+      final sc = res.statusCode;
+      if (sc == 401 || sc == 403) {
+        throw VaultAuthException(sc ?? 0, '/v1/learning/answer');
+      }
+      if (sc != 200) {
+        throw Exception('POST /v1/learning/answer -> $sc: ${res.data}');
+      }
+      final j = Map<String, dynamic>.from(res.data as Map);
+      return (answered: j['answered'] == true, ruleId: j['rule_id'] as int?);
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) {
+        throw VaultAuthException(sc ?? 0, '/v1/learning/answer');
+      }
+      throw Exception('POST /v1/learning/answer -> $sc: ${e.response?.data}');
     }
-    final j = jsonDecode(res.body) as Map<String, dynamic>;
-    return (answered: j['answered'] == true, ruleId: j['rule_id'] as int?);
   }
 
   /// Skip a question without creating a rule. Deliberately distinct from
   /// answering: a dismissal must not teach the vault anything.
   Future<void> dismissLearning(int reviewId) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/learning/dismiss'),
-      headers: {..._headers, 'Content-Type': 'application/json'},
-      body: jsonEncode({'review_id': reviewId}),
-    );
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, '/v1/learning/dismiss');
-    }
-    if (res.statusCode != 200) {
-      throw Exception('POST /v1/learning/dismiss -> ${res.statusCode}');
+    final body = {'review_id': reviewId};
+    try {
+      final res = await _dio.post(
+        '/v1/learning/dismiss',
+        data: body,
+        options: Options(headers: _jsonHeaders),
+      );
+      final sc = res.statusCode;
+      if (sc == 401 || sc == 403) {
+        throw VaultAuthException(sc ?? 0, '/v1/learning/dismiss');
+      }
+      if (sc != 200) {
+        throw Exception('POST /v1/learning/dismiss -> $sc');
+      }
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) {
+        throw VaultAuthException(sc ?? 0, '/v1/learning/dismiss');
+      }
+      throw Exception('POST /v1/learning/dismiss -> $sc');
     }
   }
 
-  Future<void> toggleLearning(bool enabled) async {
-    await _client.post(
-      Uri.parse('$baseUrl/v1/learning/toggle'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({'enabled': enabled}),
-    );
-  }
+  Future<void> toggleLearning(bool enabled) => _post(
+        '/v1/learning/toggle',
+        {'enabled': enabled},
+      ).then((_) {});
 
   /// Setup page: AI provider config, vault paths, active jurisdiction.
-  Future<Map<String, dynamic>> settings() => _get('/v1/settings', (j) => j);
+  Future<Map<String, dynamic>> settings() =>
+      _get('/v1/settings', (j) => j);
 
-  /// NOTE: the parameter is `aiBaseUrl`, not `baseUrl` — the latter would
-  /// shadow the client's own field and build a nonsense URL.
-  ///
   /// Save settings. Applies immediately — the daemon reconfigures its AI
   /// provider in place, so a saved key works on the next job without a restart.
+  ///
+  /// NOTE: the parameter is `aiBaseUrl`, not `baseUrl` — the latter would
+  /// shadow the client's own field and build a nonsense URL.
   ///
   /// Pass an empty string to CLEAR a field. This used to drop empty values
   /// (`isNotEmpty`), which meant a key could be set but never removed — the
@@ -2155,33 +2348,27 @@ class VaultApi {
     String? secondaryModel,
     String? secondaryApiKey,
     String? routingMode,
-  }) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/settings'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({
-        if (aiBaseUrl != null) 'base_url': aiBaseUrl,
-        if (model != null) 'model': model,
-        if (apiKey != null) 'api_key': apiKey,
-        if (jurisdiction != null) 'jurisdiction': jurisdiction,
-        if (gmailLocalPart != null) 'gmail_local_part': gmailLocalPart,
-        if (secondaryBaseUrl != null) 'secondary_base_url': secondaryBaseUrl,
-        if (secondaryModel != null) 'secondary_model': secondaryModel,
-        if (secondaryApiKey != null) 'secondary_api_key': secondaryApiKey,
-        if (routingMode != null) 'routing_mode': routingMode,
-      }),
-    );
-    if (res.statusCode != 200) {
-      throw Exception('save settings failed: ${res.statusCode} ${res.body}');
-    }
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
+  }) =>
+      _post(
+        '/v1/settings',
+        {
+          if (aiBaseUrl != null) 'base_url': aiBaseUrl,
+          if (model != null) 'model': model,
+          if (apiKey != null) 'api_key': apiKey,
+          if (jurisdiction != null) 'jurisdiction': jurisdiction,
+          if (gmailLocalPart != null) 'gmail_local_part': gmailLocalPart,
+          if (secondaryBaseUrl != null) 'secondary_base_url': secondaryBaseUrl,
+          if (secondaryModel != null) 'secondary_model': secondaryModel,
+          if (secondaryApiKey != null) 'secondary_api_key': secondaryApiKey,
+          if (routingMode != null) 'routing_mode': routingMode,
+        },
+      );
 
   /// Desktop preferences introduced by WO09/WO10. This uses the existing
   /// settings route, keeping the daemon as the source of truth.
   Future<Map<String, dynamic>> saveDesktopPreferences(
     Map<String, dynamic> values,
-  ) async {
+  ) {
     const supported = {
       'learning_enabled',
       'question_budget',
@@ -2193,38 +2380,18 @@ class VaultApi {
     final payload = Map<String, dynamic>.fromEntries(
       values.entries.where((entry) => supported.contains(entry.key)),
     );
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/settings'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode(payload),
-    );
-    if (res.statusCode != 200) {
-      throw Exception(
-        'save desktop settings failed: ${res.statusCode} ${res.body}',
-      );
-    }
-    return jsonDecode(res.body) as Map<String, dynamic>;
+    return _post('/v1/settings', payload);
   }
 
   /// Clear the stored API key.
-  Future<Map<String, dynamic>> clearApiKey() => saveSettings(apiKey: '');
+  Future<Map<String, dynamic>> clearApiKey() =>
+      saveSettings(apiKey: '');
 
   /// Work order 07 §D4 — test a configured AI provider. Never sends vault
   /// content. Returns reachability, auth, model availability, structured
   /// output, vision, latency, and last-tested time.
-  Future<Map<String, dynamic>> testProvider({String which = 'primary'}) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/settings/provider-test'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({'which': which}),
-    );
-    if (res.statusCode != 200) {
-      throw Exception('provider test failed: ${res.statusCode} ${res.body}');
-    }
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
-
-  /// ── search + claims (work order 03 §P1/§P2) ───────────────────────────────
+  Future<Map<String, dynamic>> testProvider({String which = 'primary'}) =>
+      _post('/v1/settings/provider-test', {'which': which});
 
   /// Lexical search over filename, markdown and flattened extraction fields.
   Future<List<SearchHit>> search(String query, {int limit = 25}) {
@@ -2254,38 +2421,46 @@ class VaultApi {
     required Object? value,
   }) async {
     final path = '/v1/$subjectType/$subjectId/claims';
-    final res = await _client
-        .patch(
-          Uri.parse('$baseUrl$path'),
-          headers: {..._headers, 'content-type': 'application/json'},
-          body: jsonEncode({'field': field, 'value': value}),
-        )
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, path);
-    }
-    final j = jsonDecode(res.body) as Map<String, dynamic>;
-    if (res.statusCode == 409) {
-      throw ClaimRefusedException(
-        j['error'] as String? ?? 'refused',
-        j['message'] as String? ?? 'the vault refused this edit',
+    try {
+      final res = await _dio.patch(
+        path,
+        data: {'field': field, 'value': value},
+        options: Options(headers: _jsonHeaders),
       );
+      final sc = res.statusCode;
+      if (sc == 401 || sc == 403) throw VaultAuthException(sc ?? 0, path);
+      final j = Map<String, dynamic>.from(res.data as Map);
+      if (sc == 409) {
+        throw ClaimRefusedException(
+          j['error'] as String? ?? 'refused',
+          j['message'] as String? ?? 'the vault refused this edit',
+        );
+      }
+      if (sc != 200) throw Exception('PATCH $path -> $sc');
+      return ClaimWriteResult.fromJson(j);
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      final j = e.response?.data as Map<String, dynamic>? ?? {};
+      if (sc == 401 || sc == 403) throw VaultAuthException(sc ?? 0, path);
+      if (sc == 409) {
+        throw ClaimRefusedException(
+          j['error'] as String? ?? 'refused',
+          j['message'] as String? ?? 'the vault refused this edit',
+        );
+      }
+      throw Exception('PATCH $path -> $sc');
     }
-    if (res.statusCode != 200) {
-      throw Exception('PATCH $path -> ${res.statusCode}');
-    }
-    return ClaimWriteResult.fromJson(j);
   }
 
   /// Append-only edit history for one subject.
   Future<List<AuditEntry>> audit(String subjectId, {int limit = 50}) => _get(
-    '/v1/audit?subject_id=${Uri.encodeQueryComponent(subjectId)}&limit=$limit',
-    (j) => ((j['audit'] ?? const []) as List)
-        .map((e) => AuditEntry.fromJson(e as Map<String, dynamic>))
-        .toList(),
-  );
+        '/v1/audit?subject_id=${Uri.encodeQueryComponent(subjectId)}&limit=$limit',
+        (j) => ((j['audit'] ?? const []) as List)
+            .map((e) => AuditEntry.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
 
-  /// ── WO09/WO10 P4.5: document parties + lifecycle (Glaze detail panel) ──────
+  /// ── WO11/WO12 document parties + lifecycle ────────────────────────────
 
   /// Bind an entity to a document in a role (owner | counterparty | issuer |
   /// source_of_funds). Writes a document-scoped party row on the daemon; the
@@ -2298,32 +2473,28 @@ class VaultApi {
     double confidence = 1,
   }) async {
     final path = '/v1/documents/$documentId/parties';
-    final res = await _client
-        .put(
-          Uri.parse('$baseUrl$path'),
-          headers: {..._headers, 'content-type': 'application/json'},
-          body: jsonEncode({
-            'role': role,
-            'entity_id': entityId,
-            'confidence': confidence,
-            'edited_by': 'user',
-          }),
-        )
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, path);
-    }
-    if (res.statusCode == 409) {
-      final j = res.body.trim().isEmpty
-          ? const <String, dynamic>{}
-          : jsonDecode(res.body) as Map<String, dynamic>;
-      throw ClaimRefusedException(
-        j['error'] as String? ?? 'refused',
-        j['message'] as String? ?? 'the vault refused this party edit',
+    try {
+      await _dio.put(
+        path,
+        data: {
+          'role': role,
+          'entity_id': entityId,
+          'confidence': confidence,
+          'edited_by': 'user',
+        },
+        options: Options(headers: _jsonHeaders),
       );
-    }
-    if (res.statusCode != 200) {
-      throw Exception('PUT $path -> ${res.statusCode}');
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) throw VaultAuthException(sc ?? 0, path);
+      final j = e.response?.data as Map<String, dynamic>? ?? {};
+      if (sc == 409) {
+        throw ClaimRefusedException(
+          j['error'] as String? ?? 'refused',
+          j['message'] as String? ?? 'the vault refused this party edit',
+        );
+      }
+      throw Exception('PUT $path -> $sc');
     }
   }
 
@@ -2332,14 +2503,15 @@ class VaultApi {
   /// second economic event. Reactivates a soft-removed document.
   Future<void> reprocessDocument(String id) async {
     final path = '/v1/documents/$id/reprocess';
-    final res = await _client
-        .post(Uri.parse('$baseUrl$path'), headers: _headers)
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, path);
-    }
-    if (res.statusCode != 200) {
-      throw Exception('POST $path -> ${res.statusCode}');
+    try {
+      await _dio.post(
+        path,
+        options: Options(headers: _authHeaders),
+      );
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) throw VaultAuthException(sc ?? 0, path);
+      throw Exception('POST $path -> $sc');
     }
   }
 
@@ -2348,14 +2520,12 @@ class VaultApi {
   /// document is hidden from Review. Reversible via [reprocessDocument].
   Future<void> removeFromActive(String id) async {
     final path = '/v1/documents/$id/remove-from-active';
-    final res = await _client
-        .post(Uri.parse('$baseUrl$path'), headers: _headers)
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, path);
-    }
-    if (res.statusCode != 200) {
-      throw Exception('POST $path -> ${res.statusCode}');
+    try {
+      await _dio.post(path, options: Options(headers: _authHeaders));
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) throw VaultAuthException(sc ?? 0, path);
+      throw Exception('POST $path -> $sc');
     }
   }
 
@@ -2365,24 +2535,22 @@ class VaultApi {
   /// the link is removed. Reversible by re-linking via the matcher.
   Future<bool> unlinkEvidence(String transactionId, String documentId) async {
     const path = '/v1/unlink';
-    final res = await _client
-        .post(
-          Uri.parse('$baseUrl$path'),
-          headers: {..._headers, 'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'transaction_id': transactionId,
-            'document_id': documentId,
-          }),
-        )
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, path);
+    try {
+      final res = await _dio.post(
+        path,
+        data: {
+          'transaction_id': transactionId,
+          'document_id': documentId,
+        },
+        options: Options(headers: _jsonHeaders),
+      );
+      final body = Map<String, dynamic>.from(res.data as Map);
+      return body['unlinked'] == true;
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) throw VaultAuthException(sc ?? 0, path);
+      throw Exception('POST $path -> $sc');
     }
-    if (res.statusCode != 200) {
-      throw Exception('POST $path -> ${res.statusCode}');
-    }
-    final body = jsonDecode(res.body) as Map<String, dynamic>;
-    return body['unlinked'] == true;
   }
 
   /// Permanently delete a document (Glaze footer "Delete permanently"). Unlinks
@@ -2390,127 +2558,38 @@ class VaultApi {
   /// dedupe guard still rejects a re-drop. Not reversible.
   Future<void> deleteDocument(String id) async {
     final path = '/v1/documents/$id';
-    final res = await _client
-        .delete(Uri.parse('$baseUrl$path'), headers: _headers)
-        .timeout(const Duration(seconds: 15));
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw VaultAuthException(res.statusCode, path);
-    }
-    if (res.statusCode != 200) {
-      throw Exception('DELETE $path -> ${res.statusCode}');
+    try {
+      await _dio.delete(path, options: Options(headers: _authHeaders));
+    } on DioException catch (e) {
+      final sc = e.response?.statusCode;
+      if (sc == 401 || sc == 403) throw VaultAuthException(sc ?? 0, path);
+      throw Exception('DELETE $path -> $sc');
     }
   }
-
-  /// ── settings, reset, people editing ───────────────────────────────────────
 
   /// Wipe the vault. [scope] is 'ledger' (documents/transactions/learnings,
   /// keeps credentials) or 'factory' (also clears the API key and Gmail auth).
   ///
   /// Neither scope deletes the user's documents from disk.
   Future<ResetResult> resetVault({required String scope}) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/reset'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({'scope': scope, 'confirm': 'RESET'}),
+    final j = await _post(
+      '/v1/reset',
+      {'scope': scope, 'confirm': 'RESET'},
     );
-    if (res.statusCode != 200) {
-      throw Exception('reset failed: ${res.statusCode} ${res.body}');
-    }
-    return ResetResult.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
-  }
-
-  /// Edit one person. Any omitted field is left unchanged.
-  ///
-  /// Throws [PersonConflict] when the new name already belongs to somebody
-  /// else — that is a merge, not a rename, and the caller must decide.
-  Future<Map<String, dynamic>> editPerson(
-    String id, {
-    String? displayName,
-    String? relationship,
-    bool? isOwner,
-  }) async {
-    final body = <String, dynamic>{};
-    if (displayName != null) body['display_name'] = displayName;
-    if (relationship != null) body['relationship'] = relationship;
-    if (isOwner != null) body['is_owner'] = isOwner;
-
-    final res = await _client.patch(
-      Uri.parse('$baseUrl/v1/people/$id'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode(body),
-    );
-    if (res.statusCode == 409) {
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
-      throw PersonConflict(
-        (j['message'] as String?) ?? 'That name is already taken.',
-        existingId: j['existing_id'] as String?,
-      );
-    }
-    if (res.statusCode != 200) {
-      throw Exception('edit person failed: ${res.statusCode} ${res.body}');
-    }
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
-
-  /// Delete a person. Without [force] the daemon refuses while documents still
-  /// name them, rather than silently orphaning evidence.
-  Future<Map<String, dynamic>> deletePerson(
-    String id, {
-    bool force = false,
-  }) async {
-    final res = await _client.delete(
-      Uri.parse('$baseUrl/v1/people/$id${force ? '?force=1' : ''}'),
-      headers: _headers,
-    );
-    if (res.statusCode == 409) {
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
-      throw PersonInUse(
-        (j['message'] as String?) ?? 'That person is named on documents.',
-        documents: (j['documents'] as num?)?.toInt() ?? 0,
-      );
-    }
-    if (res.statusCode != 200) {
-      throw Exception('delete person failed: ${res.statusCode} ${res.body}');
-    }
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
-
-  /// Statement import summary + per-line drill-down (work order 04 §A.6).
-  /// Throws [NotAStatement] for any other document type, so callers can
-  /// simply omit the card rather than parse an error string.
-  Future<StatementSummary> statementFor(String documentId) async {
-    final res = await _client.get(
-      Uri.parse('$baseUrl/v1/documents/$documentId/statement'),
-      headers: _headers,
-    );
-    if (res.statusCode == 400) {
-      final j = jsonDecode(res.body) as Map<String, dynamic>;
-      throw NotAStatement((j['message'] as String?) ?? 'Not a statement.');
-    }
-    if (res.statusCode == 404) {
-      throw Exception('document not found: $documentId');
-    }
-    if (res.statusCode != 200) {
-      throw Exception('statement fetch failed: ${res.statusCode} ${res.body}');
-    }
-    return StatementSummary.fromJson(
-      jsonDecode(res.body) as Map<String, dynamic>,
-    );
+    return ResetResult.fromJson(j);
   }
 
   /// Push a file into P0 intake. Used by drag-and-drop.
-  Future<Map<String, dynamic>> ingest(String path) async {
-    final res = await _client.post(
-      Uri.parse('$baseUrl/v1/intake'),
-      headers: {..._headers, 'content-type': 'application/json'},
-      body: jsonEncode({'path': path, 'source': 'desktop'}),
-    );
-    return jsonDecode(res.body) as Map<String, dynamic>;
-  }
+  Future<Map<String, dynamic>> ingest(String path) =>
+      _post('/v1/intake', {'path': path, 'source': 'desktop'});
 
-  /// Server-Sent Events stream. Dart's HttpClient handles this cleanly without
-  /// a dependency: we read the response body as a line stream and parse the
-  /// `event:` / `data:` pairs ourselves.
+  /// Server-Sent Events stream.
+  ///
+  /// QAV-FLT-03: the HTTP transport is now Dio, but SSE requires a streaming
+  /// response that Dio cannot deliver without buffering (it would hang on the
+  /// never-ending event stream). So we keep a bare HttpClient for THIS ONE
+  /// endpoint, configured with the same base URL and token. QAV-FLT-06 adds
+  /// lifecycle-safe reconnection via a proper SSE package.
   Stream<VaultEvent> events() async* {
     final client = HttpClient();
     try {
@@ -2543,6 +2622,7 @@ class VaultApi {
     }
   }
 }
+
 
 /// ₹1,23,456 — whole rupees, no paise. The reference design shows figures at
 /// a glance; two decimal places are noise at that size.

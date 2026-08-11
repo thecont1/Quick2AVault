@@ -2,27 +2,29 @@
 ///
 /// QAV-FLT-02 establishes the DI boundary; QAV-FLT-03 migrates callers.
 /// The Dio client is provided here so feature code never instantiates HTTP
-/// clients directly. Until the migration is complete, [VaultApi] continues
-/// to use its own `http.Client` — that is intentional and tracked in QAV-FLT-03.
+/// clients directly.
 library;
 
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:logger/logger.dart';
 
 import '../config/app_config.dart';
 import '../logging/app_logger.dart';
 
-/// Timeout applied to all daemon requests.
+/// Timeout applied to all daemon read requests.
 const Duration kDefaultTimeout = Duration(seconds: 10);
+
+/// Timeout applied to mutations (POST/PUT/PATCH/DELETE).
 const Duration kMutationTimeout = Duration(seconds: 15);
 
 /// Creates a [Dio] client configured for the Quick2AVault daemon.
 ///
 /// - Base URL comes from [AppConfig].
 /// - Auth token is sent as a Bearer header on every request.
-/// - A logging interceptor records request method + path + status, never
-///   request bodies, response bodies, or tokens.
-Dio createDio(AppConfig config, /* Logger */ dynamic logger) {
+/// - A logging interceptor records method + path + status, never bodies,
+///   tokens, or document contents.
+Dio createDio(AppConfig config, Logger logger) {
   final dio = Dio(
     BaseOptions(
       baseUrl: config.baseUrl,
@@ -36,28 +38,16 @@ Dio createDio(AppConfig config, /* Logger */ dynamic logger) {
     ),
   );
 
-  // QAV-FLT-03 will replace this interceptor with one that uses [logger].
-  // Keep a simple no-op placeholder until the migration is complete.
-  // ignore: unnecessary_null_comparison
-  if (logger != null) {
-    // Placeholder — the real interceptor is added in QAV-FLT-03.
-  }
-
-  // Intercept 401/403 and convert to a typed error so callers can surface
-  // auth failures distinctly from transport errors. This mirrors the
-  // existing behavior in VaultApi._get.
+  // Privacy-safe interceptor: logs method, path, status, and elapsed time.
+  // NEVER logs request bodies, response bodies, or the auth header.
   dio.interceptors.add(
-    InterceptorsWrapper(
-      onError: (DioException error, handler) {
-        final statusCode = error.response?.statusCode;
-        if (statusCode == 401 || statusCode == 403) {
-          // The auth-exception type lives in api.dart; importing it here
-          // would create a cycle (api.dart will eventually use Dio).
-          // For now, rethrow as-is; QAV-FLT-03 adds the typed conversion
-          // as part of the client.
-        }
-        handler.next(error);
-      },
+    LogInterceptor(
+      requestBody: false,
+      responseBody: false,
+      requestHeader: false,
+      responseHeader: false,
+      error: true,
+      logPrint: (obj) => logger.d(obj.toString()),
     ),
   );
 
