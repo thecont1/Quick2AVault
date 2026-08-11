@@ -55,6 +55,16 @@ class _FakeApi extends VaultApi {
   }
 }
 
+/// A fake API whose unlinkEvidence always returns false (daemon refused).
+class _FakeFailApi extends VaultApi {
+  _FakeFailApi() : super(baseUrl: 'http://127.0.0.1:1', token: 'test');
+
+  @override
+  Future<bool> unlinkEvidence(String transactionId, String documentId) async {
+    return false;
+  }
+}
+
 // ── Status badge tests ─────────────────────────────────────────────────────
 
 void main() {
@@ -171,7 +181,7 @@ void main() {
     expect(find.text('REVERSAL'), findsOneWidget);
   });
 
-  testWidgets('EvidencePanel unlink calls API and triggers refresh',
+  testWidgets('EvidencePanel unlink calls API, hides evidence, and triggers refresh',
       (tester) async {
     final api = _FakeApi();
     var refreshed = false;
@@ -189,6 +199,9 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
+    // The evidence filename should be visible before unlinking
+    expect(find.textContaining('invoice.pdf'), findsOneWidget);
+
     // Tap the unlink button
     await tester.tap(find.byTooltip('Unlink evidence'));
     await tester.pumpAndSettle();
@@ -202,6 +215,43 @@ void main() {
     expect(api.unlinkCalls.first.$1, 't1');
     expect(api.unlinkCalls.first.$2, 'd1');
     expect(refreshed, true);
+
+    // The evidence should be hidden from the panel immediately
+    expect(find.textContaining('invoice.pdf'), findsNothing);
+  });
+
+  testWidgets('EvidencePanel unlink failure preserves card and shows error',
+      (tester) async {
+    final api = _FakeFailApi();
+    var refreshed = false;
+    final txn = _txn(evidence: [_ev('d1', 'invoice.pdf')]);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: EvidencePanel(
+            card: _card(txn, evidence: [_ev('d1', 'invoice.pdf')]),
+            api: api,
+            onEdited: () => refreshed = true,
+          ),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    // Evidence visible before unlink attempt
+    expect(find.textContaining('invoice.pdf'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Unlink evidence'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Unlink'));
+    await tester.pumpAndSettle();
+
+    // On failure: the card is preserved (evidence still visible)
+    expect(find.textContaining('invoice.pdf'), findsOneWidget);
+    // On failure: the refresh callback is NOT fired
+    expect(refreshed, false);
+    // On failure: an error snackbar is shown
+    expect(find.byType(SnackBar), findsOneWidget);
   });
 
   // ── Learning reconciliation button tests ────────────────────────────────

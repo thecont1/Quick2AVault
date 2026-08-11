@@ -32,6 +32,11 @@ class _EvidencePanelState extends State<EvidencePanel> {
   ClaimSet _claims = ClaimSet.empty;
   bool _unlinking = false;
 
+  /// Evidence IDs that were unlinked in this session but not yet reflected in
+  /// a parent refetch. We hide them immediately so the user sees the result
+  /// without waiting for the shell to re-fetch the ledger.
+  final Set<String> _unlinkedIds = {};
+
   @override
   void initState() {
     super.initState();
@@ -41,7 +46,10 @@ class _EvidencePanelState extends State<EvidencePanel> {
   @override
   void didUpdateWidget(EvidencePanel old) {
     super.didUpdateWidget(old);
-    if (old.card.transaction.id != widget.card.transaction.id) _loadClaims();
+    if (old.card.transaction.id != widget.card.transaction.id) {
+      _unlinkedIds.clear();
+      _loadClaims();
+    }
   }
 
   Future<void> _handleUnlink(Evidence e) async {
@@ -74,11 +82,26 @@ class _EvidencePanelState extends State<EvidencePanel> {
     if (confirmed != true) return;
     setState(() => _unlinking = true);
     try {
-      await api.unlinkEvidence(widget.card.transaction.id, e.id);
+      final ok = await api.unlinkEvidence(widget.card.transaction.id, e.id);
+      if (!ok) {
+        // The daemon refused the unlink — preserve the card and show an error.
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+            const SnackBar(content: Text('Could not unlink evidence — the daemon refused the request.')),
+          );
+        }
+        return;
+      }
+      // Success: hide the evidence locally and notify the shell to refetch.
+      if (mounted) setState(() => _unlinkedIds.add(e.id));
       widget.onEdited?.call();
-    } catch (_) {
-      // The error is transient — the shell's refresh will show the current
-      // state. A snackbar would be nicer but the panel doesn't own a Scaffold.
+    } catch (err) {
+      // Network or parse error — preserve the card and show the message.
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('Could not unlink evidence: ${err.toString()}')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _unlinking = false);
     }
@@ -102,6 +125,10 @@ class _EvidencePanelState extends State<EvidencePanel> {
     final shared = card.sharedRefValues;
     final t = card.transaction;
     final api = widget.api;
+    // Filter out evidence that was unlinked in this session — the parent
+    // refetch will eventually replace the whole card, but until then we hide
+    // the removed rows so the user sees immediate feedback.
+    final visibleEvidence = card.evidence.where((e) => !_unlinkedIds.contains(e.id)).toList();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -119,7 +146,7 @@ class _EvidencePanelState extends State<EvidencePanel> {
               fontSize: 12.5, fontWeight: FontWeight.w600, color: VaultColors.ink),
         ),
         const SizedBox(height: 12),
-        ...card.evidence.map((e) => Padding(
+        ...visibleEvidence.map((e) => Padding(
               padding: const EdgeInsets.only(bottom: 7),
               child: Container(
                 padding: const EdgeInsets.fromLTRB(11, 9, 11, 9),
