@@ -1413,9 +1413,12 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const questions = db
           .prepare(
             `SELECT id, question, trigger, context, options, created_at FROM training_reviews
-              WHERE answered_at IS NULL AND dismissed=0 AND context LIKE ? ORDER BY id DESC`,
+              WHERE answered_at IS NULL AND dismissed=0
+              AND (backoff_until IS NULL OR backoff_until < ?)
+              AND context LIKE ?
+              ORDER BY id DESC`,
           )
-          .all(`%${id}%`)
+          .all(ports.clock.isoNow(), `%${id}%`)
           .map((q) => {
             const r = q as Record<string, unknown>;
             r.context = r.context ? safeParse(r.context as string) : null;
@@ -1830,9 +1833,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             `SELECT id, question, trigger, context, options, created_at
              FROM training_reviews
              WHERE answered_at IS NULL AND dismissed=0
+             AND (backoff_until IS NULL OR backoff_until < ?)
              ORDER BY id DESC LIMIT 20`,
           )
-          .all() as Record<string, unknown>[];
+          .all(ports.clock.isoNow()) as Record<string, unknown>[];
         for (const q of open) {
           q.context = q.context ? safeParse(q.context as string) : null;
           q.options = q.options ? safeParse(q.options as string) : null;

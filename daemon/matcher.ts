@@ -194,6 +194,20 @@ export function linkEvidence(
 
   const inserted = Number(info.changes ?? 0) > 0;
 
+  if (!inserted) {
+    // Idempotent retry: a row with the same document_id + evidence_role already
+    // exists. Find its owner for diagnosability.
+    const existing = db.prepare(
+      "SELECT transaction_id FROM transaction_documents WHERE document_id=? AND evidence_role=?",
+    ).get(documentId, evidenceRole(x)) as { transaction_id: string } | undefined;
+    ports.logger.info("linkEvidence: duplicate evidence ignored", {
+      documentId,
+      evidenceRole: evidenceRole(x),
+      existingTransactionId: existing?.transaction_id ?? "none",
+      transactionId,
+    });
+  }
+
   if (inserted) {
     // A card confirmation proves settlement; an invoice alone does not.
     if (x.doc_type === "card_confirmation" || x.doc_type === "bank_slip") {

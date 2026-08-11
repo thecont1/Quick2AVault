@@ -550,6 +550,9 @@ export function openDatabase(dbPath: string): DatabaseSync {
   db.exec(DDL);
   const stmt = db.prepare("INSERT OR REPLACE INTO schema_meta(key,value) VALUES(?,?)");
   stmt.run("schema_version", String(SCHEMA_VERSION));
+  // Mark the transaction_documents evidence_role CHECK as satisfied for fresh
+  // databases (DDL already enforces it) so subsequent opens skip the rebuild.
+  db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES('td_evidence_role_checked','1')").run();
   return db;
 }
 
@@ -1173,9 +1176,9 @@ export function migrate(db: DatabaseSync): void {
       db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_txndoc_evidence_key ON transaction_documents(document_id, evidence_role)");
       db.exec("COMMIT");
       db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES('td_evidence_role_checked','1')").run();
-    } catch {
+    } catch (e) {
       db.exec("ROLLBACK");
-      throw new Error("failed to rebuild transaction_documents for evidence_role CHECK");
+      throw e;
     }
   }
 }

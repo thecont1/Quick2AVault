@@ -275,11 +275,11 @@ export interface LearningQuestion {
 function setting(db: DatabaseSync, key: string): string | undefined {
   return (db.prepare("SELECT value FROM app_settings WHERE key=?").get(key) as { value?: string } | undefined)?.value;
 }
-function availableQuestionBudget(db: DatabaseSync): number {
+function availableQuestionBudget(db: DatabaseSync, ports: { clock: { isoNow(): string } }): number {
   if (setting(db, "learning.enabled") === "false") return 0;
   const manual = Number(setting(db, "learning.question_budget"));
   const cap = Number.isInteger(manual) && manual >= 0 ? Math.min(20, manual) : 3;
-  const open = (db.prepare("SELECT COUNT(*) n FROM training_reviews WHERE answered_at IS NULL AND dismissed=0").get() as { n: number }).n;
+  const open = (db.prepare("SELECT COUNT(*) n FROM training_reviews WHERE answered_at IS NULL AND dismissed=0 AND (backoff_until IS NULL OR backoff_until < ?)").get(ports.clock.isoNow()) as { n: number }).n;
   const rules = (db.prepare("SELECT COUNT(*) n FROM learned_rules WHERE active=1").get() as { n: number }).n;
   return Math.max(0, cap - open - Math.floor(rules / 10));
 }
@@ -288,7 +288,7 @@ export function generateLearningQuestions(
   ports: { clock: { isoNow(): string }; bus: Pick<EventBus, "publish"> },
   input: { documentId: string; pipelineState: "analysing" | "complete"; ambiguities: LearningAmbiguity[] },
 ): LearningQuestion[] {
-  let remaining = availableQuestionBudget(db);
+  let remaining = availableQuestionBudget(db, ports);
   if (remaining <= 0) return [];
   const out: LearningQuestion[] = [];
   for (const ambiguity of input.ambiguities) {
@@ -342,9 +342,9 @@ export function answerLearningQuestion(
         if (docId && txnId) {
           const docRow = db.prepare("SELECT extraction_json FROM documents WHERE id=?").get(docId) as { extraction_json: string } | undefined;
           if (docRow?.extraction_json) {
+            let x: ExtractionResult | undefined;
             try {
-              const x = JSON.parse(docRow.extraction_json) as ExtractionResult;
-              linked = linkEvidence(db, ports, txnId, docId, x, 1.0, "user");
+              x = JSON.parse(docRow.extraction_json);
             } catch {
               // Fallback: if extraction_json won't parse, link with a generic role.
               // INSERT OR IGNORE (not REPLACE) — never silently move evidence
@@ -355,6 +355,11 @@ export function answerLearningQuestion(
                   VALUES (?,?,?,?, 'user', ?)`,
               ).run(txnId, docId, "payment_receipt", 1.0, now);
               linked = Number(info.changes ?? 0) > 0;
+            }
+            if (x) {
+              // Call linkEvidence outside the JSON.parse try/catch so its
+              // constraint violations propagate naturally.
+              linked = linkEvidence(db, ports, txnId, docId, x, 1.0, "user");
             }
           }
         }
@@ -373,7 +378,7 @@ export function answerLearningQuestion(
       // The rule key is the dedupe_key of the ambiguity question.
       const dedupeKey = row.dedupe_key ?? null;
       let ruleIdForDismiss: number | null = null;
-      db.prepare("BEGIN IMMEDIATE").run();
+      db.exec("BEGIN");
       try {
         if (dedupeKey) {
           const row2 = db.prepare(
@@ -385,11 +390,11 @@ export function answerLearningQuestion(
           ruleIdForDismiss = row2 ? row2.id : null;
         }
         db.prepare("UPDATE training_reviews SET answer=?, answered_at=?, dismissed=1, rule_id=? WHERE id=?").run(answer, now, ruleIdForDismiss, row.id);
+        db.prepare("COMMIT").run();
       } catch {
         db.prepare("ROLLBACK").run();
         throw new Error("failed to apply reconciliation decline answer");
       }
-      db.prepare("COMMIT").run();
       ports.bus.publish({ type: "learning.answer", question_id: String(row.id), at: now, answer });
       return { ruleId: ruleIdForDismiss, linked: false, dismissed: true, deferred: false };
     }
