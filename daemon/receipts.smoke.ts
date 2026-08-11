@@ -68,7 +68,7 @@ function seedTxn(
     `INSERT INTO transaction_documents
        (transaction_id, document_id, evidence_role, linked_at)
      VALUES (?,?,?,?)`,
-  ).run(id, `doc-${id}`, "primary", "2026-07-01T00:00:00.000Z");
+  ).run(id, `doc-${id}`, "payment_receipt", "2026-07-01T00:00:00.000Z");
 }
 
 /**

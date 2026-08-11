@@ -75,11 +75,11 @@ function seedTxn(id: string, opts: { direction: string; amount: number; bucket?:
   ).run(id, "2026-08-09", "2026-27", opts.amount, "INR", opts.direction, opts.bucket ?? "groceries", "evidenced", "2026-08-09T00:00:00.000Z");
 }
 
-function link(txnId: string, docId: string) {
+function link(txnId: string, docId: string, role: string) {
   db.prepare(
     `INSERT INTO transaction_documents (transaction_id, document_id, evidence_role, linked_by, linked_at)
      VALUES (?,?,?,?,?)`,
-  ).run(txnId, docId, "purchase", "ai", "2026-08-09T00:00:00.000Z");
+  ).run(txnId, docId, role, "ai", "2026-08-09T00:00:00.000Z");
 }
 
 const TOKEN = "test-token-lifecycle-filter";
@@ -102,13 +102,13 @@ seedDoc("doc_spend");
 seedDoc("doc_trade");
 seedTxn("txn_evidenced", { direction: "out", amount: 50000 });
 seedTxn("txn_manual", { direction: "out", amount: 70000 });
-link("txn_evidenced", "doc_spend");
+link("txn_evidenced", "doc_spend", "merchant_invoice");
 db.prepare(
   `INSERT INTO entities (id, kind, display_name, status, confidence, created_at)
    VALUES ('ent_sec', 'instrument', 'Test Security', 'confirmed', 1.0, '2026-08-09T00:00:00.000Z')`,
 ).run();
 seedTxn("txn_trade", { direction: "out", amount: 90000, bucket: "investment_purchase" });
-link("txn_trade", "doc_trade");
+link("txn_trade", "doc_trade", "merchant_invoice");
 db.prepare(
   `INSERT INTO holdings (id, transaction_id, document_id, instrument_entity_id, side, quantity, price_minor, amount_minor, occurred_at, created_at)
    VALUES ('hld_1', 'txn_trade', 'doc_trade', 'ent_sec', 'buy', 3, 3000000, 9000000, '2026-08-09', '2026-08-09T00:00:00.000Z')`,
@@ -181,12 +181,12 @@ await check("list: removed is hidden by default, visible via ?include=removed", 
 seedDoc("doc_mixed_a");
 seedDoc("doc_mixed_b");
 seedTxn("txn_mixed", { direction: "out", amount: 30000 });
-link("txn_mixed", "doc_mixed_a");
+link("txn_mixed", "doc_mixed_a", "merchant_invoice");
 // A document may only be evidence for ONE transaction per role — the second
 // link uses a corroborating role.
 db.prepare(
   `INSERT INTO transaction_documents (transaction_id, document_id, evidence_role, linked_by, linked_at)
-   VALUES ('txn_mixed', 'doc_mixed_b', 'receipt', 'ai', '2026-08-09T00:00:00.000Z')`,
+   VALUES ('txn_mixed', 'doc_mixed_b', 'payment_receipt', 'ai', '2026-08-09T00:00:00.000Z')`,
 ).run();
 await req("POST", "/v1/documents/doc_mixed_b/remove-from-active");
 await check("mixed evidence: the transaction stays visible and still counts", async () => {

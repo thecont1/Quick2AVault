@@ -178,18 +178,19 @@ function normRef(v: unknown): string | null {
  */
 export function linkEvidence(
   db: DatabaseSync,
-  ports: Ports,
+  ports: Pick<Ports, "clock" | "bus" | "logger">,
   transactionId: string,
   documentId: string,
   x: ExtractionResult,
   score: number,
+  linkedBy: string = "matcher",
 ): void {
   const now = ports.clock.isoNow();
   db.prepare(
     `INSERT OR IGNORE INTO transaction_documents
       (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
      VALUES (?,?,?,?,?,?)`,
-  ).run(transactionId, documentId, evidenceRole(x), score, "matcher", now);
+  ).run(transactionId, documentId, evidenceRole(x), score, linkedBy, now);
 
   // A card confirmation proves settlement; an invoice alone does not.
   if (x.doc_type === "card_confirmation" || x.doc_type === "bank_slip") {
@@ -204,5 +205,5 @@ export function linkEvidence(
     score,
     at: now,
   });
-  ports.logger.info("evidence linked", { transactionId, documentId, score: score.toFixed(2) });
+  ports.logger.info("evidence linked", { transactionId, documentId, score: score.toFixed(2), linkedBy });
 }

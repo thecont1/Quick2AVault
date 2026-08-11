@@ -97,12 +97,15 @@ function fakeInvoiceAi(): AiProvider {
   return {
     available: true,
     model: "fake-test-model",
-    async extract(): Promise<ExtractionResult> {
+    async extract(markdown: string): Promise<ExtractionResult> {
+      // Parse the amount from the markdown so each document gets a distinct value.
+      const m = /Amount:\s*([0-9,.]+)/i.exec(markdown || "");
+      const amt = m ? parseFloat(m[1].replace(/,/g, "")) : 500;
       return {
         doc_type: "merchant_invoice",
         occurred_at: "2026-07-20",
         posted_at: null,
-        amount_minor: 1500000,
+        amount_minor: Math.round(amt * 100),
         currency: "INR",
         direction: "out",
         payment_rail: "upi",

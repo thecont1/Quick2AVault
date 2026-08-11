@@ -65,6 +65,7 @@ import {
   listVocabulary,
   pipelineEventsFor,
   transitionPipeline,
+  answerLearningQuestion,
   type Vocabulary,
 } from "./workorders.js";
 
@@ -1856,7 +1857,21 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const b = await readJson(req);
         const id = Number(b.review_id);
         if (!id) return send(res, 400, { error: "review_id required" });
-        const r = answerQuestion(db, ports, id, String(b.answer ?? ""), b.rule_kind
+        const answer = String(b.answer ?? "");
+
+        // ── Reconciliation-ambiguity: delegate to answerLearningQuestion ─────
+        // It handles all three answers (Link/Don't link/Later) in one place,
+        // avoiding duplicated link logic between the API and workorders.
+        const review = db.prepare(
+          "SELECT trigger, answered_at, dismissed FROM training_reviews WHERE id=?",
+        ).get(id) as { trigger: string; answered_at: string | null; dismissed: number } | undefined;
+
+        if (review && review.trigger === "reconciliation-ambiguity" && !review.answered_at && !review.dismissed) {
+          const r = answerLearningQuestion(db, ports, id, answer);
+          return send(res, 200, { answered: true, ...r });
+        }
+
+        const r = answerQuestion(db, ports, id, answer, b.rule_kind
           ? {
               kind: b.rule_kind as never,
               match_key: String(b.match_key ?? ""),

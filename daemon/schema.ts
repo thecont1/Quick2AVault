@@ -218,7 +218,10 @@ CREATE INDEX IF NOT EXISTS idx_legs_txn ON transaction_legs(transaction_id);
 CREATE TABLE IF NOT EXISTS transaction_documents (
   transaction_id TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
   document_id    TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-  evidence_role  TEXT NOT NULL,
+  evidence_role  TEXT NOT NULL CHECK (evidence_role IN (
+                   'merchant_invoice', 'payment_receipt', 'bank_slip',
+                   'card_confirmation', 'statement_line', 'refund_note',
+                   'contract_note')),
   match_score    REAL,
   linked_by      TEXT NOT NULL DEFAULT 'ai',
   linked_at      TEXT NOT NULL,

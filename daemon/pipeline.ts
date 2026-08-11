@@ -1596,20 +1596,60 @@ export async function runAnalyseJob(
   }
 
   if (best && best.score >= REVIEW_FLOOR) {
-    // Ambiguous: record separately but surface the proposal rather than
-    // silently guessing. Under-linking is recoverable; over-linking hides money.
-    ports.bus.publish({
-      type: "MatchProposed",
-      transaction_id: best.transaction_id,
-      document_id: documentId,
-      score: best.score,
-      at: now,
+    // Ambiguous: surface through the Learning drawer via the
+    // reconciliation-ambiguity trigger. The user's three answers are:
+    //   Link    → promote to a confirmed transaction (D2)
+    //   Don't   → dismiss; the pair stays separate (standing rule)
+    //   Later   → leave pending; re-asked in a future ingest within budget
+    const ambiguity: LearningAmbiguity = {
+      kind: "reconciliation-ambiguity",
+      dedupeKey: `${documentId}|${best.transaction_id}|${x.amount_minor}|${x.currency}|${x.occurred_at ?? ""}`,
+      prompt: "These look like the same purchase. Link?",
+      sourceFact: {
+        document_id: documentId,
+        transaction_id: best.transaction_id,
+        amount_minor: x.amount_minor,
+        currency: x.currency,
+        occurred_at: x.occurred_at,
+        counterparty_descriptor: x.counterparty_descriptor,
+        source_of_funds_text: x.source_of_funds_text,
+      },
+      predictedRule: {
+        kind: "entity-rule" as const,
+        payload: {
+          rule_type: "reconcile",
+          candidate_document_id: documentId,
+          transaction_id: best.transaction_id,
+          amount_minor: x.amount_minor,
+          currency: x.currency,
+        },
+      },
+      noveltyScore: best.score,
+      why: best.reasons.join("; "),
+    };
+    const questions = generateLearningQuestions(db, ports, {
+      documentId,
+      pipelineState: "analysing",
+      ambiguities: [ambiguity],
     });
-    ports.logger.info("match proposed for review", {
-      document_id: documentId,
-      score: best.score.toFixed(2),
-      reasons: best.reasons.join("; "),
-    });
+    if (questions.length > 0) {
+      ports.logger.info("reconciliation question raised", {
+        document_id: documentId,
+        transaction_id: best.transaction_id,
+        score: best.score.toFixed(2),
+        reasons: best.reasons.join("; "),
+      });
+      // D2: do NOT create a transactions row. The document remains
+      // unattached until the user answers the Learning question.
+      return;
+    } else {
+      ports.logger.info("reconciliation score in review band but question budget exhausted", {
+        document_id: documentId,
+        transaction_id: best.transaction_id,
+        score: best.score.toFixed(2),
+      });
+      // Budget exhausted: fall through to recordTransaction as a separate transaction.
+    }
   }
 
   const rec = recordTransaction(db, ports, documentId, x);
