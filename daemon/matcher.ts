@@ -15,7 +15,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Ports } from "./ports.js";
 import { normaliseDescriptor } from "./schema.js";
 import type { ExtractionResult } from "./extraction-contract.js";
-import { evidenceRole } from "./ledger.js";
+import { evidenceRole, INVOICE_ROLES, SETTLEMENT_ROLES } from "./ledger.js";
 
 export const AUTO_LINK = 0.9;
 export const REVIEW_FLOOR = 0.6;
@@ -195,10 +195,18 @@ export function linkEvidence(
   const inserted = Number(info.changes ?? 0) > 0;
 
   if (inserted) {
-    // A card confirmation proves settlement; an invoice alone does not.
-    if (x.doc_type === "card_confirmation" || x.doc_type === "bank_slip") {
-      db.prepare("UPDATE transactions SET status='evidenced', posted_at=COALESCE(posted_at,?) WHERE id=?")
-        .run(x.occurred_at ?? null, transactionId);
+    // A settlement document (bank slip, card confirmation, statement line,
+    // payment receipt) proves the transaction was paid. Promote the status
+    // accordingly: if invoice evidence is also on file, the transaction is
+    // fully evidenced; if not, it's a gap (no_invoice).
+    const currentRole = evidenceRole(x);
+    if (SETTLEMENT_ROLES.has(currentRole)) {
+      const hasInvoice = (db
+        .prepare("SELECT 1 FROM transaction_documents WHERE transaction_id=? AND evidence_role IN ('merchant_invoice','contract_note','refund_note') LIMIT 1")
+        .get(transactionId)) as { 1?: number } | undefined;
+      const newStatus = hasInvoice ? "evidenced" : "no_invoice";
+      db.prepare("UPDATE transactions SET status=?, posted_at=COALESCE(posted_at,?) WHERE id=?")
+        .run(newStatus, x.occurred_at ?? null, transactionId);
     }
 
     ports.bus.publish({
