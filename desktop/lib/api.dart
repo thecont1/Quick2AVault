@@ -1140,6 +1140,23 @@ class PersonInUse implements Exception {
   String toString() => message;
 }
 
+/// WO11 Track B — the document detail endpoint serves ACTIVE documents only.
+/// A removed document answers 404 (`lifecycle: 'removed'` — Reprocess brings
+/// it back); a deleted one answers 410 (`lifecycle: 'deleted'` — the row is a
+/// tombstone; ingesting the file again creates a fresh document).
+class DocumentUnavailable implements Exception {
+  DocumentUnavailable(this.documentId, {required this.lifecycle});
+  final String documentId;
+
+  /// 'removed' or 'deleted'.
+  final String lifecycle;
+  bool get reprocessable => lifecycle == 'removed';
+  @override
+  String toString() => lifecycle == 'deleted'
+      ? 'This document was permanently deleted.'
+      : 'This document was removed from the active ledger.';
+}
+
 /// What a vault reset destroyed. `note` carries the daemon's reminder that
 /// documents on disk were left alone.
 class ResetResult {
@@ -1885,6 +1902,42 @@ class VaultApi {
     }
   }
 
+  /// WO11 A2 — merge two confirmed entities OF THE SAME KIND (people, orgs,
+  /// or accounts). The daemon refuses cross-kind merges with 409.
+  Future<void> mergeEntities({
+    required String fromId,
+    required String intoId,
+  }) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/entities/merge'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({'from_id': fromId, 'into_id': intoId}),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('merge failed: ${res.statusCode} ${res.body}');
+    }
+  }
+
+  /// WO11 A3 — confirm a cross-kind identifier collision is two distinct
+  /// entities. Recorded as a standing rule so the conflict stays dismissed.
+  Future<void> keepEntitiesSeparate({
+    required String identifier,
+    required String entityId,
+    required String otherId,
+  }) async {
+    final res = await _client.post(
+      Uri.parse('$baseUrl/v1/entities/keep-separate'),
+      headers: {..._headers, 'content-type': 'application/json'},
+      body: jsonEncode({
+        'identifier': identifier,
+        'entity_ids': [entityId, otherId],
+      }),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('keep-separate failed: ${res.statusCode} ${res.body}');
+    }
+  }
+
   /// The Document Review evidence summary (work order 05 §A.3): raw
   /// extraction, winning claims with provenance, resolved parties, and the
   /// linked transactions — all with source amounts AND source currencies.
@@ -1893,7 +1946,19 @@ class VaultApi {
       Uri.parse('$baseUrl/v1/documents/$id/detail'),
       headers: _headers,
     );
-    if (res.statusCode == 404) throw Exception('document not found: $id');
+    // WO11 Track B: a removed/deleted document is a typed "not available",
+    // not a generic failure — the caller renders a Reprocess affordance
+    // instead of an error string.
+    if (res.statusCode == 404 || res.statusCode == 410) {
+      final j = jsonDecode(res.body) as Map<String, dynamic>;
+      if (j['error'] == 'document_not_available') {
+        throw DocumentUnavailable(
+          id,
+          lifecycle: (j['lifecycle'] ?? 'removed').toString(),
+        );
+      }
+      throw Exception('document not found: $id');
+    }
     if (res.statusCode != 200) {
       throw Exception('document detail failed: ${res.statusCode} ${res.body}');
     }

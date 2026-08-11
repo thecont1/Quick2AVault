@@ -35,6 +35,7 @@ import {
   type ResolvedTransaction,
 } from "./claims.js";
 import { rebuildSearchIndex, searchDocuments, removeFromIndex } from "./search.js";
+import { activeDocumentSql, activeTransactionSql, isActive } from "./lifecycle.js";
 import {
   backfillEmbeddings,
   hybridSearch,
@@ -1086,6 +1087,43 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, { merged: true, kind: into.kind, into: into.display_name });
       }
 
+      // WO11 A3: the user confirms a cross-kind collision is NOT a duplicate —
+      // a person and an organisation legitimately sharing an email. Recorded
+      // as a standing rule so the Conflicts section stops surfacing the pair;
+      // the rule row doubles as the passive-learning candidate.
+      if (p === "/v1/entities/keep-separate" && req.method === "POST") {
+        const b = await readJson(req);
+        const identifier = String(b.identifier ?? "").trim();
+        const ids: string[] = Array.isArray(b.entity_ids) ? b.entity_ids.map(String) : [];
+        if (!identifier || ids.length !== 2 || ids[0] === ids[1]) {
+          return send(res, 400, { error: "identifier and two distinct entity_ids required" });
+        }
+        const pair = ids
+          .map((eid) => db.prepare("SELECT id, kind, display_name FROM entities WHERE id=?").get(eid) as
+            | { id: string; kind: string; display_name: string }
+            | undefined);
+        if (pair.some((e) => !e)) return send(res, 404, { error: "entity not found" });
+        if (pair[0]!.kind === pair[1]!.kind) {
+          // Same-kind duplicates are merge candidates, not conflicts — keeping
+          // them separate is the resolver's standing SEPARATE rule, not this.
+          return send(res, 409, { error: "same_kind", detail: "same-kind entities are merge candidates, not conflicts" });
+        }
+        const type = classifyIdentifier(identifier) ?? "email";
+        const norm = normaliseIdentifier(type, identifier);
+        const sorted = [pair[0]!.id, pair[1]!.id].sort();
+        db.prepare(
+          `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
+           VALUES('entity_separation',?, NULL, ?, 'user', 1, 1, ?)
+           ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET
+             value=excluded.value, source='user', active=1, created_at=excluded.created_at`,
+        ).run(`identifier:${norm}`, JSON.stringify([sorted]), ports.clock.isoNow());
+        ports.logger.info("cross-kind conflict dismissed", {
+          identifier: norm,
+          entities: [pair[0]!.display_name, pair[1]!.display_name],
+        });
+        return send(res, 200, { kept_separate: true });
+      }
+
 
       // ── settings (Setup page) ────────────────────────────────────────────
       // AI provider config lives in app_settings so it survives restarts and
@@ -1573,14 +1611,32 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
 
         if (typeof b.is_owner === "boolean") {
-          if (b.is_owner) {
-            db.prepare("UPDATE entities SET is_owner=0 WHERE kind='person' AND id<>?").run(id);
-            db.prepare("UPDATE entities SET is_owner=1, is_member=1, status='confirmed', updated_at=? WHERE id=?").run(
-              ports.clock.isoNow(),
-              id,
-            );
-          } else {
-            db.prepare("UPDATE entities SET is_owner=0, updated_at=? WHERE id=?").run(ports.clock.isoNow(), id);
+          // WO11 A1: the demote-old/promote-new pair is ONE atomic write. Two
+          // autocommit statements would leave a crash window with zero or two
+          // owners — both corrupt the "exactly one self" invariant.
+          db.exec("BEGIN");
+          try {
+            if (b.is_owner) {
+              db.prepare("UPDATE entities SET is_owner=0 WHERE kind='person' AND id<>?").run(id);
+              db.prepare("UPDATE entities SET is_owner=1, is_member=1, status='confirmed', updated_at=? WHERE id=?").run(
+                ports.clock.isoNow(),
+                id,
+              );
+            } else {
+              db.prepare("UPDATE entities SET is_owner=0, updated_at=? WHERE id=?").run(ports.clock.isoNow(), id);
+            }
+            // Passive learning (WO09 contract): a user-confirmed owner change
+            // is durable evidence, independent of the prompting master switch.
+            db.prepare(
+              `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
+               VALUES('entity_owner',?, 'person', ?,'passive-correction',1,0,?)
+               ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET
+                 value=excluded.value, source='passive-correction', confidence=1, created_at=excluded.created_at`,
+            ).run(`entity:${id}`, b.is_owner ? "owner" : "not-owner", ports.clock.isoNow());
+            db.exec("COMMIT");
+          } catch (e) {
+            db.exec("ROLLBACK");
+            throw e;
           }
           changed.push("is_owner");
         }
@@ -1842,6 +1898,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             // passthrough in buildTreemap could never have received a row.
             "COALESCE(impact_bucket,'') NOT IN ('transfer','investment')",
             "status != 'scheduled'",
+            // WO11 Track B: a transaction whose evidence is entirely
+            // removed/deleted contributes nothing to the treemap.
+            activeTransactionSql("transactions"),
           ];
           const args: string[] = [];
           if (period.from && period.to) {
@@ -1902,6 +1961,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                       MAX(h.occurred_at) AS last_traded
                  FROM holdings h
                  JOIN entities e ON e.id = h.instrument_entity_id
+                 -- WO11 Track B: holdings derive from a document's trades; a
+                 -- removed/deleted document no longer backs a position.
+                 LEFT JOIN documents d ON d.id = h.document_id
+                WHERE h.document_id IS NULL OR ${activeDocumentSql("d")}
                 GROUP BY e.id
                 ORDER BY cost_minor DESC`,
             )
@@ -1951,16 +2014,23 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           });
         }
 
-        case "/v1/documents":
+        case "/v1/documents": {
+          // WO11 Track B: removed/deleted rows are hidden by default. The
+          // ?include=removed escape hatch exists for the rare caller that
+          // needs the soft-hidden set; deleted tombstones never list.
+          const includeRemoved = url.searchParams.get("include") === "removed";
           return send(res, 200, {
             documents: db
               .prepare(
                 `SELECT id, original_filename, ext, byte_size, doc_type, source, sha256,
-                        markdown_chars, received_at, converted_at, analysed_at
-                 FROM documents WHERE lifecycle='active' ORDER BY received_at DESC LIMIT ?`,
+                        markdown_chars, received_at, converted_at, analysed_at, lifecycle
+                 FROM documents
+                 WHERE ${includeRemoved ? "lifecycle IN ('active','removed')" : activeDocumentSql("documents")}
+                 ORDER BY received_at DESC LIMIT ?`,
               )
               .all(Number(url.searchParams.get("limit") ?? 100)),
           });
+        }
         case "/v1/transactions": {
           // RECENT must obey the period selector. Without this the list showed
           // the newest 100 transactions from ALL time regardless of the chosen
@@ -2000,6 +2070,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           const clauses: string[] = [];
           if (bounded) clauses.push("date(t.occurred_at) BETWEEN date(?) AND date(?)");
           if (bucketClause) clauses.push(bucketClause);
+          // WO11 Track B: hide transactions whose evidence is entirely
+          // removed/deleted (evidence-less transactions stay visible).
+          clauses.push(activeTransactionSql("t"));
           const whereSql = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
 
           const rows = db
@@ -2026,7 +2099,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               .prepare(
                 `SELECT d.id, d.original_filename, td.evidence_role, td.match_score
                  FROM transaction_documents td JOIN documents d ON d.id = td.document_id
-                 WHERE td.transaction_id=?`,
+                 WHERE td.transaction_id=? AND ${activeDocumentSql("d")}`,
               )
               .all(r.id as string);
           }
@@ -2035,9 +2108,16 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
         case "/v1/entities": {
           const kind = url.searchParams.get("kind");
-          const rows = kind
+          const rows = (kind
             ? db.prepare("SELECT * FROM entities WHERE kind=? ORDER BY display_name").all(kind)
-            : db.prepare("SELECT * FROM entities ORDER BY kind, display_name").all();
+            : db.prepare("SELECT * FROM entities ORDER BY kind, display_name").all()) as Record<string, unknown>[];
+          // WO11 A3: cross-kind identifier collisions ride along on each row
+          // so the People desk can render a Conflicts section. Same-kind
+          // duplicates are NOT conflicts — those are merge candidates.
+          const conflicts = crossKindConflicts(db);
+          for (const row of rows) {
+            row.conflicts = conflicts.get(row.id as string) ?? [];
+          }
           return send(res, 200, { entities: rows });
         }
 
@@ -2201,11 +2281,22 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             const doc = db
               .prepare(
                 `SELECT id, original_filename, ext, doc_type, source, received_at,
-                        converted_at, analysed_at, extraction_json, markdown_chars
+                        converted_at, analysed_at, extraction_json, markdown_chars, lifecycle
                    FROM documents WHERE id=?`,
               )
               .get(docId) as Record<string, unknown> | undefined;
             if (!doc) return send(res, 404, { error: "document_not_found", document_id: docId });
+            // WO11 Track B: this endpoint serves ACTIVE documents only. A
+            // removed document is hidden (404 — reprocess brings it back); a
+            // deleted one is gone for good (410 — the tombstone stays so
+            // sha256 dedup still holds).
+            if (!isActive(doc as { lifecycle: string })) {
+              return send(res, doc.lifecycle === "deleted" ? 410 : 404, {
+                error: "document_not_available",
+                lifecycle: doc.lifecycle,
+                document_id: docId,
+              });
+            }
 
             const extraction = doc.extraction_json ? safeParse(doc.extraction_json as string) : null;
             doc.extraction_json = undefined;
@@ -2702,6 +2793,99 @@ export function resolvePeriod(
  * Filtering is by occurred_at (the ECONOMIC date), not fy_key, so month
  * selection and financial-year selection share one code path.
  */
+/**
+ * WO11 A3 — cross-kind identifier collisions, for the People desk Conflicts
+ * section. Two CONFIRMED entities of DIFFERENT kinds carrying the same typed
+ * identifier (email/phone/handle, from resolver aliases or the entity's own
+ * identifiers_json) are a conflict to surface, never a silent merge. Same-kind
+ * duplicates are excluded here on purpose — those are merge candidates.
+ * Pairs the user already adjudicated via /v1/entities/keep-separate are
+ * suppressed by their standing learned_rules row.
+ */
+function crossKindConflicts(db: DatabaseSync): Map<string, Array<Record<string, unknown>>> {
+  const byIdentifier = new Map<string, Map<string, { id: string; kind: string; display_name: string; type: string }>>();
+  const add = (norm: string, type: string, e: { id: string; kind: string; display_name: string }) => {
+    let group = byIdentifier.get(norm);
+    if (!group) byIdentifier.set(norm, (group = new Map()));
+    group.set(e.id, { ...e, type });
+  };
+
+  const aliasRows = db
+    .prepare(
+      `SELECT a.normalised, a.alias_type, e.id, e.kind, e.display_name
+         FROM entity_aliases a JOIN entities e ON e.id = a.entity_id
+        WHERE a.alias_type IN ('email','phone','handle') AND a.status <> 'rejected' AND e.status = 'confirmed'`,
+    )
+    .all() as Array<{ normalised: string; alias_type: string; id: string; kind: string; display_name: string }>;
+  for (const r of aliasRows) add(r.normalised, r.alias_type, r);
+
+  const entityRows = db
+    .prepare("SELECT id, kind, display_name, identifiers_json FROM entities WHERE status='confirmed' AND identifiers_json IS NOT NULL")
+    .all() as Array<{ id: string; kind: string; display_name: string; identifiers_json: string }>;
+  for (const e of entityRows) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(e.identifiers_json);
+    } catch {
+      continue; // legacy malformed identifiers
+    }
+    const values: string[] = [];
+    const collect = (v: unknown): void => {
+      if (typeof v === "string") values.push(v);
+      else if (Array.isArray(v)) v.forEach(collect);
+      else if (v && typeof v === "object") Object.values(v).forEach(collect);
+    };
+    collect(parsed);
+    for (const raw of values) {
+      const type = classifyIdentifier(raw);
+      if (!type) continue;
+      add(normaliseIdentifier(type, raw), type, e);
+    }
+  }
+
+  const suppressed = new Map<string, Set<string>>();
+  const rules = db
+    .prepare("SELECT match_key, value FROM learned_rules WHERE kind='entity_separation' AND active=1")
+    .all() as Array<{ match_key: string; value: string }>;
+  for (const r of rules) {
+    const norm = r.match_key.replace(/^identifier:/, "");
+    let pairs: unknown;
+    try {
+      pairs = JSON.parse(r.value);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(pairs)) continue;
+    const set = suppressed.get(norm) ?? new Set<string>();
+    for (const p of pairs) {
+      if (Array.isArray(p) && p.length === 2) set.add([String(p[0]), String(p[1])].sort().join("|"));
+    }
+    suppressed.set(norm, set);
+  }
+
+  const conflicts = new Map<string, Array<Record<string, unknown>>>();
+  for (const [norm, group] of byIdentifier) {
+    const entities = [...group.values()];
+    if (new Set(entities.map((e) => e.kind)).size < 2) continue;
+    for (const e of entities) {
+      const list = conflicts.get(e.id) ?? [];
+      for (const o of entities) {
+        if (o.id === e.id || o.kind === e.kind) continue;
+        if (suppressed.get(norm)?.has([e.id, o.id].sort().join("|"))) continue;
+        list.push({
+          identifier: norm,
+          identifier_type: e.type,
+          other_id: o.id,
+          other_kind: o.kind,
+          other_name: o.display_name,
+        });
+      }
+      if (list.length) conflicts.set(e.id, list);
+    }
+  }
+  return conflicts;
+}
+
 export function snapshot(
   db: DatabaseSync,
   period: { from: string | null; to: string | null; label: string; key: string },
@@ -2727,13 +2911,18 @@ export function snapshot(
     WHEN currency = '${homeCurrency.replace(/'/g, "''")}' THEN amount_minor
     ELSE NULL END`;
 
+  // WO11 Track B: every transaction-derived figure applies the lifecycle
+  // predicate — a transaction whose evidence is entirely removed/deleted
+  // contributes nothing.
+  const VISIBLE = activeTransactionSql("transactions");
+
   const sum = (dir: string, invest: boolean) =>
     (
       db
         .prepare(
           `SELECT COALESCE(SUM(${HOME_AMOUNT}),0) v FROM transactions
            WHERE direction=? AND status <> 'scheduled'
-             AND ${invest ? INVEST : `NOT ${INVEST}`} ${where}`,
+             AND ${VISIBLE} AND ${invest ? INVEST : `NOT ${INVEST}`} ${where}`,
         )
         .get(dir, ...args) as { v: number }
     ).v;
@@ -2743,7 +2932,7 @@ export function snapshot(
       db
         .prepare(
           `SELECT COALESCE(SUM(${HOME_AMOUNT}),0) v FROM transactions
-           WHERE direction=? AND status <> 'scheduled' ${where}`,
+           WHERE direction=? AND status <> 'scheduled' AND ${VISIBLE} ${where}`,
         )
         .get(dir, ...args) as { v: number }
     ).v;
@@ -2756,7 +2945,7 @@ export function snapshot(
         `SELECT currency, SUM(amount_minor) AS amount_minor, COUNT(*) AS transactions
            FROM transactions
           WHERE direction=? AND status <> 'scheduled' AND home_amount_minor IS NULL
-            AND (currency IS NULL OR currency <> ?) ${where}
+            AND (currency IS NULL OR currency <> ?) AND ${VISIBLE} ${where}
           GROUP BY currency ORDER BY currency`,
       )
       .all(dir, homeCurrency, ...args) as { currency: string | null; amount_minor: number; transactions: number }[];
@@ -2776,7 +2965,9 @@ export function snapshot(
         .prepare(
           `SELECT COUNT(DISTINCT td.document_id) n
            FROM transactions t JOIN transaction_documents td ON td.transaction_id = t.id
+           JOIN documents d ON d.id = td.document_id
            WHERE t.direction=? AND t.status <> 'scheduled'
+             AND ${activeDocumentSql("d")}
              AND ${invest ? INVEST : `NOT ${INVEST}`} ${where.replace(/occurred_at/g, "t.occurred_at")}`,
         )
         .get(dir, ...args) as { n: number }
@@ -2804,13 +2995,18 @@ export function snapshot(
       transfers: unconvertedFor("transfer"),
     },
     counts: {
-      documents: countIn("SELECT COUNT(*) n FROM documents"),
+      documents: countIn(
+        `SELECT COUNT(*) n FROM documents WHERE ${activeDocumentSql("documents")}`,
+      ),
       transactions: countIn(
-        `SELECT COUNT(*) n FROM transactions WHERE status <> 'scheduled' ${where}`,
+        `SELECT COUNT(*) n FROM transactions WHERE status <> 'scheduled' AND ${VISIBLE} ${where}`,
         args,
       ),
       entities: countIn("SELECT COUNT(*) n FROM entities"),
-      evidence_links: countIn("SELECT COUNT(*) n FROM transaction_documents"),
+      evidence_links: countIn(
+        `SELECT COUNT(*) n FROM transaction_documents td
+         JOIN documents d ON d.id = td.document_id WHERE ${activeDocumentSql("d")}`,
+      ),
     },
     note: "totals derive from transactions; transfers excluded, investments separated from spending",
   };

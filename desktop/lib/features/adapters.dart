@@ -1,8 +1,41 @@
 import '../api.dart';
 import 'intake/state.dart' as feature_intake;
+import 'people/api.dart' as feature_people_api;
 import 'people/state.dart' as feature_people;
 import 'review/state.dart' as feature_review;
 import 'settings/state.dart' as feature_settings;
+
+/// WO11 — the People desk's gateway, backed by the real daemon API. Owner
+/// assignment rides the existing person-edit endpoint (kind='person' is
+/// enforced server-side); merge and keep-separate use the entity endpoints.
+class VaultEntityGateway implements feature_people_api.EntityGateway {
+  final VaultApi api;
+  const VaultEntityGateway(this.api);
+
+  @override
+  Future<List<feature_people.EntitySummary>> list({
+    feature_people.EntityKind? kind,
+  }) => api.featureEntities(kind: kind);
+
+  @override
+  Future<void> merge({required String sourceId, required String targetId}) =>
+      api.mergeEntities(fromId: sourceId, intoId: targetId);
+
+  @override
+  Future<void> setOwner(String entityId, {required bool owner}) =>
+      api.editPerson(entityId, isOwner: owner).then((_) {});
+
+  @override
+  Future<void> keepSeparate({
+    required String identifier,
+    required String entityId,
+    required String otherId,
+  }) => api.keepEntitiesSeparate(
+    identifier: identifier,
+    entityId: entityId,
+    otherId: otherId,
+  );
+}
 
 extension VaultApiDesktopFeatures on VaultApi {
   Future<List<feature_intake.IntakeItem>> featureIntakeStatus({

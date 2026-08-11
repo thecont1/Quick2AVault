@@ -269,6 +269,22 @@ class _VaultHomeState extends State<VaultHome> {
     }
   }
 
+  /// WO11 Track A: run one People-desk mutation (owner / merge /
+  /// keep-separate), then refetch so the desk reflects the daemon's truth.
+  /// Failures surface as a snackbar rather than a silent no-op.
+  Future<void> _entityAction(Future<void> Function() action) async {
+    try {
+      await action();
+      await _refreshFeatureData();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(
+          context,
+        )?.showSnackBar(SnackBar(content: Text(error.toString())));
+      }
+    }
+  }
+
   Future<void> _refreshFeatureData() async {
     try {
       final learning = await _api.learning();
@@ -713,7 +729,26 @@ class _VaultHomeState extends State<VaultHome> {
       api: _api,
       initialDocumentId: _selectedIntakeId,
     ),
-    VaultTab.people => wo_people.EntityDesk(entities: _entities),
+    // WO11 Track A: the desk's owner / merge / keep-separate actions go
+    // through the real gateway; every mutation refetches the entity list.
+    VaultTab.people => wo_people.EntityDesk(
+      entities: _entities,
+      onSetOwner: (entity, owner) => _entityAction(
+        () => VaultEntityGateway(_api).setOwner(entity.id, owner: owner),
+      ),
+      onMerge: (source, target) => _entityAction(
+        () => VaultEntityGateway(
+          _api,
+        ).merge(sourceId: source.id, targetId: target.id),
+      ),
+      onKeepSeparate: (entity, conflict) => _entityAction(
+        () => VaultEntityGateway(_api).keepSeparate(
+          identifier: conflict.identifier,
+          entityId: entity.id,
+          otherId: conflict.otherId,
+        ),
+      ),
+    ),
     // Work order 07 §G — Intake tab: the unified intake queue.
     // Shows every incoming file with its state. Encrypted PDFs show an
     // inline password field. Irrelevant items show Restore. Nothing is
