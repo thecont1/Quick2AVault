@@ -11,11 +11,11 @@
       "gstin": "29AAJCP4398N1ZE"
     },
     "client": {
-      "name": "SHANTARAM MAHESH",
+      "name": "PRIYA NAIR",
       "kind": "person",
-      "ucc": "BZ859919",
-      "pan": "AO******8R",
-      "mobile": "******9770"
+      "ucc": "TEST1234",
+      "pan": "AB******1C",
+      "mobile": "****1234"
     },
     "contractNoteNumber": "2216643",
     "tradeDate": "2026-07-01",
@@ -50,8 +50,8 @@
     ],
     "charges": {
       "brokerageMinor": 2000,
-      "cgstMinor": 184,
-      "sgstMinor": 184,
+      "cgstMinor": 208,
+      "sgstMinor": 208,
       "stampDutyMinor": 100,
       "securitiesTransactionTaxMinor": 1208
     }

@@ -5,7 +5,7 @@
   "scenario": "ambiguous_alias",
   "source": {
     "filename": "a-ambiguous-alias.txt",
-    "text": "Invoice\nIssuer: Mahesh Shantaram\nEmail: ms@thecontrarian.in\nAlternative: techrose@gmail.com\nTotal: USD 100.00"
+    "text": "Invoice\nIssuer: Ananya Rao\nEmail: ananya.rao@example.test\nAlternative: ananya.work@example.test\nTotal: USD 100.00"
   },
   "expectations": {
     "disposition": "accepted",

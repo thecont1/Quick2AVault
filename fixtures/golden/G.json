@@ -5,19 +5,18 @@
   "confidenceAtLeast": 0.9,
   "fields": {
     "issuer": {
-      "name": "SHANTARAM MAHESH",
-      "kind": "person",
-      "address": "No. 3 Anugraha, 15th Cross, 5th Main, KR Garden, Murgeshpalya, Bangalore - 560 017, Karnataka, INDIA",
-      "contact": "Mahesh Shantaram",
-      "email": "ms@thecontrarian.in",
-      "gstin": "29AONPS5418R1ZS"
+      "name": "PRIYA NAIR",
+      "kind": "organisation",
+      "address": "Invoice Date: April 1, 2026, Due Date: April 15, 2026",
+      "contact": "Priya Nair",
+      "email": "priya.nair@example.test",
+      "gstin": "29ABCDE1234F1Z5"
     },
     "vendor": {
-      "name": "PetaSight Inc.",
+      "name": "PetaSight Inc. 8 The Green, Suite R, Dover, DE 19901, USA Contact Person: Alex Morgan",
       "kind": "organisation",
-      "address": "8 The Green, Suite R, Dover, DE 19901, USA",
-      "contact": "Sunil Hegde",
-      "email": "sunil.h@tagfact.com"
+      "address": "Email: alex.morgan@petasight.example",
+      "email": "alex.morgan@petasight.example"
     },
     "documentNumber": "INV/2026-27/01",
     "documentDate": "2026-04-01",
@@ -45,13 +44,12 @@
       }
     ],
     "bank": {
-      "institution": "HDFC Bank",
-      "branch": "Chandra Layout, Bangalore - 560 040",
-      "accountNumber": "50200035215675",
-      "last4": "5675",
+      "branch": "Indiranagar, Bengaluru - 560 038",
+      "accountNumber": "12345678901234",
+      "last4": "1234",
       "type": "bank",
-      "ifsc": "HDFC0001757",
-      "swift": "HDFCINBB"
+      "ifsc": "EXAMP0001234",
+      "swift": "EXAMPINBB"
     },
     "currencyConversion": {
       "required": true,
