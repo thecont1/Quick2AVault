@@ -51,10 +51,9 @@ enum SseConnectionState {
 class EventService {
   final String baseUrl;
   final String token;
-  final Logger? _logger;
+  final Logger? logger;
 
-  EventService({required this.baseUrl, required this.token, Logger? logger})
-      : _logger = logger;
+  EventService({required this.baseUrl, required this.token, this.logger});
 
   HttpClient? _client;
   StreamSubscription<String>? _subscription;
@@ -86,7 +85,7 @@ class EventService {
 
       _reconnectAttempts = 0;
       _connectionStateController.add(SseConnectionState.connected);
-      _logger?.i('SSE connected');
+      logger?.i('SSE connected');
 
       String? type;
       _subscription = res
@@ -131,7 +130,7 @@ class EventService {
     if (_reconnecting || _disposed) return;
     _reconnecting = true;
     _connectionStateController.add(SseConnectionState.reconnecting);
-    _logger?.w('SSE reconnecting (attempt $_reconnectAttempts)');
+    logger?.w('SSE reconnecting (attempt $_reconnectAttempts)');
 
     // Exponential backoff: 2s, 4s, 8s, 16s, capped at 30s.
     final seconds = (1 << (_reconnectAttempts.clamp(0, 4) + 1))

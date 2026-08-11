@@ -53,12 +53,12 @@ String? _currencyFromJson(dynamic v) {
   return s.isNotEmpty ? s : null;
 }
 
-/// List<String> → Set<String> for editable-fields sets.
+/// `List<String>` → `Set<String>` for editable-fields sets.
 Set<String> _stringSetFromJson(dynamic v) =>
     ((v ?? const []) as List).cast<String>().toSet();
 List<String> _stringSetToJson(Set<String> v) => v.toList();
 
-/// Map<String, dynamic> → Map<String, String> (values stringified).
+/// `Map<String, dynamic>` → `Map<String, String>` (values stringified).
 Map<String, String> _stringMapFromJson(dynamic v) {
   if (v == null) return {};
   return (v as Map).map((k, val) => MapEntry(k.toString(), val.toString()));
