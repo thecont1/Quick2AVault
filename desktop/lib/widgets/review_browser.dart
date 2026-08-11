@@ -584,6 +584,47 @@ class _DetailState extends State<_Detail> {
         return const Center(child: CircularProgressIndicator.adaptive());
       }
       if (snapshot.hasError || !snapshot.hasData) {
+        // WO11 Track B: a removed/deleted document is "not available", with
+        // a Reprocess affordance — not a generic failure. A deleted document
+        // cannot be reprocessed (the daemon tombstoned it), so no button.
+        final unavailable = snapshot.error;
+        if (unavailable is DocumentUnavailable) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.visibility_off_outlined,
+                      size: 28, color: VaultColors.dim),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Document not available',
+                    style: TextStyle(
+                      color: VaultColors.ink,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    unavailable.toString(),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: VaultColors.dim),
+                  ),
+                  if (unavailable.reprocessable) ...[
+                    const SizedBox(height: 14),
+                    FilledButton.icon(
+                      onPressed: () =>
+                          _action(DocumentManageAction.reprocess),
+                      icon: const Icon(Icons.refresh, size: 16),
+                      label: const Text('Reprocess'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        }
         return Center(
           child: Padding(
             padding: const EdgeInsets.all(24),

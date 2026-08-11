@@ -427,6 +427,191 @@ await check("merging two people keeps every alias and the audit survives re-anal
     .all() as { alias: string }[];
   assert.ok(aliases.some((a) => a.alias === "A Kamath"), "absorbed name is an alias");
   assert.ok(aliases.some((a) => a.alias === "arun@example.com"), "identifier aliases survive");
+  // WO11 A2: the merge emits a passive-learning candidate, not a standing rule.
+  const rule = db
+    .prepare("SELECT value, source, active FROM learned_rules WHERE kind='entity_merge' AND match_key='entity:ent_dup'")
+    .get() as { value: string; source: string; active: number } | undefined;
+  assert.ok(rule, "entity_merge passive candidate missing");
+  assert.equal(rule!.value, "ent_m");
+  assert.equal(rule!.source, "passive-correction");
+  assert.equal(rule!.active, 0);
+});
+
+await check("WO11 A2: /v1/entities/merge emits the same passive-learning candidate", async () => {
+  db.prepare(
+    `INSERT INTO entities (id, kind, display_name, status, confidence, created_at)
+     VALUES ('ent_gm1','organisation','Merged Org','confirmed',1.0,?)`,
+  ).run(now);
+  db.prepare(
+    `INSERT INTO entities (id, kind, display_name, status, confidence, created_at)
+     VALUES ('ent_gm2','organisation','Merged Org Ltd','confirmed',1.0,?)`,
+  ).run(now);
+  const r = await call("POST", "/v1/entities/merge", { from_id: "ent_gm1", into_id: "ent_gm2" });
+  assert.equal(r.status, 200);
+  const rule = db
+    .prepare("SELECT value, source, active, match_kind FROM learned_rules WHERE kind='entity_merge' AND match_key='entity:ent_gm1'")
+    .get() as { value: string; source: string; active: number; match_kind: string } | undefined;
+  assert.ok(rule, "entity_merge passive candidate missing for generic merge");
+  assert.equal(rule!.value, "ent_gm2");
+  assert.equal(rule!.match_kind, "organisation");
+  assert.equal(rule!.source, "passive-correction");
+  assert.equal(rule!.active, 0);
+});
+
+// ── WO11 Track A: owner passive learning + cross-kind conflicts ────────────
+
+await check("an owner change writes a passive-learning candidate", async () => {
+  await call("PATCH", "/v1/people/ent_m", { is_owner: true });
+  const rule = db
+    .prepare("SELECT value, source, active FROM learned_rules WHERE kind='entity_owner' AND match_key='entity:ent_m'")
+    .get() as { value: string; source: string; active: number } | undefined;
+  assert.ok(rule, "entity_owner rule missing");
+  assert.equal(rule!.value, "owner");
+  assert.equal(rule!.source, "passive-correction");
+  assert.equal(rule!.active, 0, "a candidate, not an applied rule");
+  // Clearing the owner flips the same candidate, in place.
+  await call("PATCH", "/v1/people/ent_m", { is_owner: false });
+  const after = db
+    .prepare("SELECT value FROM learned_rules WHERE kind='entity_owner' AND match_key='entity:ent_m'")
+    .get() as { value: string };
+  assert.equal(after.value, "not-owner");
+});
+
+await check("/v1/entities surfaces a cross-kind collision on both rows", async () => {
+  db.prepare(
+    `INSERT INTO entities (id, kind, display_name, status, confidence, identifiers_json, created_at)
+     VALUES ('ent_xp','person','Shared Person','confirmed',1.0,?,?)`,
+  ).run(JSON.stringify({ email: "shared@example.com" }), now);
+  db.prepare(
+    `INSERT INTO entities (id, kind, display_name, status, confidence, identifiers_json, created_at)
+     VALUES ('ent_xo','organisation','Shared Org Ltd','confirmed',1.0,?,?)`,
+  ).run(JSON.stringify({ email: "shared@example.com" }), now);
+  const r = await call("GET", "/v1/entities");
+  const rows = r.json.entities as Array<{ id: string; conflicts?: Array<{ other_id: string; identifier: string }> }>;
+  const person = rows.find((e) => e.id === "ent_xp");
+  const org = rows.find((e) => e.id === "ent_xo");
+  assert.ok(person?.conflicts?.some((c) => c.other_id === "ent_xo" && c.identifier === "shared@example.com"),
+    JSON.stringify(person?.conflicts));
+  assert.ok(org?.conflicts?.some((c) => c.other_id === "ent_xp"), "the conflict is visible from both sides");
+});
+
+await check("keep-separate dismisses the conflict and writes a standing rule", async () => {
+  const r = await call("POST", "/v1/entities/keep-separate", {
+    identifier: "shared@example.com",
+    entity_ids: ["ent_xp", "ent_xo"],
+  });
+  assert.equal(r.status, 200);
+  const rule = db
+    .prepare("SELECT value, active FROM learned_rules WHERE kind='entity_separation' AND match_key='identifier:shared@example.com'")
+    .get() as { value: string; active: number } | undefined;
+  assert.ok(rule, "standing rule missing");
+  assert.equal(rule!.active, 1);
+  const after = await call("GET", "/v1/entities");
+  const rows = after.json.entities as Array<{ id: string; conflicts?: unknown[] }>;
+  assert.equal(rows.find((e) => e.id === "ent_xp")?.conflicts?.length, 0);
+  assert.equal(rows.find((e) => e.id === "ent_xo")?.conflicts?.length, 0);
+});
+
+await check("dismissing a second pair on the same identifier preserves the first", async () => {
+  // A third kind carrying the same identifier: dismissing (person, account)
+  // must not resurrect the already-dismissed (person, organisation) pair —
+  // the learned_rules value is a LIST of pairs, merged on conflict.
+  db.prepare(
+    `INSERT INTO entities (id, kind, display_name, status, confidence, identifiers_json, created_at)
+     VALUES ('ent_xa','account','Shared Account','confirmed',1.0,?,?)`,
+  ).run(JSON.stringify({ email: "shared@example.com" }), now);
+  const mid = await call("GET", "/v1/entities");
+  const midRows = mid.json.entities as Array<{ id: string; conflicts?: Array<{ other_id: string }> }>;
+  const xp = midRows.find((e) => e.id === "ent_xp");
+  assert.ok(xp?.conflicts?.some((c) => c.other_id === "ent_xa"), "new pair surfaces");
+  assert.ok(!xp?.conflicts?.some((c) => c.other_id === "ent_xo"), "old pair stays dismissed");
+
+  const r = await call("POST", "/v1/entities/keep-separate", {
+    identifier: "shared@example.com",
+    entity_ids: ["ent_xp", "ent_xa"],
+  });
+  assert.equal(r.status, 200);
+  const pairs = JSON.parse(
+    (db.prepare("SELECT value FROM learned_rules WHERE kind='entity_separation' AND match_key='identifier:shared@example.com'").get() as { value: string }).value,
+  ) as string[][];
+  assert.equal(pairs.length, 2, `both pairs preserved, got ${JSON.stringify(pairs)}`);
+  const after = await call("GET", "/v1/entities");
+  const rows = after.json.entities as Array<{ id: string; conflicts?: Array<{ other_id: string }> }>;
+  assert.equal(rows.find((e) => e.id === "ent_xp")?.conflicts?.length, 0, "both person pairs dismissed");
+  // The org/account pair was never dismissed — suppression is per-pair, so
+  // it correctly remains.
+  const xa = rows.find((e) => e.id === "ent_xa");
+  assert.equal(xa?.conflicts?.length, 1);
+  assert.equal(xa?.conflicts?.[0]?.other_id, "ent_xo");
+});
+
+await check("keep-separate refuses a same-kind pair (that is a merge candidate)", async () => {
+  const r = await call("POST", "/v1/entities/keep-separate", {
+    identifier: "same@example.com",
+    entity_ids: ["ent_m", "ent_v"],
+  });
+  assert.equal(r.status, 409);
+  assert.equal(r.json?.error, "same_kind", "the same-kind refusal branch, not a generic 409");
+});
+
+await check("the dismissal survives a full daemon restart (file-backed vault)", async () => {
+  // The API smoke above runs on :memory:; durability needs a real file. Boot
+  // a throwaway daemon on a file-backed vault, seed a collision, dismiss it,
+  // close everything, reopen the same file with a fresh daemon, and confirm
+  // the conflict does not resurface.
+  const restartVault = fs.mkdtempSync(path.join(os.tmpdir(), "q2v-people-restart-"));
+  const dbFile = path.join(restartVault, "vault.db");
+  const boot = async (port: number) => {
+    const conn = openDatabase(dbFile);
+    const instance = createApi(conn, testPorts(restartVault), {
+      port,
+      token: TOKEN,
+      version: "test",
+      vaultDir: restartVault,
+    });
+    await instance.listen();
+    return { conn, instance };
+  };
+  const get = async (port: number) => {
+    const r = await fetch(`http://127.0.0.1:${port}/v1/entities`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    return (await r.json()) as { entities: Array<{ id: string; conflicts?: unknown[] }> };
+  };
+  try {
+    const first = await boot(47938);
+    const nowIso = new Date().toISOString();
+    for (const [id, kind] of [["ent_rp", "person"], ["ent_ro", "organisation"]] as const) {
+      first.conn
+        .prepare(
+          `INSERT INTO entities (id, kind, display_name, status, confidence, identifiers_json, created_at)
+           VALUES (?,?,?,'confirmed',1.0,?,?)`,
+        )
+        .run(id, kind, `Restart ${kind}`, JSON.stringify({ email: "restart@example.com" }), nowIso);
+    }
+    const before = await get(47938);
+    assert.ok(before.entities.find((e) => e.id === "ent_rp")?.conflicts?.length, "collision seeded");
+    await fetch(`http://127.0.0.1:47938/v1/entities/keep-separate`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ identifier: "restart@example.com", entity_ids: ["ent_rp", "ent_ro"] }),
+    });
+    await first.instance.close();
+    first.conn.close();
+
+    const second = await boot(47939);
+    try {
+      const after = await get(47939);
+      assert.equal(after.entities.find((e) => e.id === "ent_rp")?.conflicts?.length ?? 0, 0,
+        "the conflict must NOT resurface after a restart");
+      assert.equal(after.entities.find((e) => e.id === "ent_ro")?.conflicts?.length ?? 0, 0);
+    } finally {
+      await second.instance.close();
+      second.conn.close();
+    }
+  } finally {
+    fs.rmSync(restartVault, { recursive: true, force: true });
+  }
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -462,6 +462,28 @@ export function unidentifiedPerson(db: DatabaseSync, ports: Ports): string {
   return UNIDENTIFIED_PERSON_ID;
 }
 
+/**
+ * WO11 A2: a user-confirmed merge emits a passive-learning candidate (same
+ * pattern as the owner toggle — inactive until consistently confirmed; NOT a
+ * standing rule). Shared by mergePeople and /v1/entities/merge so the two
+ * merge paths can never drift on source/active semantics.
+ *
+ * Call INSIDE the merge transaction — the candidate rolls back with it.
+ */
+export function recordMergeCandidate(
+  db: DatabaseSync,
+  fromId: string,
+  into: { id: string; kind: string },
+  now: string,
+): void {
+  db.prepare(
+    `INSERT INTO learned_rules(kind,match_key,match_kind,value,source,confidence,active,created_at)
+     VALUES('entity_merge',?, ?, ?,'passive-correction',1,0,?)
+     ON CONFLICT(kind,match_key,COALESCE(match_kind,'')) DO UPDATE SET
+       value=excluded.value, source='passive-correction', confidence=1, created_at=excluded.created_at`,
+  ).run(`entity:${fromId}`, into.kind, into.id, now);
+}
+
 /** Deliberately merge two person candidates after a user-confirmed identity lesson. */
 export function mergePeople(
   db: DatabaseSync,
@@ -498,6 +520,7 @@ export function mergePeople(
        WHERE id=?`,
     ).run(from.id, from.id, now, into.id);
     db.prepare("DELETE FROM entities WHERE id=?").run(from.id);
+    recordMergeCandidate(db, from.id, into, now);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
