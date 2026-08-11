@@ -399,6 +399,120 @@ await check("step 7: user answers Don't link — question dismissed, no link", a
   assert.equal(qs2.length, 0, "question should not re-appear after dismissal");
 });
 
+// ── Step 7b: Standing rule suppresses re-asking even after the review row is gone ──
+await check("step 7b: standing reconciliation_decline rule suppresses re-asking", async () => {
+  const { db: dbR, ports: portsR } = freshDb();
+  // Set up: invoice + matching card confirmation in the review band
+  const inv = makeInvoice();
+  const invDoc = seedDoc(dbR, "rule_inv", inv);
+  recordTransaction(dbR, portsR, invDoc, inv);
+
+  const card: ExtractionResult = {
+    ...makeInvoice(),
+    amount_minor: 472287,
+    doc_type: "card_confirmation",
+    payment_rail: "card",
+    counterparty_descriptor: "SWIGGY*BLR 080",
+    reference_ids: {},
+    occurred_at: "2026-08-11",
+  };
+  const cardDoc = seedDoc(dbR, "rule_card", card);
+  const matches = findMatches(dbR, card, cardDoc);
+  assert.ok(matches.length > 0, "should find a match");
+
+  const ambiguity = {
+    kind: "reconciliation-ambiguity" as const,
+    dedupeKey: `${cardDoc}|${matches[0].transaction_id}|${card.amount_minor}|${card.currency}|${card.occurred_at ?? ""}`,
+    prompt: "These look like the same purchase. Link?",
+    sourceFact: { document_id: cardDoc, transaction_id: matches[0].transaction_id },
+    predictedRule: { kind: "entity-rule" as const, payload: { rule_type: "reconcile", candidate_document_id: cardDoc, transaction_id: matches[0].transaction_id } },
+    noveltyScore: matches[0].score,
+    why: matches[0].reasons.join("; "),
+  };
+
+  // Generate the question, then dismiss with "Don't link"
+  const qs = generateLearningQuestions(dbR, portsR, { documentId: cardDoc, pipelineState: "analysing", ambiguities: [ambiguity] });
+  assert.ok(qs.length > 0, "question should be generated");
+  const result = answerLearningQuestion(dbR, portsR, Number(qs[0].question_id), "no");
+  assert.ok(result.dismissed, "question should be dismissed");
+  assert.ok(result.ruleId, "dismissal should create a standing rule");
+
+  // Verify the rule exists in learned_rules
+  const rule = dbR.prepare("SELECT kind, match_key, value, active FROM learned_rules WHERE id=?").get(result.ruleId) as { kind: string; match_key: string; value: string; active: number };
+  assert.equal(rule.kind, "reconciliation_decline", "rule kind should be reconciliation_decline");
+  assert.equal(rule.active, 1, "rule should be active");
+  assert.equal(rule.match_key, ambiguity.dedupeKey, "rule key should be the dedupe key");
+
+  // Delete the training_reviews row to simulate it being old/pruned.
+  // The standing rule should STILL suppress the question.
+  dbR.prepare("DELETE FROM training_reviews WHERE dedupe_key=?").run(ambiguity.dedupeKey);
+
+  // Re-ask: should be suppressed by the standing rule, not the dedupe key
+  const qs3 = generateLearningQuestions(dbR, portsR, { documentId: cardDoc, pipelineState: "analysing", ambiguities: [ambiguity] });
+  assert.equal(qs3.length, 0, "standing rule should suppress re-asking even without a training_reviews row");
+  dbR.close();
+});
+
+// ── Step 7c: "Later" re-asks after backoff expires ─────────────────────────
+await check("step 7c: Later re-asks after backoff expires", async () => {
+  const { db: dbL, ports: portsL } = freshDb();
+  // Set up: invoice + matching card confirmation in the review band
+  const inv = makeInvoice();
+  const invDoc = seedDoc(dbL, "later_inv", inv);
+  recordTransaction(dbL, portsL, invDoc, inv);
+
+  const card: ExtractionResult = {
+    ...makeInvoice(),
+    amount_minor: 472287,
+    doc_type: "card_confirmation",
+    payment_rail: "card",
+    counterparty_descriptor: "SWIGGY*BLR 080",
+    reference_ids: {},
+    occurred_at: "2026-08-11",
+  };
+  const cardDoc = seedDoc(dbL, "later_card", card);
+  const matches = findMatches(dbL, card, cardDoc);
+  assert.ok(matches.length > 0, "should find a match");
+
+  const ambiguity = {
+    kind: "reconciliation-ambiguity" as const,
+    dedupeKey: `${cardDoc}|${matches[0].transaction_id}|${card.amount_minor}|${card.currency}|${card.occurred_at ?? ""}`,
+    prompt: "These look like the same purchase. Link?",
+    sourceFact: { document_id: cardDoc, transaction_id: matches[0].transaction_id },
+    predictedRule: { kind: "entity-rule" as const, payload: { rule_type: "reconcile", candidate_document_id: cardDoc, transaction_id: matches[0].transaction_id } },
+    noveltyScore: matches[0].score,
+    why: matches[0].reasons.join("; "),
+  };
+
+  // Generate the question, then answer "Later"
+  const qs = generateLearningQuestions(dbL, portsL, { documentId: cardDoc, pipelineState: "analysing", ambiguities: [ambiguity] });
+  assert.ok(qs.length > 0, "question should be generated");
+  const result = answerLearningQuestion(dbL, portsL, Number(qs[0].question_id), "later");
+  assert.ok(result.deferred, "question should be deferred");
+
+  // Verify backoff_until is set
+  const review = dbL.prepare("SELECT backoff_until FROM training_reviews WHERE dedupe_key=?").get(ambiguity.dedupeKey) as { backoff_until: string };
+  assert.ok(review.backoff_until, "backoff_until should be set");
+
+  // Re-ask immediately: should be suppressed (in backoff)
+  const qs2 = generateLearningQuestions(dbL, portsL, { documentId: cardDoc, pipelineState: "analysing", ambiguities: [ambiguity] });
+  assert.equal(qs2.length, 0, "question should not re-appear during backoff");
+
+  // Advance clock past backoff (8 days later)
+  const futurePorts: Ports = {
+    ...portsL,
+    clock: {
+      now: () => new Date("2026-08-19T00:00:00.000Z"),
+      isoNow: () => "2026-08-19T00:00:00.000Z",
+    },
+  };
+
+  // Re-ask: should re-appear (backoff expired)
+  const qs3 = generateLearningQuestions(dbL, futurePorts, { documentId: cardDoc, pipelineState: "analysing", ambiguities: [ambiguity] });
+  assert.equal(qs3.length, 1, "question should re-appear after backoff expires");
+  dbL.close();
+});
+
 // ── Step 8: Drop a refund note — nets to zero ──────────────────────────────
 await check("step 8: refund creates a separate credit transaction", async () => {
   const x = makeRefund();
