@@ -21,6 +21,7 @@ import { createTokenStore } from "./gmail/token-store.js";
 import { syncGmail } from "./gmail/sync.js";
 import { createMutableProvider } from "./ai-provider.js";
 import { createEmbeddingProvider } from "./embeddings.js";
+import { createSecretStore } from "./secret-store.js";
 
 const VERSION = "2.0.0-daemon";
 
@@ -111,19 +112,47 @@ async function main() {
 
   // Settings saved from the Setup page take precedence over environment vars,
   // so a user who pastes a key into the app doesn't have to touch a shell.
+  // Non-secret settings (base URL, model, routing mode) live in app_settings;
+  // API keys go through the SecretStore (Keychain on macOS, 0600 file elsewhere)
+  // so they are never stored as plaintext in the SQLite database.
   const stored = Object.fromEntries(
     (db.prepare("SELECT key, value FROM app_settings").all() as { key: string; value: string }[])
       .map((r) => [r.key, r.value]),
   );
+
+  const secrets = await createSecretStore(ports.paths.vaultRoot());
+  ports.logger.info("secret store", { backend: secrets.backend });
+
+  // One-time migration: if API keys were previously stored as plaintext in
+  // app_settings, move them to the SecretStore and scrub them from the DB.
+  // This runs every startup but is a no-op once the migration is done.
+  for (const [dbKey, secretKey] of [
+    ["ai.api_key", "ai.api_key"],
+    ["ai.secondary.api_key", "ai.secondary.api_key"],
+  ] as const) {
+    const plaintext = stored[dbKey];
+    if (plaintext && typeof plaintext === "string" && plaintext.length > 0) {
+      await secrets.set(secretKey, plaintext);
+      db.prepare("DELETE FROM app_settings WHERE key = ?").run(dbKey);
+      ports.logger.info("migrated API key to secret store", { key: dbKey });
+    }
+  }
+
+  const aiApiKey = (await secrets.get("ai.api_key")) ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
+  const ai2ApiKey = (await secrets.get("ai.secondary.api_key")) ?? "";
 
   // Mutable so Settings changes apply immediately. See createMutableProvider:
   // this used to be a fixed provider, and saving a key did nothing until the
   // daemon was restarted.
   const ai = createMutableProvider(
     {
-      apiKey: stored["ai.api_key"] || process.env.Q2AV_AI_API_KEY || process.env.ANTHROPIC_API_KEY,
-      baseUrl: stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "https://inference.poolside.ai/v1",
-      model: stored["ai.model"] || process.env.Q2AV_MODEL || "poolside/laguna-s-2.1",
+      apiKey: aiApiKey,
+      baseUrl: stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "",
+      model: stored["ai.model"] || process.env.Q2AV_MODEL || "",
+      secondaryApiKey: ai2ApiKey,
+      secondaryBaseUrl: stored["ai.secondary.base_url"] || "",
+      secondaryModel: stored["ai.secondary.model"] || "",
+      routingMode: (stored["ai.routing_mode"] as "auto" | "primary_only" | "vision_fallback") ?? "auto",
     },
     ports.logger,
   );
@@ -185,6 +214,8 @@ async function main() {
     // Browser dev UI is opt-in: it hands API access to any local process that
     // can read the page.
     devUi: process.env.Q2AV_DEV_UI === "1",
+    // Secret store for AI API keys (Keychain on macOS, 0600 file elsewhere).
+    secrets,
   });
   await api.listen();
   ports.logger.info(`Core API listening`, { url: `http://127.0.0.1:${PORT}` });

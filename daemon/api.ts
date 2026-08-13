@@ -19,6 +19,7 @@ import { deriveGmailAddress } from "./gmail/gmail-model.js";
 import { pageCapability, renderPage } from "./rasterise.js";
 import type { GmailOAuth } from "./gmail/oauth.js";
 import type { MutableAiProvider } from "./ai-provider.js";
+import type { SecretStore } from "./secret-store.js";
 import { SCHEMA_VERSION, normaliseName } from "./schema.js";
 import type { ClaimSubject } from "./schema.js";
 import {
@@ -100,6 +101,8 @@ export interface ApiOptions {
   gmail?: { oauth: GmailOAuth; sync: () => Promise<unknown> };
   /** Embedding provider for hybrid search (work order 04 §Track B). */
   embed?: EmbeddingProvider;
+  /** Secret store for AI API keys (Keychain on macOS, 0600 file elsewhere). */
+  secrets?: SecretStore;
 }
 
 /**
@@ -143,6 +146,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
     };
   const dropDir = opts.dropDir ?? "";
   const gmail = opts.gmail;
+  const secrets: SecretStore | undefined = opts.secrets;
 
   /**
    * Active jurisdiction pack. Re-read per request so switching packs from the
@@ -1151,9 +1155,11 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
 
       // ── settings (Setup page) ────────────────────────────────────────────
-      // AI provider config lives in app_settings so it survives restarts and
-      // can be changed from any client. The API key is NEVER returned — only
-      // whether one is set, and its last 4 characters for recognition.
+      // Non-secret AI config (base URL, model, routing mode) lives in
+      // app_settings. API keys go through the SecretStore (Keychain on macOS,
+      // 0600 file elsewhere) so they are never stored as plaintext in the
+      // SQLite database. The API key is NEVER returned — only whether one is
+      // set, and its last 4 characters for recognition.
       if (p === "/v1/settings" && req.method === "GET") {
         const rows = db.prepare("SELECT key, value FROM app_settings").all() as {
           key: string;
@@ -1161,22 +1167,26 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }[];
         const kv = Object.fromEntries(rows.map((r) => [r.key, r.value]));
         const envKey = process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
-        const storedKey = kv["ai.api_key"] ?? "";
-        const effective = storedKey || envKey;
+        const secretKey = secrets ? (await secrets.get("ai.api_key")) ?? "" : "";
+        const effective = secretKey || envKey;
         // Work order 07 §D2: secondary model config. Blank secondary is valid.
-        const secondaryKey = kv["ai.secondary.api_key"] ?? "";
+        const secondaryKey = secrets ? (await secrets.get("ai.secondary.api_key")) ?? "" : "";
         const secondaryBaseUrl = kv["ai.secondary.base_url"] ?? "";
         const secondaryModel = kv["ai.secondary.model"] ?? "";
         const routingMode = kv["ai.routing_mode"] ?? "auto";
         // Ask the token store, not a flag — the tokens are the truth.
         const gmailConnected = gmail ? !!(await gmail.oauth.getTokens()) : false;
+        const maskKey = (k: string) => k.length <= 8
+          ? "********"
+          : `${k.slice(0, 4)}${"*".repeat(7)}${k.slice(-4)}`;
         return send(res, 200, {
           ai: {
             base_url: kv["ai.base_url"] ?? "",
-            model: kv["ai.model"] ?? process.env.Q2AV_MODEL ?? "poolside/laguna-s-2.1",
+            model: kv["ai.model"] ?? process.env.Q2AV_MODEL ?? "",
             api_key_set: !!effective,
             api_key_hint: effective ? `…${effective.slice(-4)}` : "",
-            api_key_source: storedKey ? "settings" : envKey ? "environment" : "none",
+            api_key_mask: effective ? maskKey(effective) : "",
+            api_key_source: secretKey ? "keychain" : envKey ? "environment" : "none",
             available: ai.available,
             active_model: ai.model,
             // Work order 07 §D1: secondary (vision/fallback) model.
@@ -1185,6 +1195,8 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               model: secondaryModel,
               api_key_set: !!secondaryKey,
               api_key_hint: secondaryKey ? `…${secondaryKey.slice(-4)}` : "",
+              api_key_mask: secondaryKey ? maskKey(secondaryKey) : "",
+              api_key_source: secondaryKey ? "keychain" : "none",
               configured: !!(secondaryModel && secondaryKey),
             },
             routing_mode: routingMode,
@@ -1237,14 +1249,16 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const del = db.prepare("DELETE FROM app_settings WHERE key = ?");
         const saved: string[] = [];
         const cleared: string[] = [];
+
+        // Non-secret fields go into app_settings (SQLite). Secret fields
+        // (API keys) go through the SecretStore (Keychain / 0600 file) so
+        // they are never stored as plaintext in the database.
         for (const [field, key] of [
           ["base_url", "ai.base_url"],
           ["model", "ai.model"],
-          ["api_key", "ai.api_key"],
           // Work order 07 §D2: secondary model fields.
           ["secondary_base_url", "ai.secondary.base_url"],
           ["secondary_model", "ai.secondary.model"],
-          ["secondary_api_key", "ai.secondary.api_key"],
           ["routing_mode", "ai.routing_mode"],
           ["jurisdiction", "jurisdiction.id"],
           ["gmail_local_part", "gmail.local_part"],
@@ -1263,26 +1277,44 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           }
         }
 
+        // API keys: route through the SecretStore, not app_settings.
+        for (const [field, secretKey] of [
+          ["api_key", "ai.api_key"],
+          ["secondary_api_key", "ai.secondary.api_key"],
+        ] as const) {
+          const v = b[field];
+          if (typeof v !== "string") continue;
+          if (v.length === 0) {
+            if (secrets) await secrets.remove(secretKey);
+            cleared.push(field);
+          } else {
+            if (secrets) await secrets.set(secretKey, v);
+            saved.push(field);
+          }
+        }
+
         // Apply immediately rather than telling the user to restart. Re-read
-        // from the database so the provider reflects committed state, not the
-        // request body (which may have set only some of the three fields).
+        // from the database and secret store so the provider reflects
+        // committed state, not the request body.
         const now = Object.fromEntries(
           (db.prepare("SELECT key, value FROM app_settings").all() as {
             key: string;
             value: string;
           }[]).map((r) => [r.key, r.value]),
         );
+        const nowApiKey = secrets ? (await secrets.get("ai.api_key")) ?? "" : "";
+        const nowSecKey = secrets ? (await secrets.get("ai.secondary.api_key")) ?? "" : "";
         const aiTouched = [...saved, ...cleared].some((f) =>
           ["api_key", "base_url", "model", "secondary_api_key", "secondary_base_url", "secondary_model", "routing_mode"].includes(f),
         );
         if (aiTouched) {
           ai.reconfigure({
             // "" (cleared) must stay "" so it does not fall back to the env var.
-            apiKey: now["ai.api_key"] ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY,
-            baseUrl: now["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "https://inference.poolside.ai/v1",
-            model: now["ai.model"] || process.env.Q2AV_MODEL || "poolside/laguna-s-2.1",
+            apiKey: nowApiKey || process.env.Q2AV_AI_API_KEY || process.env.ANTHROPIC_API_KEY,
+            baseUrl: now["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "",
+            model: now["ai.model"] || process.env.Q2AV_MODEL || "",
             // Work order 07 §D2: secondary config.
-            secondaryApiKey: now["ai.secondary.api_key"] ?? "",
+            secondaryApiKey: nowSecKey,
             secondaryBaseUrl: now["ai.secondary.base_url"] ?? "",
             secondaryModel: now["ai.secondary.model"] ?? "",
             routingMode: (now["ai.routing_mode"] as "auto" | "primary_only" | "vision_fallback") ?? "auto",
@@ -1320,16 +1352,60 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
         if (which === "secondary") {
           baseUrl = kv["ai.secondary.base_url"] ?? "";
-          apiKey = kv["ai.secondary.api_key"] ?? "";
+          apiKey = secrets ? (await secrets.get("ai.secondary.api_key")) ?? "" : "";
           model = kv["ai.secondary.model"] ?? "";
         } else {
           baseUrl = kv["ai.base_url"] ?? process.env.Q2AV_AI_BASE_URL ?? "";
-          apiKey = kv["ai.api_key"] ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
-          model = kv["ai.model"] ?? process.env.Q2AV_MODEL ?? "poolside/laguna-s-2.1";
+          apiKey = secrets ? (await secrets.get("ai.api_key")) ?? "" : "";
+          apiKey = apiKey || process.env.Q2AV_AI_API_KEY || process.env.ANTHROPIC_API_KEY || "";
+          model = kv["ai.model"] ?? process.env.Q2AV_MODEL ?? "";
         }
 
         const result = await testProvider({ baseUrl, apiKey, model, which: which as "primary" | "secondary" });
         return send(res, 200, result);
+      }
+
+      // Fetch available models from a provider's /v1/models endpoint.
+      // The UI uses this to populate a model dropdown after the user selects
+      // a provider and enters an API key. The call is proxied through the
+      // daemon so the key never leaves the server and CORS is not an issue.
+      if (p === "/v1/settings/models" && req.method === "POST") {
+        const b = await readJson(req);
+        const baseUrl = String(b.base_url ?? "").trim().replace(/\/$/, "");
+        let apiKey = String(b.api_key ?? "").trim();
+        // If the UI sent no key (the user didn't change the mask), fall back
+        // to the stored key from the secret store.
+        if (!apiKey && secrets) {
+          apiKey = (await secrets.get("ai.api_key")) ?? "";
+        }
+        if (!baseUrl) return send(res, 400, { error: "base_url required" });
+        if (!apiKey) return send(res, 200, { models: [], error: "no_api_key" });
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 15000);
+          const res2 = await fetch(`${baseUrl}/models`, {
+            headers: { authorization: `Bearer ${apiKey}` },
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          if (res2.status === 401 || res2.status === 403) {
+            return send(res, 200, { models: [], error: "auth_failed" });
+          }
+          if (!res2.ok) {
+            return send(res, 200, { models: [], error: `http_${res2.status}` });
+          }
+          const data = await res2.json() as Record<string, unknown>;
+          // OpenAI-compatible /v1/models returns { data: [{ id, ... }, ...] }.
+          const rawModels = Array.isArray(data.data) ? data.data : Array.isArray(data.models) ? data.models : [];
+          const models = rawModels
+            .map((m: Record<string, unknown>) => String(m.id ?? m.name ?? "").trim())
+            .filter((id: string) => id.length > 0)
+            .sort();
+          return send(res, 200, { models });
+        } catch (err) {
+          const msg = (err as Error)?.name === "AbortError" ? "timeout" : String((err as Error)?.message ?? err);
+          return send(res, 200, { models: [], error: msg });
+        }
       }
 
       // ── people ───────────────────────────────────────────────────────────
@@ -1848,15 +1924,21 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
              ORDER BY times_applied DESC, id DESC LIMIT 50`,
           )
           .all();
+        const answeredRows = db
+          .prepare(
+            `SELECT id, question, trigger, answer, answered_at, created_at
+             FROM training_reviews
+             WHERE answered_at IS NOT NULL
+             ORDER BY answered_at DESC LIMIT 50`,
+          )
+          .all() as Record<string, unknown>[];
         return send(res, 200, {
           enabled: isLearningEnabled(db),
           budget: questionBudget(db),
           questions: open,
           rules,
-          answered: (
-            db.prepare("SELECT COUNT(*) n FROM training_reviews WHERE answered_at IS NOT NULL")
-              .get() as { n: number }
-          ).n,
+          answered: answeredRows.length,
+          answered_questions: answeredRows,
         });
       }
 
@@ -2109,7 +2191,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                            OR lower(COALESCE(t.impact_bucket,'')) LIKE '%invest%')`;
           const bucketClause =
             bucket === "income"
-              ? `t.direction='in' AND t.status <> 'scheduled' AND NOT ${INVEST}`
+              ? `t.direction='in' AND t.status <> 'scheduled'`
               : bucket === "spending"
                 ? `t.direction='out' AND t.status <> 'scheduled' AND NOT ${INVEST}`
                 : bucket === "investments"
@@ -3052,13 +3134,16 @@ export function snapshot(
     period: { key: period.key, label: period.label, from: period.from, to: period.to },
     fy_key: period.key,
     spending_minor: sum("out", false) - refundsNetted,
-    income_minor: sum("in", false) - refundsNetted,
+    // Investment income (dividends, redemptions) is income, not negative
+    // investments. It is added to the income total so the Investments card
+    // only reflects outbound purchases.
+    income_minor: sum("in", false) + divested - refundsNetted,
     transfers_minor: plainSum("transfer"),
     investments_minor: invested,
     investments_out_minor: invested,
     investments_in_minor: divested,
-    investments_net_minor: invested - divested,
-    income_documents: docsFor("in", false),
+    investments_net_minor: invested,
+    income_documents: docsFor("in", false) + docsFor("in", true),
     spending_documents: docsFor("out", false),
     investment_documents: docsFor("out", true),
     // The totals above are expressed in this currency. Individual rows keep
@@ -3140,11 +3225,16 @@ async function testProvider(cfg: {
     // Use a minimal, harmless request to test the provider. The prompt is a
     // fixed "say hello" — never vault content. We test structured output by
     // requesting a simple JSON response.
-    const url = cfg.baseUrl
-      ? `${cfg.baseUrl.replace(/\/$/, "")}/v1/chat/completions`
-      : "https://api.anthropic.com/v1/messages";
-
-    const isAnthropic = url.includes("anthropic.com");
+    // The OpenAI SDK appends /chat/completions to the base URL; the test
+    // must match that, NOT append /v1/chat/completions (which doubles the
+    // /v1 when the user's base URL already ends in /v1 — the root cause of
+    // the spurious "model_not_found" 404s).
+    const isAnthropic = cfg.baseUrl
+      ? cfg.baseUrl.includes("anthropic.com")
+      : true;
+    const url = isAnthropic
+      ? `${(cfg.baseUrl || "https://api.anthropic.com").replace(/\/$/, "")}/v1/messages`
+      : `${cfg.baseUrl.replace(/\/$/, "")}/chat/completions`;
     const headers: Record<string, string> = {
       "content-type": "application/json",
       authorization: `Bearer ${cfg.apiKey}`,

@@ -159,7 +159,11 @@ export function createAnthropicProvider(cfg: AiConfig, logger: Logger): AiProvid
     return nullAiProvider;
   }
 
-  const model = cfg.model ?? process.env.Q2AV_MODEL ?? "poolside/laguna-s-2.1";
+  const model = cfg.model ?? process.env.Q2AV_MODEL ?? "";
+  if (!model) {
+    logger.warn("no AI model configured — P2 analysis will be skipped");
+    return nullAiProvider;
+  }
   const client = new Anthropic({
     apiKey,
     ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}),
@@ -225,7 +229,11 @@ export function createOpenAiProvider(cfg: AiConfig, logger: Logger): AiProvider 
     return nullAiProvider;
   }
 
-  const model = cfg.model ?? process.env.Q2AV_MODEL ?? "poolside/laguna-s-2.1";
+  const model = cfg.model ?? process.env.Q2AV_MODEL ?? "";
+  if (!model) {
+    logger.warn("no AI model configured — P2 analysis will be skipped");
+    return nullAiProvider;
+  }
   const client = new OpenAI({
     apiKey,
     ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}),

@@ -51,7 +51,7 @@ check("reconfigure with a key flips available WITHOUT a restart", () => {
   delete process.env.ANTHROPIC_API_KEY;
   const ai = createMutableProvider({}, quietLogger);
   eq(ai.available, false, "before");
-  ai.reconfigure({ apiKey: "sk-ant-test-key-not-real" });
+  ai.reconfigure({ apiKey: "sk-ant-test-key-not-real", model: "claude-sonnet-4-5" });
   eq(ai.available, true, "after reconfigure");
   if (saved !== undefined) process.env.ANTHROPIC_API_KEY = saved;
 });
@@ -59,7 +59,7 @@ check("reconfigure with a key flips available WITHOUT a restart", () => {
 check("clearing the key disables AI again", () => {
   const saved = process.env.ANTHROPIC_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;
-  const ai = createMutableProvider({ apiKey: "sk-ant-test-key-not-real" }, quietLogger);
+  const ai = createMutableProvider({ apiKey: "sk-ant-test-key-not-real", model: "claude-sonnet-4-5" }, quietLogger);
   eq(ai.available, true, "before clear");
   ai.reconfigure({ apiKey: "" });
   eq(ai.available, false, "after clear");
@@ -81,7 +81,7 @@ check("an explicitly cleared key does NOT fall back to the environment", () => {
 check("an UNSET key still falls back to the environment", () => {
   const saved = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "sk-ant-from-the-shell";
-  const ai = createMutableProvider({}, quietLogger);
+  const ai = createMutableProvider({ model: "claude-sonnet-4-5" }, quietLogger);
   eq(ai.available, true, "undefined means 'not configured here', so env applies");
   if (saved === undefined) delete process.env.ANTHROPIC_API_KEY;
   else process.env.ANTHROPIC_API_KEY = saved;
@@ -109,9 +109,9 @@ check("a saved key is remembered across a reopen of the same store", () => {
 check("clearing removes the row entirely, not just blanks it", () => {
   const db = freshDb();
   const set = db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES(?,?)");
-  set.run("ai.api_key", "sk-ant-remembered");
-  db.prepare("DELETE FROM app_settings WHERE key=?").run("ai.api_key");
-  const back = db.prepare("SELECT value FROM app_settings WHERE key='ai.api_key'").get();
+  set.run("ai.base_url", "https://example.com/v1");
+  db.prepare("DELETE FROM app_settings WHERE key=?").run("ai.base_url");
+  const back = db.prepare("SELECT value FROM app_settings WHERE key='ai.base_url'").get();
   eq(back, undefined, "row should be gone");
   db.close();
 });
@@ -132,7 +132,7 @@ function seedVault(db: ReturnType<typeof openDatabase>) {
     `INSERT INTO transactions (id, direction, amount_minor, currency, occurred_at, fy_key, created_at)
      VALUES ('txn_1','out',1000,'INR',?,'2026-27',?)`,
   ).run(now, now);
-  db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES('ai.api_key','sk-keep-me')").run();
+  db.prepare("INSERT OR REPLACE INTO app_settings(key,value) VALUES('ai.base_url','https://example.com/v1')").run();
 }
 
 // Mirrors the endpoint's table list so the test fails if the two drift apart.
@@ -174,24 +174,24 @@ check("ledger reset clears documents and transactions", () => {
   db.close();
 });
 
-check("ledger reset KEEPS the API key", () => {
+check("ledger reset KEEPS non-secret settings", () => {
   const db = freshDb();
   seedVault(db);
   resetLedger(db, false);
-  const k = db.prepare("SELECT value FROM app_settings WHERE key='ai.api_key'").get() as
+  const k = db.prepare("SELECT value FROM app_settings WHERE key='ai.base_url'").get() as
     | { value: string }
     | undefined;
-  eq(k?.value, "sk-keep-me", "credentials must survive a ledger reset");
+  eq(k?.value, "https://example.com/v1", "non-secret settings must survive a ledger reset");
   db.close();
 });
 
-check("factory reset also clears the API key", () => {
+check("factory reset also clears non-secret settings", () => {
   const db = freshDb();
   seedVault(db);
   resetLedger(db, true);
   eq(n(db, "documents"), 0, "documents");
-  const k = db.prepare("SELECT value FROM app_settings WHERE key='ai.api_key'").get();
-  eq(k, undefined, "credentials must be gone after a factory reset");
+  const k = db.prepare("SELECT value FROM app_settings WHERE key='ai.base_url'").get();
+  eq(k, undefined, "settings must be gone after a factory reset");
   db.close();
 });
 
