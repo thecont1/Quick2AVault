@@ -1160,7 +1160,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           value: string;
         }[];
         const kv = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-        const envKey = process.env.ANTHROPIC_API_KEY ?? "";
+        const envKey = process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
         const storedKey = kv["ai.api_key"] ?? "";
         const effective = storedKey || envKey;
         // Work order 07 §D2: secondary model config. Blank secondary is valid.
@@ -1173,7 +1173,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, {
           ai: {
             base_url: kv["ai.base_url"] ?? "",
-            model: kv["ai.model"] ?? process.env.Q2AV_MODEL ?? "claude-sonnet-5",
+            model: kv["ai.model"] ?? process.env.Q2AV_MODEL ?? "poolside/laguna-s-2.1",
             api_key_set: !!effective,
             api_key_hint: effective ? `…${effective.slice(-4)}` : "",
             api_key_source: storedKey ? "settings" : envKey ? "environment" : "none",
@@ -1278,9 +1278,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         if (aiTouched) {
           ai.reconfigure({
             // "" (cleared) must stay "" so it does not fall back to the env var.
-            apiKey: now["ai.api_key"] ?? process.env.ANTHROPIC_API_KEY,
-            baseUrl: now["ai.base_url"] || process.env.Q2AV_AI_BASE_URL,
-            model: now["ai.model"] || process.env.Q2AV_MODEL,
+            apiKey: now["ai.api_key"] ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY,
+            baseUrl: now["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "https://inference.poolside.ai/v1",
+            model: now["ai.model"] || process.env.Q2AV_MODEL || "poolside/laguna-s-2.1",
             // Work order 07 §D2: secondary config.
             secondaryApiKey: now["ai.secondary.api_key"] ?? "",
             secondaryBaseUrl: now["ai.secondary.base_url"] ?? "",
@@ -1324,8 +1324,8 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           model = kv["ai.secondary.model"] ?? "";
         } else {
           baseUrl = kv["ai.base_url"] ?? process.env.Q2AV_AI_BASE_URL ?? "";
-          apiKey = kv["ai.api_key"] ?? process.env.ANTHROPIC_API_KEY ?? "";
-          model = kv["ai.model"] ?? process.env.Q2AV_MODEL ?? "claude-sonnet-5";
+          apiKey = kv["ai.api_key"] ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
+          model = kv["ai.model"] ?? process.env.Q2AV_MODEL ?? "poolside/laguna-s-2.1";
         }
 
         const result = await testProvider({ baseUrl, apiKey, model, which: which as "primary" | "secondary" });

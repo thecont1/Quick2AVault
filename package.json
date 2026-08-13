@@ -12,6 +12,9 @@
     "lint": "eslint daemon --ext .ts",
     "type-check": "tsc --noEmit -p daemon/tsconfig.json",
     "format": "oxfmt daemon",
+    "morph:search": "tsx scripts/morph/warp-grep.ts",
+    "morph:edit": "tsx scripts/morph/fast-edit.ts",
+    "morph:dev-ui-test": "tsx scripts/morph/dev-ui-test.ts",
     "start": "./start.sh",
     "start:full": "./start.sh --full",
     "stop": "./start.sh --stop",
@@ -25,7 +28,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
     "@firecrawl/anydoc": "0.1.6",
-    "@modelcontextprotocol/sdk": "^1.30.0"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "openai": "^5.7.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",
@@ -34,6 +38,7 @@
     "@typescript-eslint/parser": "^8.18.0",
     "eslint": "^9.39.2",
     "eslint-plugin-import": "^2.31.0",
+    "@morphllm/morphsdk": "^0.2.191",
     "oxfmt": "^0.26.0",
     "tsx": "^4.20.5",
     "typescript": "^5.5.3"

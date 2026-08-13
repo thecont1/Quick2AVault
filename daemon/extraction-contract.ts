@@ -261,6 +261,24 @@ Empty string when the document states no currency. NEVER default to a currency t
   },
 } as const;
 
+/**
+ * OpenAI function-calling format for the same extraction schema.
+ *
+ * The OpenAI-compatible provider (poolside/laguna-s-2.1, etc.) expects tools
+ * in the `{ type: "function", function: { name, description, parameters } }`
+ * shape rather than Anthropic's `{ name, description, input_schema }`. This
+ * wrapper derives the OpenAI shape from EXTRACTION_TOOL_SCHEMA so the two can
+ * never drift.
+ */
+export const OPENAI_TOOL = {
+  type: "function",
+  function: {
+    name: EXTRACTION_TOOL_SCHEMA.name,
+    description: EXTRACTION_TOOL_SCHEMA.description,
+    parameters: EXTRACTION_TOOL_SCHEMA.input_schema,
+  },
+} as const;
+
 export const EXTRACTION_SYSTEM_PROMPT = `You extract structured financial facts from a document's canonical markdown.
 
 Rules that matter more than anything else:

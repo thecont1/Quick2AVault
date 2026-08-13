@@ -121,9 +121,9 @@ async function main() {
   // daemon was restarted.
   const ai = createMutableProvider(
     {
-      apiKey: stored["ai.api_key"] || process.env.ANTHROPIC_API_KEY,
-      baseUrl: stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL,
-      model: stored["ai.model"] || process.env.Q2AV_MODEL,
+      apiKey: stored["ai.api_key"] || process.env.Q2AV_AI_API_KEY || process.env.ANTHROPIC_API_KEY,
+      baseUrl: stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "https://inference.poolside.ai/v1",
+      model: stored["ai.model"] || process.env.Q2AV_MODEL || "poolside/laguna-s-2.1",
     },
     ports.logger,
   );

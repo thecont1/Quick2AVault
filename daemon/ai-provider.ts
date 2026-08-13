@@ -7,11 +7,13 @@
  * corrupting the ledger.
  */
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 
 import type { Logger } from "./ports.js";
 import {
   EXTRACTION_SYSTEM_PROMPT,
   EXTRACTION_TOOL_SCHEMA,
+  OPENAI_TOOL,
   EXTRACTION_VERSION,
   type ExtractionResult,
 } from "./extraction-contract.js";
@@ -32,6 +34,10 @@ export interface AiConfig {
   secondaryBaseUrl?: string;
   secondaryModel?: string;
   routingMode?: "auto" | "primary_only" | "vision_fallback";
+  /** Force "anthropic" or "openai". When omitted the provider is auto-detected
+   *  from baseUrl: anthropic.com → Anthropic, everything else → OpenAI-compatible.
+   */
+  providerType?: "anthropic" | "openai";
 }
 
 /** No-op provider so P0/P1 keep working with no AI configured (plan §8). */
@@ -62,7 +68,7 @@ export interface MutableAiProvider extends AiProvider {
 }
 
 export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiProvider {
-  let inner = createAnthropicProvider(cfg, logger);
+  let inner = createProvider(cfg, logger);
   // Work order 07 §D1: secondary (vision/fallback) provider. Blank secondary
   // is valid — the user may configure only a primary model.
   let secondary = createSecondaryProvider(cfg, logger);
@@ -82,7 +88,7 @@ export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiP
       return inner.extract(markdown, filename);
     },
     reconfigure(next: AiConfig) {
-      inner = createAnthropicProvider(next, logger);
+      inner = createProvider(next, logger);
       secondary = createSecondaryProvider(next, logger);
       routingMode = next.routingMode ?? "auto";
       logger.info("ai provider reconfigured", {
@@ -106,27 +112,54 @@ function createSecondaryProvider(cfg: AiConfig, logger: Logger): AiProvider {
   if (!apiKey || !cfg.secondaryModel) {
     return nullAiProvider;
   }
-  return createAnthropicProvider(
+  return createProvider(
     {
       apiKey,
       baseUrl: cfg.secondaryBaseUrl || cfg.baseUrl,
       model: cfg.secondaryModel,
+      providerType: cfg.providerType,
     },
     logger,
   );
 }
 
+/** Provider-agnostic key resolution. Prefers Q2AV_AI_API_KEY; falls back to
+ * ANTHROPIC_API_KEY for existing setups. An explicitly empty string ("") means
+ * "cleared" and must NOT fall through to the env var.
+ */
+function resolveApiKey(cfg: AiConfig): string {
+  if (cfg.apiKey !== undefined) return cfg.apiKey;
+  return process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
+}
+
+/**
+ * Dispatch to the right provider based on explicit override or URL detection.
+ * anthropic.com → Anthropic Messages API; anything else → OpenAI-compatible
+ * /v1/chat/completions.
+ */
+export function createProvider(cfg: AiConfig, logger: Logger): AiProvider {
+  // Explicit override wins. When omitted, auto-detect: a base URL
+  // containing "anthropic.com" → Anthropic; any other URL → OpenAI-compatible;
+  // no URL → Anthropic (legacy default for users who just paste a key).
+  let isAnthropic: boolean;
+  if (cfg.providerType === "anthropic") isAnthropic = true;
+  else if (cfg.providerType === "openai") isAnthropic = false;
+  else if (cfg.baseUrl) isAnthropic = cfg.baseUrl.includes("anthropic.com");
+  else isAnthropic = true;
+
+  return isAnthropic
+    ? createAnthropicProvider(cfg, logger)
+    : createOpenAiProvider(cfg, logger);
+}
+
 export function createAnthropicProvider(cfg: AiConfig, logger: Logger): AiProvider {
-  // An explicitly empty string means "cleared", and must NOT fall through to
-  // the environment variable — otherwise clearing the key in Settings would
-  // silently re-enable a key from the shell the daemon happened to inherit.
-  const apiKey = (cfg.apiKey !== undefined ? cfg.apiKey : process.env.ANTHROPIC_API_KEY) ?? "";
+  const apiKey = resolveApiKey(cfg);
   if (!apiKey) {
     logger.warn("no AI key configured — P2 analysis will be skipped");
     return nullAiProvider;
   }
 
-  const model = cfg.model ?? process.env.Q2AV_MODEL ?? "claude-sonnet-5";
+  const model = cfg.model ?? process.env.Q2AV_MODEL ?? "poolside/laguna-s-2.1";
   const client = new Anthropic({
     apiKey,
     ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}),
@@ -171,6 +204,63 @@ export function createAnthropicProvider(cfg: AiConfig, logger: Logger): AiProvid
           return null;
         }
         return normalise(block.input as Record<string, unknown>);
+      } catch (err) {
+        logger.error("extraction failed", { filename, err: (err as Error)?.message });
+        return null;
+      }
+    },
+  };
+}
+
+/**
+ * OpenAI-compatible provider for any endpoint that speaks the
+ * /v1/chat/completions protocol with function-calling tools (Poolside,
+ * OpenRouter, etc.). Same extraction schema, same truncation, same
+ * normalisation — just a different wire format.
+ */
+export function createOpenAiProvider(cfg: AiConfig, logger: Logger): AiProvider {
+  const apiKey = resolveApiKey(cfg);
+  if (!apiKey) {
+    logger.warn("no AI key configured — P2 analysis will be skipped");
+    return nullAiProvider;
+  }
+
+  const model = cfg.model ?? process.env.Q2AV_MODEL ?? "poolside/laguna-s-2.1";
+  const client = new OpenAI({
+    apiKey,
+    ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}),
+  });
+
+  return {
+    available: true,
+    model,
+    async extract(markdown: string, filename: string): Promise<ExtractionResult | null> {
+      const text =
+        markdown.length > 24000
+          ? `${markdown.slice(0, 16000)}\n\n[...truncated...]\n\n${markdown.slice(-8000)}`
+          : markdown;
+
+      try {
+        const res = await client.chat.completions.create({
+          model,
+          max_tokens: cfg.maxTokens ?? 8192,
+          messages: [
+            {
+              role: "user",
+              content: `Document filename: ${filename}\n\nCanonical markdown:\n\n${text}`,
+            },
+          ],
+          tools: [OPENAI_TOOL],
+          tool_choice: { type: "function", function: { name: "record_extraction" } },
+        });
+
+        const toolCall = res.choices[0]?.message?.tool_calls?.[0];
+        if (!toolCall || toolCall.type !== "function" || !toolCall.function?.arguments) {
+          logger.warn("extraction: no function tool_call returned", { filename });
+          return null;
+        }
+        const parsed = JSON.parse(toolCall.function.arguments);
+        return normalise(parsed as Record<string, unknown>);
       } catch (err) {
         logger.error("extraction failed", { filename, err: (err as Error)?.message });
         return null;
