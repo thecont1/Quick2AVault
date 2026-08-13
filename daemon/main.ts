@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { createRequire } from "node:module";
 
 import { createPorts } from "./adapters.js";
 import { openDatabase } from "./schema.js";
@@ -23,7 +24,17 @@ import { createMutableProvider } from "./ai-provider.js";
 import { createEmbeddingProvider } from "./embeddings.js";
 import { createSecretStore } from "./secret-store.js";
 
-const VERSION = "2.0.0-daemon";
+// Auto-derive the version from package.json so it stays in sync without
+// manual edits. Bump package.json's "version" field and the daemon follows.
+const require = createRequire(import.meta.url);
+const VERSION = (() => {
+  try {
+    const pkg = require("../../package.json");
+    return `${pkg.version}-daemon`;
+  } catch {
+    return "2.0.0-daemon";
+  }
+})();
 
 /**
  * Files a real user's Drop folder accumulates that are not documents.
@@ -181,11 +192,11 @@ async function main() {
   // before and the endpoints answer 501 with instructions, rather than the
   // feature silently pretending to work.
   const creds = loadGoogleCredentials(db, ports.paths.vaultRoot(), ports.logger);
-  let gmail: { oauth: GmailOAuth; sync: () => Promise<unknown> } | undefined;
+  let gmail: { oauth: GmailOAuth; sync: (opts?: { afterDate?: string; force?: boolean }) => Promise<unknown> } | undefined;
   if (creds) {
     const store = await createTokenStore(ports.paths.vaultRoot());
     const oauth = new GmailOAuth(creds.clientId, creds.clientSecret, "gmail", store, ports.logger);
-    gmail = { oauth, sync: () => syncGmail(db, ports, oauth) };
+    gmail = { oauth, sync: (opts?: { afterDate?: string; force?: boolean }) => syncGmail(db, ports, oauth, opts) };
     ports.logger.info("gmail dropbox ready", {
       credentials: creds.source,
       client_id: `${creds.clientId.slice(0, 12)}…`,

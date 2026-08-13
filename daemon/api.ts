@@ -98,7 +98,7 @@ export interface ApiOptions {
   /** Serve the browser dev UI at `/`. Off unless Q2AV_DEV_UI=1. */
   devUi?: boolean;
   /** Gmail dropbox, present only when Google OAuth credentials are set. */
-  gmail?: { oauth: GmailOAuth; sync: () => Promise<unknown> };
+  gmail?: { oauth: GmailOAuth; sync: (opts?: { afterDate?: string; force?: boolean }) => Promise<unknown> };
   /** Embedding provider for hybrid search (work order 04 §Track B). */
   embed?: EmbeddingProvider;
   /** Secret store for AI API keys (Keychain on macOS, 0600 file elsewhere). */
@@ -1179,6 +1179,27 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const maskKey = (k: string) => k.length <= 8
           ? "********"
           : `${k.slice(0, 4)}${"*".repeat(7)}${k.slice(-4)}`;
+        // Per-provider key inventory: check the secret store for each known
+        // provider so the UI can show which providers have saved keys and
+        // swap the mask when the user switches providers.
+        const knownProviderIds = [
+          "alibaba", "anthropic", "groq", "kimi", "minimax", "mimo",
+          "openai", "openrouter", "perplexity", "poolside", "together", "custom",
+        ];
+        const providerKeys: Record<string, { set: boolean; mask: string }> = {};
+        if (secrets) {
+          for (const pid of knownProviderIds) {
+            const k = await secrets.get(`ai.api_key.${pid}`);
+            providerKeys[pid] = k
+              ? { set: true, mask: maskKey(k) }
+              : { set: false, mask: "" };
+          }
+          // Also check secondary per-provider keys.
+          for (const pid of knownProviderIds) {
+            const k = await secrets.get(`ai.secondary_api_key.${pid}`);
+            if (k) providerKeys[`secondary:${pid}`] = { set: true, mask: maskKey(k) };
+          }
+        }
         return send(res, 200, {
           ai: {
             base_url: kv["ai.base_url"] ?? "",
@@ -1187,6 +1208,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             api_key_hint: effective ? `…${effective.slice(-4)}` : "",
             api_key_mask: effective ? maskKey(effective) : "",
             api_key_source: secretKey ? "keychain" : envKey ? "environment" : "none",
+            provider_keys: providerKeys,
             available: ai.available,
             active_model: ai.model,
             // Work order 07 §D1: secondary (vision/fallback) model.
@@ -1278,17 +1300,29 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
 
         // API keys: route through the SecretStore, not app_settings.
-        for (const [field, secretKey] of [
-          ["api_key", "ai.api_key"],
-          ["secondary_api_key", "ai.secondary.api_key"],
+        // Keys are stored per-provider (ai.api_key.<provider_id>) so switching
+        // providers remembers each key. The active key (ai.api_key) is also
+        // set/cleared so the AI provider can use it immediately.
+        const primPid = typeof b.api_key_provider === "string" ? b.api_key_provider : "";
+        const secPid = typeof b.secondary_api_key_provider === "string" ? b.secondary_api_key_provider : "";
+
+        for (const [field, activeKey, pid] of [
+          ["api_key", "ai.api_key", primPid],
+          ["secondary_api_key", "ai.secondary.api_key", secPid],
         ] as const) {
           const v = b[field];
           if (typeof v !== "string") continue;
           if (v.length === 0) {
-            if (secrets) await secrets.remove(secretKey);
+            if (secrets) {
+              await secrets.remove(activeKey);
+              if (pid) await secrets.remove(`${activeKey}.${pid}`);
+            }
             cleared.push(field);
           } else {
-            if (secrets) await secrets.set(secretKey, v);
+            if (secrets) {
+              await secrets.set(activeKey, v);
+              if (pid) await secrets.set(`${activeKey}.${pid}`, v);
+            }
             saved.push(field);
           }
         }
@@ -1887,8 +1921,11 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
       if (p === "/v1/gmail/sync" && req.method === "POST") {
         if (!gmail) return send(res, 501, { error: "Gmail is not configured on this daemon" });
+        const b = await readJson(req);
+        const afterDate = typeof b.after_date === "string" ? b.after_date : undefined;
+        const force = !!b.force;
         try {
-          return send(res, 200, await gmail.sync());
+          return send(res, 200, await gmail.sync({ afterDate, force }));
         } catch (e) {
           return send(res, 409, { error: String(e instanceof Error ? e.message : e) });
         }
@@ -1899,6 +1936,144 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         await gmail.oauth.disconnect();
         db.prepare("DELETE FROM app_settings WHERE key='gmail.history_id'").run();
         return send(res, 200, { disconnected: true });
+      }
+
+      // ── danger zone: flush all vault data ────────────────────────────────
+      // Wipes every table except app_settings (which holds provider config,
+      // jurisdiction, Gmail local_part) and schema_meta (which tracks schema
+      // version). API keys in the SecretStore are also preserved.
+      if (p === "/v1/vault/flush" && req.method === "POST") {
+        const b = await readJson(req);
+        if (b.confirm !== "FLUSH") {
+          return send(res, 400, { error: "Confirmation required: send {\"confirm\":\"FLUSH\"}" });
+        }
+        const tables = [
+          "transaction_documents",
+          "transaction_legs",
+          "transactions",
+          "document_embeddings",
+          "document_parties",
+          "document_pipeline",
+          "pipeline_events",
+          "documents",
+          "field_claims",
+          "holdings",
+          "statement_lines",
+          "review_audit",
+          "training_reviews",
+          "learned_rules",
+          "value_registry",
+          "entity_aliases",
+          "entities",
+          "intake_events",
+          "jobs",
+          "source_events",
+          "rate_cache",
+        ];
+        let deleted = 0;
+        for (const table of tables) {
+          try {
+            const r = db.prepare(`DELETE FROM ${table}`).run();
+            deleted += (r.changes ?? 0) as number;
+          } catch {
+            /* table may not exist in older schemas */
+          }
+        }
+        // Clear the Gmail history checkpoint so the next sync does a fresh pull.
+        db.prepare("DELETE FROM app_settings WHERE key='gmail.history_id'").run();
+        // Reset the FTS index.
+        try {
+          db.prepare("INSERT INTO documents_fts(documents_fts) VALUES('rebuild')").run();
+        } catch {
+          /* FTS may not exist */
+        }
+        ports.logger.warn("vault: FLUSH executed", { rows_deleted: deleted });
+        return send(res, 200, { flushed: true, rows_deleted: deleted });
+      }
+
+      // ── danger zone: factory reset ───────────────────────────────────────
+      // Same as flush, but also clears app_settings (provider config,
+      // jurisdiction, Gmail local_part) and removes all API keys from the
+      // SecretStore. The daemon returns to its initial state.
+      if (p === "/v1/vault/factory-reset" && req.method === "POST") {
+        const b = await readJson(req);
+        if (b.confirm !== "FACTORY_RESET") {
+          return send(res, 400, { error: "Confirmation required: send {\"confirm\":\"FACTORY_RESET\"}" });
+        }
+        // Wipe all data tables (same as flush).
+        const tables = [
+          "transaction_documents",
+          "transaction_legs",
+          "transactions",
+          "document_embeddings",
+          "document_parties",
+          "document_pipeline",
+          "pipeline_events",
+          "documents",
+          "field_claims",
+          "holdings",
+          "statement_lines",
+          "review_audit",
+          "training_reviews",
+          "learned_rules",
+          "value_registry",
+          "entity_aliases",
+          "entities",
+          "intake_events",
+          "jobs",
+          "source_events",
+          "rate_cache",
+        ];
+        let deleted = 0;
+        for (const table of tables) {
+          try {
+            const r = db.prepare(`DELETE FROM ${table}`).run();
+            deleted += (r.changes ?? 0) as number;
+          } catch {
+            /* table may not exist in older schemas */
+          }
+        }
+        // Also clear ALL app_settings (provider config, jurisdiction, Gmail, etc).
+        const settingsRows = db.prepare("SELECT COUNT(*) as n FROM app_settings").get() as { n: number };
+        deleted += settingsRows.n;
+        db.prepare("DELETE FROM app_settings").run();
+        // Remove all AI API keys from the SecretStore.
+        if (secrets) {
+          for (const key of [
+            "ai.api_key",
+            "ai.secondary.api_key",
+            "ai.api_key.alibaba", "ai.api_key.anthropic", "ai.api_key.groq",
+            "ai.api_key.kimi", "ai.api_key.minimax", "ai.api_key.mimo",
+            "ai.api_key.openai", "ai.api_key.openrouter", "ai.api_key.perplexity",
+            "ai.api_key.poolside", "ai.api_key.together", "ai.api_key.custom",
+            "ai.secondary_api_key.alibaba", "ai.secondary_api_key.anthropic",
+            "ai.secondary_api_key.groq", "ai.secondary_api_key.kimi",
+            "ai.secondary_api_key.minimax", "ai.secondary_api_key.mimo",
+            "ai.secondary_api_key.openai", "ai.secondary_api_key.openrouter",
+            "ai.secondary_api_key.perplexity", "ai.secondary_api_key.poolside",
+            "ai.secondary_api_key.together", "ai.secondary_api_key.custom",
+          ]) {
+            try { await secrets.remove(key); } catch { /* already gone */ }
+          }
+        }
+        // Reset the FTS index.
+        try {
+          db.prepare("INSERT INTO documents_fts(documents_fts) VALUES('rebuild')").run();
+        } catch {
+          /* FTS may not exist */
+        }
+        // Reconfigure the AI provider to its empty/default state.
+        ai.reconfigure({
+          apiKey: "",
+          baseUrl: "",
+          model: "",
+          secondaryApiKey: "",
+          secondaryBaseUrl: "",
+          secondaryModel: "",
+          routingMode: "auto",
+        });
+        ports.logger.warn("vault: FACTORY RESET executed", { rows_deleted: deleted });
+        return send(res, 200, { factory_reset: true, rows_deleted: deleted });
       }
 
       // ── learning (plan §5) ───────────────────────────────────────────────

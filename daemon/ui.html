@@ -157,6 +157,42 @@
             color:var(--dim);margin-bottom:12px}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .settings-cols{display:grid;grid-template-columns:1fr 1fr;gap:7px;align-items:stretch}
+  /* Danger Zone — subtle red border, white background, heavy red button. */
+  .danger-zone{margin-top:7px;max-width:calc(50% - 4px)}
+  .danger-panel{border:1px solid color-mix(in srgb, #c0392b 25%, var(--line));
+            background:color-mix(in srgb, #c0392b 4%, var(--panel));
+            border-radius:6px;padding:16px 18px}
+  .danger-panel h3{font:600 11px var(--mono);letter-spacing:.7px;text-transform:uppercase;
+            color:#c0392b;margin-bottom:14px}
+  .danger-options{display:flex;flex-direction:column;gap:10px;margin-bottom:14px}
+  .danger-opt{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+            border:1px solid var(--line2);border-radius:5px;cursor:pointer;
+            background:var(--panel);transition:border-color .15s}
+  .danger-opt:hover{border-color:color-mix(in srgb, #c0392b 30%, var(--line))}
+  .danger-opt input[type=radio]{margin-top:3px;accent-color:#c0392b}
+  .danger-opt-body{display:flex;flex-direction:column;gap:2px}
+  .danger-opt-title{font:600 12.5px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--ink)}
+  .danger-opt-desc{font:11.5px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--dim)}
+  .danger-confirm-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+            margin-bottom:14px;padding:12px;border:1px solid color-mix(in srgb, #c0392b 20%, var(--line));
+            border-radius:5px;background:color-mix(in srgb, #c0392b 6%, var(--panel))}
+  .danger-confirm-label{font:11.5px -apple-system,BlinkMacSystemFont,sans-serif;color:#7f1d1d}
+  .danger-confirm-label b{color:#c0392b}
+  .danger-confirm-input{font:12px var(--mono);border:1px solid var(--line);border-radius:4px;
+            padding:5px 10px;width:120px;text-transform:uppercase;letter-spacing:1px}
+  .danger-cancel-btn{font:600 11px var(--mono);letter-spacing:.5px;text-transform:uppercase;
+            background:var(--panel2);color:var(--dim);border:1px solid var(--line);
+            border-radius:4px;padding:7px 14px;cursor:pointer}
+  .danger-cancel-btn:hover{background:var(--line2)}
+  .danger-go-btn{font:600 11px var(--mono);letter-spacing:.5px;text-transform:uppercase;
+            background:#c0392b;color:#fff;border:none;border-radius:4px;padding:7px 14px;cursor:pointer}
+  .danger-go-btn:disabled{background:#e6a0a0;cursor:not-allowed}
+  .danger-go-btn:not(:disabled):hover{background:#a52a1a}
+  .danger-btn{display:block;width:100%;font:600 12px var(--mono);letter-spacing:.5px;
+            text-transform:uppercase;background:#c0392b;color:#fff;border:none;
+            border-radius:5px;padding:11px 16px;cursor:pointer}
+  .danger-btn:disabled{background:#c0392b;cursor:not-allowed}
+  .danger-btn:not(:disabled):hover{background:#a52a1a}
   .settings-cols > div{min-width:0}
   .settings-cols .panel{margin-bottom:0;height:100%;display:flex;flex-direction:column}
   @media (max-width:780px){.settings-cols{grid-template-columns:1fr}}
@@ -246,15 +282,15 @@
 
   footer{margin:34px 32px 0;padding-top:14px;border-top:1px solid var(--line);
          font:10.5px var(--mono);color:var(--faint);max-width:1280px;margin-left:auto;margin-right:auto;
-         text-align:right}
+         text-align:center;display:flex;justify-content:center;align-items:center;gap:14px}
   footer a{color:#00e;text-decoration:underline}
 </style>
 </head>
 <body>
 
 <div class="topbar">
-  <h1>Quick2AVault <span id="topVersion">· 2.0.0-daemon</span></h1>
-  <div class="conn"><span class="dot" id="dot"></span><span id="conn">connecting</span></div>
+  <h1>Quick2AVault</h1>
+  <div class="conn"><span class="dot" id="dot"></span><span id="clock" style="font:11px var(--mono);color:var(--dim)"></span></div>
 </div>
 
 <div class="tabs" id="tabs">
@@ -270,7 +306,6 @@
 // ════════════════════════════════════════════════════════════════════════ -->
 <div class="tab on" id="tab-obs">
   <div class="periods" id="periods"></div>
-  <div class="health" id="health"></div>
 
   <section>
     <h2>Money <span class="sub" id="moneyPeriod">— this financial year</span></h2>
@@ -395,9 +430,19 @@
           <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">Status</div>
             <div style="font:12px var(--mono);margin-top:3px" id="gStatus">—</div></div>
         </div>
-        <div class="save-row" style="margin-top:14px">
-          <button class="act" id="gConnect">Connect</button>
-          <button class="ghost" id="gSync">Resync</button>
+        <div class="field" style="margin-top:14px">
+          <label>Pull from</label>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <input type="date" id="gAfterDate" style="font:12px var(--mono)">
+            <label style="display:flex;align-items:center;gap:4px;font:11px var(--mono);color:var(--dim);cursor:pointer">
+              <input type="checkbox" id="gForce"> Force fresh pull
+            </label>
+          </div>
+          <div class="hint">Force ignores incremental sync and re-downloads from the date above.</div>
+        </div>
+        <div class="save-row" style="margin-top:10px">
+          <button class="act" id="gSync">Resync</button>
+          <button class="ghost" id="gConnect">Connect</button>
           <button class="ghost" id="gDisconnect">Disconnect</button>
           <span class="msg" id="gMsg"></span>
         </div>
@@ -413,8 +458,6 @@
         <div style="font:12px var(--mono);margin-top:3px" id="vDrop">—</div></div>
       <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">Database</div>
         <div style="font:12px var(--mono);margin-top:3px" id="vDb">—</div></div>
-      <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">Uptime</div>
-        <div style="font:12px var(--mono);margin-top:3px" id="vUptime">—</div></div>
       <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">AI models</div>
         <div style="font:12px var(--mono);margin-top:3px">
           <div id="vAi">—</div>
@@ -422,6 +465,44 @@
         </div></div>
     </div>
   </div>
+
+<!-- Danger Zone — last item in Settings, matches Vault summary width. -->
+<div class="danger-zone">
+  <div class="danger-panel">
+    <h3>Danger Zone</h3>
+    <div class="danger-options">
+      <label class="danger-opt">
+        <input type="radio" name="dangerMode" value="none" checked>
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">I don't want to do this</span>
+          <span class="danger-opt-desc">No action will be taken.</span>
+        </span>
+      </label>
+      <label class="danger-opt">
+        <input type="radio" name="dangerMode" value="flush">
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">Data Flush</span>
+          <span class="danger-opt-desc">Wipes documents, people, and vault contents. Settings, API keys, and Gmail are preserved.</span>
+        </span>
+      </label>
+      <label class="danger-opt">
+        <input type="radio" name="dangerMode" value="factory">
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">Factory Reset</span>
+          <span class="danger-opt-desc">Full reset to a blank install. Everything is deleted, including all settings and API keys.</span>
+        </span>
+      </label>
+    </div>
+    <div class="danger-confirm-row" id="dangerConfirmRow" style="display:none">
+      <span class="danger-confirm-label">Type <b>CONFIRM</b> to proceed:</span>
+      <input type="text" id="dangerConfirmInput" placeholder="CONFIRM" autocomplete="off" class="danger-confirm-input">
+      <button class="danger-cancel-btn" id="dangerCancelBtn">Cancel</button>
+      <button class="danger-go-btn" id="dangerGoBtn" disabled>Erase</button>
+    </div>
+    <button class="danger-btn" id="flushBtn" disabled>Flush Data</button>
+    <span class="msg" id="flushMsg" style="margin-left:10px"></span>
+  </div>
+</div>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════
@@ -535,7 +616,7 @@ const esc = (v) => v === null || v === undefined ? "" : String(v)
   .replace(/'/g, "&#39;");
 
 // ── tab navigation ───────────────────────────────────────────────
-let activeTab = "obs";
+let activeTab = localStorage.getItem("q2av_tab") || "obs";
 const TAB_LOADERS = {
   settings: loadSettings,
   people: loadPeople,
@@ -545,14 +626,18 @@ const TAB_LOADERS = {
 document.getElementById("tabs").querySelectorAll("button").forEach((b) =>
   b.onclick = () => {
     activeTab = b.dataset.tab;
+    localStorage.setItem("q2av_tab", activeTab);
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + activeTab));
     if (TAB_LOADERS[activeTab]) TAB_LOADERS[activeTab]();
   });
+// Restore the saved tab on load.
+document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === activeTab));
+document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + activeTab));
 
 // ── observability: period selector ───────────────────────────────
 let selected = null;
-let period = "this_fy";
+let period = localStorage.getItem("q2av_period") || "this_fy";
 const PERIODS = [
   { key: "this_month", label: "This Month" },
   { key: "last_month", label: "Last month" },
@@ -566,30 +651,16 @@ function renderPeriods() {
     "<button class='" + (p.key === period ? "on" : "") + "' data-p='" + esc(p.key) + "'>"
     + esc(p.label) + "</button>").join("");
   el.querySelectorAll("button").forEach((b) =>
-    b.onclick = () => { period = b.dataset.p; renderPeriods(); refreshObs(); });
+    b.onclick = () => { period = b.dataset.p; localStorage.setItem("q2av_period", period); renderPeriods(); refreshObs(); });
 }
 
 // ── observability: health strip ──────────────────────────────────
 async function refreshHealth() {
   const h = await api("/v1/health");
-  const jobs = h.jobs || {};
-  const uptime = h.uptime_s;
-  const up = uptime < 60 ? uptime + "s"
-    : uptime < 3600 ? Math.round(uptime / 60) + "m"
-    : Math.round(uptime / 3600) + "h";
-  // Set version in the topbar next to the app name.
-  document.getElementById("topVersion").textContent = "· " + esc(h.version);
-  // Store uptime for the Settings/Vault summary to pick up.
-  window.__uptime = up;
-  const cells = [
-    { k: "Transactions", v: h.transactions },
-    { k: "Jobs done", v: jobs.done || 0, cls: "ok" },
-  ];
-  document.getElementById("health").innerHTML = cells.map((c) =>
-    "<div class='c'><div class='k'>" + esc(c.k) + "</div><div class='v " + esc(c.cls || "") + "'>"
-    + esc(c.v) + "</div></div>").join("");
+  // Version lives in the footer only, not the header.
   document.getElementById("footer").innerHTML =
-    "&copy; " + new Date().getFullYear() + " <a href='https://thecontrarian.in' target='_blank' rel='noopener'>Mahesh Shantaram</a>";
+    "&copy; " + new Date().getFullYear() + " <a href='https://thecontrarian.in' target='_blank' rel='noopener'>Mahesh Shantaram</a>"
+    + " <span style='color:var(--line)'>·</span> " + esc(h.version);
 }
 
 // ── observability: money section ─────────────────────────────────
@@ -740,9 +811,9 @@ function push(type, data) {
 
 function connect() {
   const es = new EventSource("/v1/events?token=" + encodeURIComponent(TOKEN));
-  const dot = document.getElementById("dot"), lbl = document.getElementById("conn");
-  es.onopen = () => { dot.className = "dot live"; lbl.textContent = "live"; };
-  es.onerror = () => { dot.className = "dot dead"; lbl.textContent = "reconnecting"; };
+  const dot = document.getElementById("dot");
+  es.onopen = () => { dot.className = "dot live"; };
+  es.onerror = () => { dot.className = "dot dead"; };
   for (const type of Object.keys(DESC).concat("Ready")) {
     es.addEventListener(type, (m) => {
       let d = {}; try { d = JSON.parse(m.data); } catch {}
@@ -803,13 +874,24 @@ function fillProviderDropdown(selectId, currentBaseUrl) {
 // time so saveAi can detect when the user hasn't touched the field.
 let primaryKeyMask = "";
 let secondaryKeyMask = "";
+// Per-provider key inventory from the backend: { openai: { set: true, mask: "..." }, ... }
+let providerKeys = {};
+let secondaryProviderKeys = {};
+// Track the current provider IDs so we can save keys per-provider on switch.
+let currentPrimaryProviderId = "";
+let currentSecondaryProviderId = "";
 
 async function loadSettings() {
   const s = await api("/v1/settings");
   const ai = s.ai || {};
 
+  // Store per-provider key inventory for swapping keys on provider change.
+  providerKeys = ai.provider_keys || {};
+  secondaryProviderKeys = ai.provider_keys || {};
+
   // Primary provider
   fillProviderDropdown("aiProvider", ai.base_url || "");
+  currentPrimaryProviderId = document.getElementById("aiProvider").value;
   document.getElementById("aiBaseUrl").value = ai.base_url || "";
   toggleCustomUrl("primary");
   document.getElementById("aiKeySrc").innerHTML = ai.api_key_set
@@ -826,6 +908,7 @@ async function loadSettings() {
   // Secondary provider
   const sec = ai.secondary || {};
   fillProviderDropdown("ai2Provider", sec.base_url || "");
+  currentSecondaryProviderId = document.getElementById("ai2Provider").value;
   document.getElementById("ai2BaseUrl").value = sec.base_url || "";
   toggleCustomUrl("secondary");
   secondaryKeyMask = sec.api_key_mask || "";
@@ -857,7 +940,6 @@ async function loadSettings() {
   document.getElementById("vRoot").textContent = v.root || "—";
   document.getElementById("vDrop").textContent = v.drop || "—";
   document.getElementById("vDb").textContent = v.db || "—";
-  document.getElementById("vUptime").textContent = window.__uptime || "—";
   // Initial state — testAi will update these with the real result.
   document.getElementById("vAi").innerHTML = ai.active_model
     ? "<span style='color:var(--faint)'>testing " + esc(ai.active_model) + "…</span>"
@@ -870,6 +952,9 @@ async function loadSettings() {
   const g = s.gmail || {};
   document.getElementById("gAddr").textContent = g.address || "not configured";
   document.getElementById("gStatus").textContent = g.status || "—";
+  // Default the date picker to today if the user hasn't set it yet.
+  const gDate = document.getElementById("gAfterDate");
+  if (!gDate.value) gDate.value = new Date().toISOString().slice(0, 10);
 
   // Auto-test both inference providers so the user sees a green/red status
   // the moment they open Settings — no need to click Test manually.
@@ -916,18 +1001,29 @@ async function saveAi(which) {
   const msg = document.getElementById(which === "primary" ? "aiMsg" : "ai2Msg");
   const baseUrl = providerBaseUrl(which);
   const model = document.getElementById(which === "primary" ? "aiModel" : "ai2Model").value.trim();
+  // Don't auto-save an incomplete Custom provider — the user is still typing
+  // the URL. Saving an empty base_url would clobber the previous config and
+  // cause spurious test errors.
+  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
+  if (sel.value === "custom" && !baseUrl) return;
   const keyInput = document.getElementById(which === "primary" ? "aiApiKey" : "ai2ApiKey");
   const key = keyInput.value;
   const mask = which === "primary" ? primaryKeyMask : secondaryKeyMask;
   const body = {};
+  // Use the tracked provider ID (not sel.value) so that when the user
+  // switches providers, the old provider's key is saved under the old ID
+  // before the new provider's key is loaded.
+  const pid = which === "primary" ? (currentPrimaryProviderId || sel.value) : (currentSecondaryProviderId || sel.value);
   if (which === "primary") {
     body.base_url = baseUrl;
     body.model = model;
+    body.api_key_provider = pid;
     if (key && key !== mask) body.api_key = key;
     else if (!key) body.api_key = "";
   } else {
     body.secondary_base_url = baseUrl;
     body.secondary_model = model;
+    body.secondary_api_key_provider = pid;
     if (key && key !== mask) body.secondary_api_key = key;
     else if (!key) body.secondary_api_key = "";
   }
@@ -935,8 +1031,9 @@ async function saveAi(which) {
   if (r.error) { msg.className = "msg bad"; msg.textContent = "error: " + r.error; return; }
   // Silent on success — auto-save doesn't need a "saved" flash. The Test
   // button is the user's confirmation that the setting works.
+  // Do NOT call loadSettings() here — it would rebuild the dropdowns and
+  // clobber the user's in-progress edits (e.g. selecting Custom).
   msg.className = "msg"; msg.textContent = "";
-  loadSettings();
 }
 
 async function testAi(which) {
@@ -985,13 +1082,55 @@ function autoSave(which) {
   saveTimers[which] = setTimeout(() => saveAi(which), 600);
 }
 
+// When the user switches providers, swap the API key field to show the new
+// provider's saved key (or empty if none). The old provider's key was already
+// saved by autoSave on the previous change.
+function swapProviderKey(which) {
+  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
+  const newPid = sel.value;
+  const keys = which === "primary" ? providerKeys : secondaryProviderKeys;
+  const keyField = document.getElementById(which === "primary" ? "aiApiKey" : "ai2ApiKey");
+  const keySrc = document.getElementById(which === "primary" ? "aiKeySrc" : "ai2KeySrc");
+  const lookupKey = which === "primary" ? newPid : `secondary:${newPid}`;
+  const entry = keys[lookupKey];
+  if (entry && entry.set) {
+    const mask = entry.mask || "********";
+    keyField.value = mask;
+    if (which === "primary") primaryKeyMask = mask;
+    else secondaryKeyMask = mask;
+    keySrc.innerHTML = "<span class='ok'>key set via keychain</span>";
+    keyField.placeholder = "type a new key to replace";
+  } else {
+    keyField.value = "";
+    if (which === "primary") primaryKeyMask = "";
+    else secondaryKeyMask = "";
+    keySrc.innerHTML = "<span class='warn'>no key configured</span>";
+    keyField.placeholder = "paste your API key";
+  }
+  if (which === "primary") currentPrimaryProviderId = newPid;
+  else currentSecondaryProviderId = newPid;
+}
+
 document.getElementById("aiTest").onclick = () => testAi("primary");
-document.getElementById("aiProvider").onchange = () => { toggleCustomUrl("primary"); autoFetchModels("primary"); autoSave("primary"); };
+document.getElementById("aiProvider").onchange = () => {
+  // Save the old provider's key first, then swap to the new provider's key.
+  saveAi("primary");
+  toggleCustomUrl("primary");
+  swapProviderKey("primary");
+  autoFetchModels("primary");
+  autoSave("primary");
+};
 document.getElementById("aiApiKey").onchange = () => autoSave("primary");
 document.getElementById("aiModel").oninput = () => autoSave("primary");
 document.getElementById("aiBaseUrl").oninput = () => autoSave("primary");
 document.getElementById("ai2Test").onclick = () => testAi("secondary");
-document.getElementById("ai2Provider").onchange = () => { toggleCustomUrl("secondary"); autoFetchModels("secondary"); autoSave("secondary"); };
+document.getElementById("ai2Provider").onchange = () => {
+  saveAi("secondary");
+  toggleCustomUrl("secondary");
+  swapProviderKey("secondary");
+  autoFetchModels("secondary");
+  autoSave("secondary");
+};
 document.getElementById("ai2ApiKey").onchange = () => autoSave("secondary");
 document.getElementById("ai2Model").oninput = () => autoSave("secondary");
 document.getElementById("ai2BaseUrl").oninput = () => autoSave("secondary");
@@ -1001,7 +1140,12 @@ async function gmailAction(action) {
   const msg = document.getElementById("gMsg");
   msg.className = "msg"; msg.textContent = action + "…";
   const endpoint = "/v1/gmail/" + action;
-  const r = await apiPost(endpoint, {});
+  const body = {};
+  if (action === "sync") {
+    body.after_date = document.getElementById("gAfterDate").value;
+    body.force = document.getElementById("gForce").checked;
+  }
+  const r = await apiPost(endpoint, body);
   if (r.error) {
     msg.className = "msg bad"; msg.textContent = r.error;
     if (r.detail) msg.textContent += " — " + r.detail;
@@ -1025,6 +1169,70 @@ async function gmailAction(action) {
 document.getElementById("gConnect").onclick = () => gmailAction("connect");
 document.getElementById("gSync").onclick = () => gmailAction("sync");
 document.getElementById("gDisconnect").onclick = () => gmailAction("disconnect");
+
+// ── danger zone: data flush / factory reset ────────────────────────
+let dangerMode = "";
+const dangerBtn = document.getElementById("flushBtn");
+const dangerConfirmRow = document.getElementById("dangerConfirmRow");
+const dangerConfirmInput = document.getElementById("dangerConfirmInput");
+const dangerGoBtn = document.getElementById("dangerGoBtn");
+const dangerCancelBtn = document.getElementById("dangerCancelBtn");
+const dangerMsg = document.getElementById("flushMsg");
+
+document.querySelectorAll("input[name='dangerMode']").forEach((r) => {
+  r.onchange = (e) => {
+    dangerMode = e.target.value;
+    if (dangerMode === "none") {
+      dangerBtn.disabled = true;
+      dangerBtn.textContent = "Flush Data";
+    } else {
+      dangerBtn.disabled = false;
+      dangerBtn.textContent = dangerMode === "flush" ? "Flush Data" : "Factory Reset";
+    }
+    dangerMsg.className = "msg"; dangerMsg.textContent = "";
+  };
+});
+
+dangerBtn.onclick = () => {
+  dangerConfirmRow.style.display = "";
+  dangerConfirmInput.value = "";
+  dangerGoBtn.disabled = true;
+  dangerBtn.style.display = "none";
+};
+
+dangerConfirmInput.oninput = () => {
+  dangerGoBtn.disabled = dangerConfirmInput.value.trim().toUpperCase() !== "CONFIRM";
+};
+
+dangerCancelBtn.onclick = () => {
+  dangerConfirmRow.style.display = "none";
+  dangerConfirmInput.value = "";
+  dangerGoBtn.disabled = true;
+  dangerBtn.style.display = "";
+};
+
+dangerGoBtn.onclick = async () => {
+  dangerMsg.className = "msg"; dangerMsg.textContent = "erasing…";
+  dangerGoBtn.disabled = true;
+  const endpoint = dangerMode === "flush" ? "/v1/vault/flush" : "/v1/vault/factory-reset";
+  const confirmVal = dangerMode === "flush" ? "FLUSH" : "FACTORY_RESET";
+  const r = await apiPost(endpoint, { confirm: confirmVal });
+  if (r.error) {
+    dangerMsg.className = "msg bad"; dangerMsg.textContent = "error: " + r.error;
+    dangerGoBtn.disabled = false;
+    return;
+  }
+  dangerMsg.className = "msg ok";
+  dangerMsg.textContent = "done · " + (r.rows_deleted ?? 0) + " rows deleted";
+  dangerConfirmRow.style.display = "none";
+  dangerBtn.style.display = "";
+  dangerBtn.disabled = true;
+  dangerBtn.textContent = "Flush Data";
+  document.querySelectorAll("input[name='dangerMode']").forEach((r) => r.checked = false);
+  dangerMode = "";
+  loadSettings();
+  if (activeTab === "obs") refreshObs();
+};
 
 // ════════════════════════════════════════════════════════════════════════
 // PEOPLE TAB
@@ -1266,7 +1474,19 @@ async function loadLearning() {
 renderPeriods();
 refreshObs();
 connect();
+// Load the restored tab's data (e.g. Settings, People, etc.).
+if (TAB_LOADERS[activeTab]) TAB_LOADERS[activeTab]();
 setInterval(() => { if (activeTab === "obs") refreshObs(); }, 8000);
+
+// Live clock in the header — ticks every second.
+function tickClock() {
+  const now = new Date();
+  const d = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "short", day: "numeric" });
+  const t = now.toLocaleTimeString("en-US", { hour12: false });
+  document.getElementById("clock").textContent = d + " " + t;
+}
+tickClock();
+setInterval(tickClock, 1000);
 </script>
 </body>
 </html>
