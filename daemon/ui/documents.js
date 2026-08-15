@@ -135,15 +135,38 @@ async function showDoc(id, container) {
     currency: ["INR", "USD", "EUR", "GBP", "SGD", "AED"],
   };
 
-  // Show all effective fields that have a value. Also show simple editable
-  // text fields that have no value yet (counterparty, issuer, person) so the
-  // user can set them. Complex fields (line_items, trades, reference_ids)
-  // are only shown when they have a value.
-  const ALWAYS_SHOW = new Set(["counterparty", "issuer", "vendor", "person", "purpose_text", "document_number"]);
-  const effEntries = Object.entries(eff).filter(([k, v]) => {
-    if (v && v.value !== null && v.value !== undefined) return true;
-    return ALWAYS_SHOW.has(k);
-  });
+  // Fixed schema: these core fields always appear in this order, even when
+  // the AI didn't extract them. This lets the user manually fill in what the
+  // AI missed (e.g. Amount on an invoice the model failed to parse).
+  // Complex fields (line_items, trades, reference_ids) are only shown when
+  // they have a value — they can't be edited as simple text.
+  const FIXED_FIELDS = [
+    "doc_type", "amount_minor", "currency", "document_date",
+    "counterparty", "issuer", "vendor", "person",
+    "document_number", "purpose_text", "financial_impact",
+  ];
+  const EXTRA_FIELDS = ["posted_at", "financial_year", "category"];
+
+  // Build the list: fixed fields first (in order), then any extra effective
+  // fields that have a value but aren't in the fixed set.
+  const seen = new Set(FIXED_FIELDS);
+  const effEntries = FIXED_FIELDS.map((k) => [k, eff[k]]);
+  for (const [k, v] of Object.entries(eff)) {
+    if (seen.has(k)) continue;
+    if (v && v.value !== null && v.value !== undefined) {
+      effEntries.push([k, v]);
+      seen.add(k);
+    }
+  }
+  // Also include extra editable fields that have no value, for completeness.
+  for (const k of EXTRA_FIELDS) {
+    if (seen.has(k)) continue;
+    if (editableFields.includes(k)) {
+      effEntries.push([k, eff[k]]);
+      seen.add(k);
+    }
+  }
+
   const effRows = effEntries.map(([k, v]) => {
     const label = FIELD_LABELS[k] || k;
     const isEditable = editableFields.includes(k);
