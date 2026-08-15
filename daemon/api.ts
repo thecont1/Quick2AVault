@@ -1054,6 +1054,105 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, { confirmed: Number(info.changes ?? 0) > 0 });
       }
 
+      // Edit an entity's display_name, subtype, or status. Kind is immutable.
+      // Mirrors PATCH /v1/people/:id for non-person entities.
+      if (p.startsWith("/v1/entities/") && req.method === "PATCH") {
+        const id = p.split("/")[3];
+        if (!id) return send(res, 400, { error: "entity id required" });
+        const b = await readJson(req);
+        const cur = db.prepare("SELECT id, kind, display_name, subtype, status FROM entities WHERE id=?").get(id) as
+          | { id: string; kind: string; display_name: string; subtype: string | null; status: string }
+          | undefined;
+        if (!cur) return send(res, 404, { error: "entity not found" });
+
+        const updates: string[] = [];
+        const params: (string | number | null)[] = [];
+        if (typeof b.display_name === "string" && b.display_name.trim() && b.display_name !== cur.display_name) {
+          // Save old name as an alias so search still finds it.
+          db.prepare(
+            "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at) VALUES (?,?,?,?,'name_variant','user-edit','confirmed',?)",
+          ).run(id, cur.kind, cur.display_name, normaliseName(cur.display_name), ports.clock.isoNow());
+          updates.push("display_name=?");
+          params.push(b.display_name.trim());
+        }
+        if (typeof b.subtype === "string") {
+          updates.push("subtype=?");
+          params.push(b.subtype.trim() || null);
+        }
+        if (typeof b.status === "string" && ["candidate", "confirmed"].includes(b.status)) {
+          updates.push("status=?");
+          params.push(b.status);
+        }
+        if (!updates.length) return send(res, 200, { updated: false });
+        params.push(id);
+        db.prepare(`UPDATE entities SET ${updates.join(", ")} WHERE id=?`).run(...params);
+        ports.logger.info("entity edited", { id, fields: updates });
+        return send(res, 200, { updated: true });
+      }
+
+      // Delete a non-person entity. Same force semantics as person delete:
+      // refuses while documents reference it, unless ?force=1 reassigns
+      // document_parties to the Unidentified placeholder.
+      if (p.startsWith("/v1/entities/") && req.method === "DELETE") {
+        const id = decodeURIComponent(p.slice("/v1/entities/".length));
+        const row = db
+          .prepare("SELECT id, display_name, kind FROM entities WHERE id=? AND kind<>'person'")
+          .get(id) as { id: string; display_name: string; kind: string } | undefined;
+        if (!row) return send(res, 404, { error: "no such entity" });
+
+        let refs = 0;
+        try {
+          refs = (
+            db
+              .prepare("SELECT COUNT(*) n FROM document_parties WHERE entity_id=?")
+              .get(id) as { n: number }
+          ).n;
+        } catch {
+          /* table optional */
+        }
+        const force = new URL(req.url ?? "", "http://x").searchParams.get("force") === "1";
+        if (refs > 0 && !force) {
+          return send(res, 409, {
+            error: "entity_in_use",
+            message: `${row.display_name} is named on ${refs} document(s). Re-run with ?force=1 to unlink and delete.`,
+            documents: refs,
+          });
+        }
+        if (refs > 0) {
+          const UNIDENTIFIED_ID = UNIDENTIFIED_PERSON_ID;
+          const already = db.prepare("SELECT 1 FROM entities WHERE id=?").get(UNIDENTIFIED_ID);
+          if (!already) {
+            db.prepare(
+              `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
+               VALUES (?, 'person', 'Unidentified', 'confirmed', 1.0, 0, ?)`,
+            ).run(UNIDENTIFIED_ID, ports.clock.isoNow());
+          }
+          const rows = db
+            .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
+            .all(id) as { document_id: string; role: string }[];
+          for (const r of rows) {
+            db.prepare(
+              "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+            ).run(r.document_id, UNIDENTIFIED_ID, r.role);
+          }
+          db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
+        }
+        try {
+          db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
+        } catch {
+          /* optional */
+        }
+        // Clean up transaction references that point to this entity.
+        try {
+          db.prepare("UPDATE transactions SET counterparty_entity_id=NULL WHERE counterparty_entity_id=?").run(id);
+        } catch {
+          /* column may not exist */
+        }
+        db.prepare("DELETE FROM entities WHERE id=?").run(id);
+        ports.logger.warn("entity deleted", { id, name: row.display_name, kind: row.kind, reassigned: refs });
+        return send(res, 200, { deleted: id, reassigned_documents: refs });
+      }
+
       // mergeEntities — WITHIN ONE KIND ONLY. This is the anti-pollution
       // invariant (plan §3.1) enforced at the API boundary, not just in the
       // resolver: a merchant can never absorb a wallet, a person, or an equity.
@@ -1777,6 +1876,23 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             throw e;
           }
           changed.push("is_owner");
+        }
+
+        // Membership ("shares this vault") is distinct from ownership ("this
+        // is me"). An owner is trivially a member; demoting a member who
+        // currently holds owner also clears owner — the invariant "owner ⇒
+        // member" must never be broken from this side.
+        if (typeof b.is_member === "boolean") {
+          if (b.is_member) {
+            db.prepare(
+              "UPDATE entities SET is_member=1, status='confirmed', updated_at=? WHERE id=?",
+            ).run(ports.clock.isoNow(), id);
+          } else {
+            db.prepare(
+              "UPDATE entities SET is_member=0, is_owner=0, updated_at=? WHERE id=?",
+            ).run(ports.clock.isoNow(), id);
+          }
+          changed.push("is_member");
         }
 
         const after = db.prepare("SELECT * FROM entities WHERE id=?").get(id);
