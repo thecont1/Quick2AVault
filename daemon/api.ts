@@ -2935,9 +2935,13 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               const c = claims[field];
               if (c && c.value !== null) return { value: c.value, source: c.source, status: c.status };
               const v = extractionKey ? x[extractionKey] : x[field];
-              return v === undefined || v === null
-                ? null
-                : { value: String(v), source: "ai" as const, status: "proposed" as const };
+              if (v === undefined || v === null) return null;
+              // issuer/vendor in the extraction are objects with a .name —
+              // flatten to the name so the UI shows a readable string.
+              const flat = (typeof v === "object" && v !== null && "name" in v)
+                ? String((v as { name: unknown }).name)
+                : String(v);
+              return { value: flat, source: "ai" as const, status: "proposed" as const };
             };
             const parties = db
               .prepare(
@@ -2984,6 +2988,8 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 document_date: effective("document_date", "occurred_at"),
                 posted_at: effective("posted_at"),
                 counterparty: effective("counterparty", "counterparty_descriptor"),
+                issuer: effective("issuer"),
+                vendor: effective("vendor"),
                 person: effective("person"),
                 reference_ids: (x.reference_ids as Record<string, string> | undefined) ?? {},
                 subtotal_minor: x.subtotal_minor ?? null,

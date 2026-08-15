@@ -177,15 +177,20 @@ function push(type, data) {
 function connect() {
   const es = new EventSource("/v1/events?token=" + encodeURIComponent(TOKEN));
   const dot = document.getElementById("dot");
-  es.onopen = () => { dot.className = "dot live"; };
-  es.onerror = () => { dot.className = "dot dead"; };
+  es.onopen = () => { dot.className = "dot live"; dot.title = "Live — connected to daemon"; };
+  es.onerror = () => { dot.className = "dot dead"; dot.title = "Disconnected — trying to reconnect…"; };
   for (const type of Object.keys(DESC).concat("Ready")) {
     es.addEventListener(type, (m) => {
       let d = {}; try { d = JSON.parse(m.data); } catch {}
       if (type !== "Ready") push(type, d);
       // Pipeline state changes update the board instantly — no debounce —
       // so the user can watch documents flow through the pipeline live.
-      if (type === "PipelineStateChanged") onPipelineStateChanged(d);
+      if (type === "PipelineStateChanged") {
+        onPipelineStateChanged(d);
+        // Refresh the open document detail so the user sees reprocessing
+        // progress (state transitions, new analysis results).
+        if (typeof refreshOpenDocIfMatch === "function") refreshOpenDocIfMatch(d.document_id);
+      }
       else if (type === "DocumentReceived") onDocumentReceived();
       // JobStateChanged is a safety net: if any state change bypasses
       // PipelineStateChanged (e.g. a raw SQL update in the API layer),

@@ -61,12 +61,14 @@ async function loadReview() {
 // it if it's already open. The detail renders inline below the card so the
 // user doesn't have to scroll to the bottom of the page.
 let openDocRow = null;
+let openDocId = null;
 function collapseOpenDoc() {
   if (!openDocRow) return;
   openDocRow.classList.remove("open");
   const next = openDocRow.nextElementSibling;
   if (next && next.classList.contains("drow-detail")) next.remove();
   openDocRow = null;
+  openDocId = null;
 }
 function toggleDoc(row, id) {
   if (openDocRow === row) { collapseOpenDoc(); return; }
@@ -77,7 +79,18 @@ function toggleDoc(row, id) {
   slot.innerHTML = "<div class='empty'>loading…</div>";
   row.after(slot);
   openDocRow = row;
+  openDocId = id;
   showDoc(id, slot);
+}
+
+// Refresh the open document's detail when a pipeline state change arrives
+// via SSE — this is how the user sees reprocessing progress.
+function refreshOpenDocIfMatch(docId) {
+  if (!openDocId || !openDocRow) return;
+  if (docId !== openDocId) return;
+  const slot = openDocRow.nextElementSibling;
+  if (!slot || !slot.classList.contains("drow-detail")) return;
+  showDoc(openDocId, slot);
 }
 
 async function showDoc(id, container) {
@@ -122,28 +135,46 @@ async function showDoc(id, container) {
     currency: ["INR", "USD", "EUR", "GBP", "SGD", "AED"],
   };
 
-  const effEntries = Object.entries(eff).filter(([, v]) => v && v.value !== null && v.value !== undefined);
+  // Show all effective fields that have a value. Also show simple editable
+  // text fields that have no value yet (counterparty, issuer, person) so the
+  // user can set them. Complex fields (line_items, trades, reference_ids)
+  // are only shown when they have a value.
+  const ALWAYS_SHOW = new Set(["counterparty", "issuer", "vendor", "person", "purpose_text", "document_number"]);
+  const effEntries = Object.entries(eff).filter(([k, v]) => {
+    if (v && v.value !== null && v.value !== undefined) return true;
+    return ALWAYS_SHOW.has(k);
+  });
   const effRows = effEntries.map(([k, v]) => {
     const label = FIELD_LABELS[k] || k;
     const isEditable = editableFields.includes(k);
-    const displayVal = (k === "amount_minor" && v.value) ? money(Number(v.value)) : String(v.value);
+    const hasValue = v && v.value !== null && v.value !== undefined;
+    const displayVal = !hasValue ? "—"
+      : (k === "amount_minor" && v.value) ? money(Number(v.value))
+      : String(v.value);
+    const prov = hasValue ? " <span style='color:var(--faint)'>· " + esc(v.source) + "</span>" : "";
     const cls = isEditable ? "rule editable" : "rule";
-    return "<div class='" + cls + "' data-field='" + esc(k) + "' data-value='" + esc(String(v.value)) + "'>"
+    return "<div class='" + cls + "' data-field='" + esc(k) + "' data-value='" + esc(hasValue ? String(v.value) : "") + "'>"
       + "<span class='k'>" + esc(label) + "</span>"
-      + "<span class='v'>" + esc(displayVal) + " <span style='color:var(--faint)'>· " + esc(v.source) + "</span></span>"
+      + "<span class='v'>" + esc(displayVal) + prov + "</span>"
       + "</div>";
   }).join("");
 
   const refIds = x.reference_ids ? Object.entries(x.reference_ids).map(([k, v]) =>
     esc(k) + "=" + esc(v)).join("  ") : "";
 
+  // Human-friendly date-time for the Received field.
+  const receivedFriendly = doc.received_at
+    ? new Date(doc.received_at).toLocaleString("en-US", {
+        year: "numeric", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit", hour12: false,
+      })
+    : "—";
+
   const detailHtml =
     "<div class='panel'><h3>" + esc(doc.original_filename) + "</h3>"
-    + "<div class='grid3' style='margin-bottom:14px'>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Type</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(doc.doc_type || "—") + "</div></div>"
+    + "<div class='grid2' style='margin-bottom:14px'>"
     + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Received</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(String(doc.received_at || "").slice(0, 19)) + "</div></div>"
+    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(receivedFriendly) + "</div></div>"
     + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Lifecycle</div>"
     + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(doc.lifecycle) + "</div></div>"
     + "</div>"
