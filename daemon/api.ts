@@ -2537,17 +2537,85 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           // WO11 Track B: removed/deleted rows are hidden by default. The
           // ?include=removed escape hatch exists for the rare caller that
           // needs the soft-hidden set; deleted tombstones never list.
+          //
+          // The Documents Browser tab sorts by merchant then descending
+          // invoice date. The merchant is resolved with the same precedence
+          // as the detail endpoint's effective("counterparty"): a user/rule
+          // claim wins, then a linked counterparty party, then the issuer,
+          // then the extraction's counterparty_descriptor, then
+          // 'Unidentified'. The invoice date follows effective("document_date"):
+          // claim > extraction occurred_at > received_at (fallback so a
+          // document with no extracted date still appears in the right period).
+          //
+          // ?period= / ?month= / ?fy= filter on the invoice date (with the
+          // received_at fallback) using the same resolvePeriod helper as the
+          // Dashboard, so the two tabs share identical date boundaries.
+          //
+          // ?state= filters by the canonical document_pipeline.state. The UI
+          // pipeline board uses the legacy intake_events vocabulary where
+          // "queued" and "processing" mean the same thing as the canonical
+          // "converting" and "analysing"; map those so a click on either cell
+          // filters correctly.
           const includeRemoved = url.searchParams.get("include") === "removed";
+          const period = resolvePeriod(pack, url.searchParams);
+          const bounded = period.from !== null && period.to !== null;
+          const sort = url.searchParams.get("sort") === "received"
+            ? "received_at DESC"
+            : "merchant ASC, invoice_date DESC";
+          const where = includeRemoved ? listableDocumentSql("d") : activeDocumentSql("d");
+          const periodClause = bounded
+            ? ` AND (invoice_date >= ? AND invoice_date <= ?)`
+            : "";
+          const STATE_MAP: Record<string, string> = {
+            queued: "converting",
+            processing: "analysing",
+          };
+          const stateParam = url.searchParams.get("state");
+          const pipelineState = stateParam ? STATE_MAP[stateParam] ?? stateParam : null;
+          const stateClause = pipelineState
+            ? ` AND EXISTS (SELECT 1 FROM document_pipeline dp WHERE dp.document_id=d.id AND dp.state=?)`
+            : "";
+          const args: (string | number)[] = [];
+          if (pipelineState) args.push(pipelineState);
+          if (bounded) { args.push(period.from!, period.to!); }
+          args.push(Number(url.searchParams.get("limit") ?? 500));
           return send(res, 200, {
+            period: { label: period.label, key: period.key, from: period.from, to: period.to },
+            state: stateParam,
             documents: db
               .prepare(
-                `SELECT id, original_filename, ext, byte_size, doc_type, source, sha256,
-                        markdown_chars, received_at, converted_at, analysed_at, lifecycle
-                 FROM documents
-                 WHERE ${includeRemoved ? listableDocumentSql("documents") : activeDocumentSql("documents")}
-                 ORDER BY received_at DESC LIMIT ?`,
+                `SELECT d.id, d.original_filename, d.ext, d.byte_size, d.doc_type, d.source,
+                        d.sha256, d.markdown_chars, d.received_at, d.converted_at, d.analysed_at,
+                        d.lifecycle,
+                        COALESCE(
+                          (SELECT fc.value FROM field_claims fc
+                            WHERE fc.subject_type='document' AND fc.subject_id=d.id
+                              AND fc.field='counterparty'
+                              AND fc.status NOT IN ('rejected','superseded')
+                            ORDER BY fc.id DESC LIMIT 1),
+                          (SELECT e.display_name FROM document_parties dp
+                            JOIN entities e ON e.id=dp.entity_id
+                           WHERE dp.document_id=d.id AND dp.role='counterparty' LIMIT 1),
+                          (SELECT e.display_name FROM document_parties dp
+                            JOIN entities e ON e.id=dp.entity_id
+                           WHERE dp.document_id=d.id AND dp.role='issuer' LIMIT 1),
+                          json_extract(d.extraction_json, '$.counterparty_descriptor'),
+                          'Unidentified'
+                        ) AS merchant,
+                        COALESCE(
+                          (SELECT fc.value FROM field_claims fc
+                            WHERE fc.subject_type='document' AND fc.subject_id=d.id
+                              AND fc.field='document_date'
+                              AND fc.status NOT IN ('rejected','superseded')
+                            ORDER BY fc.id DESC LIMIT 1),
+                          json_extract(d.extraction_json, '$.occurred_at'),
+                          d.received_at
+                        ) AS invoice_date
+                 FROM documents d
+                 WHERE ${where}${stateClause}${periodClause}
+                 ORDER BY ${sort} LIMIT ?`,
               )
-              .all(Number(url.searchParams.get("limit") ?? 100)),
+              .all(...args),
           });
         }
         case "/v1/transactions": {
@@ -2860,11 +2928,24 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               )
               .all(docId);
 
+            // Pipeline state + intake ID — needed by the UI to show a
+            // password prompt for encrypted documents. The canonical state
+            // lives in document_pipeline; the intake_events row carries the
+            // numeric ID the /v1/intake/<id>/password endpoint expects.
+            const pipeline = db
+              .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+              .get(docId) as { state: string } | undefined;
+            const intake = db
+              .prepare("SELECT id FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+              .get(docId) as { id: number } | undefined;
+
             return send(res, 200, {
               document: doc,
               extraction,
               claims: claimMap,
               editable_fields: [...allowedFields("document")],
+              pipeline_state: pipeline?.state ?? null,
+              intake_id: intake?.id ?? null,
               effective: {
                 doc_type: effective("doc_type"),
                 amount_minor: effective("amount_minor"),

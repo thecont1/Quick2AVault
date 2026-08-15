@@ -95,9 +95,12 @@
   .state.password_needed .v{color:var(--warn)}
   .state.active .v{color:var(--blue)}
   .state .v.zero{color:var(--faint);opacity:.4}
+  .state.clickable{cursor:pointer;transition:background .12s}
+  .state.clickable:hover{background:var(--panel2)}
+  .state.selected{background:var(--panel2);box-shadow:inset 0 -2px 0 var(--blue)}
 
   /* ── pipeline two-column ──────────────────────────────────────── */
-  .pcols{display:grid;grid-template-columns:1fr 360px;gap:16px;align-items:start}
+  .pcols{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
 
   /* ── intake table ─────────────────────────────────────────────── */
   .intake{border:1px solid var(--line);background:var(--panel);border-radius:6px;
@@ -155,6 +158,16 @@
   .panel{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:16px 18px;margin-bottom:7px}
   .panel h3{font:600 11px var(--mono);letter-spacing:.7px;text-transform:uppercase;
             color:var(--dim);margin-bottom:12px}
+  /* Collapsible panels — collapsed by default via .collapse */
+  .collapse .collapse-body{display:none}
+  .collapse.open .collapse-body{display:block}
+  .collapse-hdr{cursor:pointer;user-select:none;display:flex;align-items:center;
+            gap:6px;margin-bottom:0}
+  .collapse.open .collapse-hdr{margin-bottom:12px}
+  .collapse-arrow{font-size:10px;color:var(--faint);transition:transform .15s;
+            display:inline-block}
+  .collapse.open .collapse-arrow{transform:rotate(0deg)}
+  .collapse:not(.open) .collapse-arrow{transform:rotate(-90deg)}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .settings-cols{display:grid;grid-template-columns:1fr 1fr;gap:7px;align-items:stretch}
   /* Danger Zone — subtle red border, white background, heavy red button. */
@@ -225,7 +238,7 @@
   .ent{display:grid;grid-template-columns:1fr auto auto auto;gap:10px;align-items:baseline;
        padding:10px 0;border-bottom:1px solid var(--line2);font:12px var(--mono)}
   .ent:last-child{border-bottom:0}
-  .ent .nm{color:var(--ink);font-weight:600}
+  .ent .nm{color:var(--dim);font-weight:500}
   .ent .nm .sub{color:var(--faint);font-weight:400;font-size:10.5px;margin-left:6px}
   .ent .kind{font:9px var(--mono);color:#fff;background:var(--dim);padding:1px 6px;
              border-radius:3px;text-transform:uppercase;letter-spacing:.5px}
@@ -235,6 +248,50 @@
   .ent .stat.confirmed{color:var(--ok);border-color:#a7f3d0}
   .ent .stat.candidate{color:var(--warn);border-color:#fde68a}
   .ent .ct{color:var(--faint);font-size:10.5px;text-align:right}
+  /* role + relationship badges for the household/other split */
+  .ent .role{font:9px var(--mono);padding:1px 6px;border-radius:3px;text-transform:uppercase;
+             letter-spacing:.5px;border:1px solid}
+  .ent .role.owner{color:var(--blue);border-color:var(--blue);background:var(--blue-l)}
+  .ent .role.member{color:var(--inv);border-color:#ddd6fe;background:#f5f3ff}
+  .ent .role.other{color:var(--dim);border-color:var(--line);background:var(--panel2)}
+  .ent .rel{color:var(--dim);font-size:10.5px}
+  .ent .rel .none{color:var(--faint);font-style:italic}
+  .ent.sel{background:var(--blue-xl);box-shadow:0 0 0 2px var(--blue-l) inset}
+  .detail-inline{margin-top:8px}
+
+  /* ── person editor ────────────────────────────────────────────── */
+  .pedit{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:6px}
+  .pedit .blk h4{font:500 10.5px var(--mono);letter-spacing:.6px;text-transform:uppercase;
+                 color:var(--dim);margin-bottom:8px}
+  .rolepick{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+  .rolepick label{display:flex;align-items:center;gap:6px;border:1px solid var(--line);
+                  background:var(--panel);border-radius:5px;padding:7px 11px;cursor:pointer;
+                  font:500 11.5px -apple-system,sans-serif;color:var(--dim)}
+  .rolepick label:hover{border-color:var(--blue);color:var(--ink)}
+  .rolepick input{accent-color:var(--blue)}
+  .rolepick label.on{border-color:var(--blue);background:var(--blue-xl);color:var(--blue)}
+  .pedit .savebar{display:flex;gap:8px;align-items:center;margin-top:4px}
+  .pedit .savebar .msg{font:11px var(--mono);color:var(--faint)}
+  .pedit .savebar .msg.ok{color:var(--ok)} .pedit .savebar .msg.bad{color:var(--bad)}
+  .aliasrow{display:grid;grid-template-columns:auto 1fr auto;gap:8px;align-items:baseline;
+            padding:6px 0;border-bottom:1px solid var(--line2);font:11.5px var(--mono)}
+  .aliasrow:last-child{border-bottom:0}
+  .aliasrow .at{color:var(--blue);font-weight:500;text-transform:uppercase;font-size:9.5px;letter-spacing:.4px}
+  .aliasrow .ax{color:var(--ink)}
+  .aliasrow .ax.rej{text-decoration:line-through;color:var(--faint)}
+  .aliasrow .ax .src{color:var(--faint);font-size:10px;margin-left:5px}
+  .aliasrow .x{font:600 10px var(--mono);color:var(--bad);background:none;border:1px solid #fecaca;
+               border-radius:3px;padding:2px 7px;cursor:pointer}
+  .aliasrow .x:hover{background:#fef2f2}
+  .aliasadd{display:flex;gap:8px;margin-top:10px}
+  .aliasadd input{flex:1}
+  .dangerbtn{font:600 11px -apple-system,sans-serif;color:var(--bad);background:none;
+             border:1px solid #fecaca;border-radius:4px;padding:7px 13px;cursor:pointer}
+  .dangerbtn:hover{background:#fef2f2}
+  .dangerbtn:disabled{color:var(--faint);border-color:var(--line);cursor:not-allowed}
+  .mergebar{display:flex;gap:8px;align-items:flex-end;margin-top:10px}
+  .mergebar select{flex:1}
+  @media (max-width:780px){.pedit{grid-template-columns:1fr}}
 
   /* ── review items ─────────────────────────────────────────────── */
   .rev{border:1px solid var(--line);background:var(--panel);border-radius:6px;
@@ -270,15 +327,88 @@
   .rule .v{color:var(--dim)}
   .rule .n{color:var(--faint);font-size:10.5px}
 
+  /* ── editable effective fields ─────────────────────────────────── */
+  .rule.editable .v{cursor:pointer;border-bottom:1px dashed var(--faint)}
+  .rule.editable .v:hover{border-bottom-color:var(--blue);color:var(--blue)}
+  .rule.editing .v{display:none}
+  .rule .edit-input{font:11.5px var(--mono);padding:2px 6px;border:1px solid var(--blue);
+    border-radius:3px;background:var(--bg);color:var(--ink);width:100%;max-width:200px}
+  .rule .edit-input:focus{outline:none}
+
+  /* ── document action bar ───────────────────────────────────────── */
+  .doc-actions{display:flex;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line2)}
+  .doc-actions button{font:11px var(--mono);padding:6px 14px;border:1px solid var(--line);
+    border-radius:5px;cursor:pointer;background:var(--panel);color:var(--ink)}
+  .doc-actions button:hover{border-color:var(--blue);color:var(--blue)}
+  .doc-actions button.primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .doc-actions button.primary:hover{opacity:.85;color:#fff}
+  .doc-actions button.danger{color:var(--bad);border-color:var(--bad)}
+  .doc-actions button.danger:hover{background:var(--bad);color:#fff}
+  .doc-actions .msg{font:11px var(--mono);color:var(--faint);align-self:center;margin-left:6px}
+  .doc-actions .msg.ok{color:var(--ok)}
+  .doc-actions .msg.err{color:var(--bad)}
+
   /* ── document list ────────────────────────────────────────────── */
   .drow{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:baseline;
-        padding:10px 13px;border-bottom:1px solid var(--line2);font:11.5px var(--mono);cursor:pointer}
-  .drow:last-child{border-bottom:0}
-  .drow:hover{background:var(--panel2)}
+        padding:10px 13px;font:11.5px var(--mono);cursor:pointer;
+        background:var(--panel);border:1px solid var(--line);border-radius:6px;
+        margin-bottom:6px;transition:border-color .12s,box-shadow .12s}
+  .drow:hover{border-color:var(--blue);box-shadow:0 1px 4px rgba(0,0,0,.06)}
+  .drow.open{border-color:var(--blue);border-radius:6px 6px 0 0;margin-bottom:0}
   .drow .fn{color:var(--ink);word-break:break-all}
   .drow .meta{color:var(--faint);font-size:10px;margin-top:3px}
   .drow .dt{color:var(--faint);font-size:10px;text-align:right;white-space:nowrap}
-  .dlist{border:1px solid var(--line);background:var(--panel);border-radius:6px;max-height:480px;overflow-y:auto}
+  .drow-detail{border:1px solid var(--blue);border-top:0;border-radius:0 0 6px 6px;
+               padding:14px 16px 18px;background:var(--panel2);margin-bottom:6px}
+  .drow-detail .panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px}
+  .drow-detail .panel>h3:first-child{margin-top:0}
+  /* two-column layout: details left, document viewer right */
+  .doc-split{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
+  @media(max-width:980px){.doc-split{grid-template-columns:1fr}}
+  .doc-viewer{position:sticky;top:8px}
+  .doc-viewer .viewer-box{position:relative;background:var(--panel);border:1px solid var(--line);
+    border-radius:6px;overflow:visible;min-height:200px;display:flex;align-items:center;justify-content:center}
+  .doc-viewer img.page{display:block;max-width:100%;height:auto;cursor:crosshair;user-select:none;-webkit-user-drag:none}
+  .doc-viewer .lens{position:absolute;pointer-events:none;border-radius:50%;overflow:hidden;
+    border:2px solid var(--blue);box-shadow:0 4px 16px rgba(0,0,0,.25);z-index:5;display:none}
+  .doc-viewer .lens img{position:absolute;max-width:none}
+  .doc-viewer .pager{display:flex;align-items:center;justify-content:space-between;gap:8px;
+    margin-top:8px;font:11px var(--mono);color:var(--dim)}
+  .doc-viewer .pager button{font:11px var(--mono);padding:3px 10px;border:1px solid var(--line);
+    background:var(--panel);border-radius:4px;cursor:pointer;color:var(--ink)}
+  .doc-viewer .pager button:disabled{opacity:.4;cursor:default}
+  .doc-viewer .viewer-fallback{font:11.5px var(--mono);color:var(--faint);padding:24px;text-align:center}
+  /* Image/Text toggle */
+  .viewer-toggle{display:flex;gap:0;margin-bottom:8px;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  .viewer-toggle button{flex:1;font:11px var(--mono);padding:5px 12px;border:0;background:var(--panel);
+    color:var(--dim);cursor:pointer;border-bottom:2px solid transparent}
+  .viewer-toggle button.on{background:var(--panel2);color:var(--ink);border-bottom-color:var(--blue)}
+  .viewer-toggle button:disabled{opacity:.4;cursor:default;color:var(--faint)}
+  /* Markdown text view */
+  .doc-viewer .md-view{font:12px/1.6 var(--mono);color:var(--ink);white-space:pre-wrap;word-break:break-word;
+    background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px;
+    max-height:70vh;overflow-y:auto}
+  /* Password prompt for encrypted documents */
+  .doc-viewer .pw-prompt{background:var(--panel);border:1px solid var(--warn);
+    border-radius:6px;padding:20px 24px;text-align:center}
+  .doc-viewer .pw-prompt .pw-icon{font-size:28px;margin-bottom:8px}
+  .doc-viewer .pw-prompt .pw-title{font:600 13px var(--mono);color:var(--ink);margin-bottom:4px}
+  .doc-viewer .pw-prompt .pw-hint{font:11px var(--mono);color:var(--faint);margin-bottom:14px}
+  .doc-viewer .pw-prompt .pw-row{display:flex;gap:8px;justify-content:center}
+  .doc-viewer .pw-prompt input{font:12px var(--mono);padding:7px 12px;border:1px solid var(--line);
+    border-radius:5px;background:var(--bg);color:var(--ink);flex:1;max-width:240px}
+  .doc-viewer .pw-prompt input:focus{outline:none;border-color:var(--blue)}
+  .doc-viewer .pw-prompt button{font:11px var(--mono);padding:7px 16px;border:0;
+    border-radius:5px;background:var(--blue);color:#fff;cursor:pointer}
+  .doc-viewer .pw-prompt button:disabled{opacity:.5;cursor:default}
+  .doc-viewer .pw-prompt .pw-msg{font:11px var(--mono);margin-top:10px;min-height:14px}
+  .doc-viewer .pw-prompt .pw-msg.ok{color:var(--ok)}
+  .doc-viewer .pw-prompt .pw-msg.err{color:var(--bad)}
+  .dlist{max-height:560px;overflow-y:auto;padding:2px}
+  .dgroup{margin:0 0 18px}
+  .dgroup>h4{font:11px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--dim);
+             margin:0 0 6px;padding:4px 0;border-bottom:1px solid var(--line)}
+  .dgroup>h4 .n{color:var(--faint);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px}
 
   footer{margin:34px 32px 0;padding-top:14px;border-top:1px solid var(--line);
          font:10.5px var(--mono);color:var(--faint);max-width:1280px;margin-left:auto;margin-right:auto;
@@ -294,11 +424,11 @@
 </div>
 
 <div class="tabs" id="tabs">
-  <button data-tab="obs" class="on">Dashboard</button>
-  <button data-tab="review">Documents</button>
-  <button data-tab="people">People</button>
-  <button data-tab="learning">Learning</button>
-  <button data-tab="settings">Settings</button>
+  <button data-tab="obs" class="on">Your Money</button>
+  <button data-tab="review">Documents Browser</button>
+  <button data-tab="people">People &amp; Accounts</button>
+  <button data-tab="learning">Learning Review</button>
+  <button data-tab="settings">Settings &amp; Customisations</button>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════
@@ -335,16 +465,12 @@
   </section>
 
   <section>
-    <h2>Documents pipeline <span class="sub">what is coming in and what is happening to it</span></h2>
+    <h2>Documents pipeline</h2>
     <div class="board" id="board"></div>
     <div class="pcols">
       <div>
         <h2 style="margin-top:4px">Intake <span class="sub" id="intakeCount">— items</span></h2>
         <div class="intake" id="intake"><div class="empty">waiting for intake…</div></div>
-      </div>
-      <div>
-        <h2 style="margin-top:4px">Live events</h2>
-        <div class="feed" id="feed"><div class="fe"><span class="t">—</span><span class="n">waiting for events…</span></div></div>
       </div>
     </div>
   </section>
@@ -509,34 +635,53 @@
      PEOPLE TAB
 // ════════════════════════════════════════════════════════════════════════ -->
 <div class="tab" id="tab-people">
-  <h2>People <span class="sub">identity management — owner, members, candidates</span></h2>
+  <h2>People &amp; Accounts <span class="sub">manage identities of owners, members, organisations, accounts and instruments</span></h2>
+
   <div class="panel">
-    <h3>People <span style="color:var(--faint);font-weight:400;text-transform:none" id="peopleCount"></span></h3>
-    <div id="peopleList"><div class="empty">loading…</div></div>
+    <h3>Household <span style="color:var(--faint);font-weight:400;text-transform:none" id="houseCount"></span></h3>
+    <div class="hint" style="margin:-6px 0 10px">The people this vault belongs to. Exactly one is you (owner); others are members who share it (spouse, family).</div>
+    <div id="houseList"><div class="empty">loading…</div></div>
   </div>
+
+  <div class="panel collapse" id="otherPanel">
+    <h3 class="collapse-hdr">Other people <span style="color:var(--faint);font-weight:400;text-transform:none" id="otherCount"></span> <span class="collapse-arrow">▾</span></h3>
+    <div class="collapse-body">
+      <div class="hint" style="margin:-6px 0 10px">Everyone else the documents name — merchants, landlords, tenants, employers. Classify each by their relationship to you.</div>
+      <div id="otherList"><div class="empty">loading…</div></div>
+    </div>
+  </div>
+
+  <div class="panel collapse" id="orgPanel">
+    <h3 class="collapse-hdr">Organisations <span style="color:var(--faint);font-weight:400;text-transform:none" id="orgCount"></span> <span class="collapse-arrow">▾</span></h3>
+    <div class="collapse-body">
+      <div class="hint" style="margin:-6px 0 10px">Merchants, companies, and other non-person entities. Click to inspect cross-kind identifier conflicts.</div>
+      <div id="orgList"><div class="empty">loading…</div></div>
+    </div>
+  </div>
+
   <div class="panel">
-    <h3>All entities <span style="color:var(--faint);font-weight:400;text-transform:none" id="entCount"></span></h3>
-    <div id="entList"><div class="empty">loading…</div></div>
+    <h3>Accounts <span style="color:var(--faint);font-weight:400;text-transform:none" id="acctCount"></span></h3>
+    <div class="hint" style="margin:-6px 0 10px">Banks, brokers, wallets, and instruments. Click to inspect cross-kind identifier conflicts.</div>
+    <div id="acctList"><div class="empty">loading…</div></div>
   </div>
-  <div id="personDetail"></div>
+
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════
      DOCUMENTS REVIEW TAB
 // ════════════════════════════════════════════════════════════════════════ -->
 <div class="tab" id="tab-review">
-  <h2>Documents Review <span class="sub">review queue + document ledger</span></h2>
+  <div class="periods" id="periodsReview"></div>
 
-  <div class="panel">
-    <h3>Review queue <span style="color:var(--faint);font-weight:400;text-transform:none" id="revCount"></span></h3>
-    <div id="revList"><div class="empty">loading…</div></div>
-  </div>
+  <section>
+    <h2>Documents pipeline</h2>
+    <div class="board" id="boardReview"></div>
+  </section>
 
   <div class="panel">
     <h3>Documents <span style="color:var(--faint);font-weight:400;text-transform:none" id="docCount"></span></h3>
-    <div class="dlist" id="docList"><div class="empty">loading…</div></div>
+    <div id="docList"><div class="empty">loading…</div></div>
   </div>
-  <div id="docDetail"></div>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════
@@ -581,6 +726,11 @@ const apiPost = (p, body) => fetch(p, {
   method: "POST", headers: { ...H, "content-type": "application/json" },
   body: JSON.stringify(body || {}),
 }).then((r) => r.json());
+const apiPatch = (p, body) => fetch(p, {
+  method: "PATCH", headers: { ...H, "content-type": "application/json" },
+  body: JSON.stringify(body || {}),
+}).then((r) => r.json());
+const apiDelete = (p) => fetch(p, { method: "DELETE", headers: H }).then((r) => r.json());
 
 const money = (m) => m === null || m === undefined ? "—"
   : "₹" + (m / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -652,6 +802,21 @@ function renderPeriods() {
     + esc(p.label) + "</button>").join("");
   el.querySelectorAll("button").forEach((b) =>
     b.onclick = () => { period = b.dataset.p; localStorage.setItem("q2av_period", period); renderPeriods(); refreshObs(); });
+  // Keep the Documents Browser period selector in sync — same shared state.
+  const er = document.getElementById("periodsReview");
+  if (er) renderPeriodsReview();
+}
+
+// Documents Browser shares the same period selector and localStorage key as
+// the Dashboard, so changing it on one tab is reflected on the other.
+function renderPeriodsReview() {
+  const el = document.getElementById("periodsReview");
+  if (!el) return;
+  el.innerHTML = PERIODS.map((p) =>
+    "<button class='" + (p.key === period ? "on" : "") + "' data-p='" + esc(p.key) + "'>"
+    + esc(p.label) + "</button>").join("");
+  el.querySelectorAll("button").forEach((b) =>
+    b.onclick = () => { period = b.dataset.p; localStorage.setItem("q2av_period", period); renderPeriods(); renderPeriodsReview(); loadReview(); });
 }
 
 // ── observability: health strip ──────────────────────────────────
@@ -728,17 +893,43 @@ const STATES = [
 // in real time without waiting for a full refresh.
 let pipelineCounts = {};
 let pipelineStalled = 0;
+// When set, the Documents Browser filters its document list to this pipeline
+// state. Clicking the selected cell again clears it.
+let pipelineFilter = null;
 
 function renderPipelineBoard() {
-  const board = document.getElementById("board");
-  if (!board) return;
-  board.innerHTML = STATES.map((st) => {
+  // Dashboard board — not clickable, just a status display.
+  const dashHtml = STATES.map((st) => {
     const n = pipelineCounts[st.k] || 0;
     return "<div class='state " + esc(st.cls) + "'><div class='k'>" + esc(st.label) + "</div>"
       + "<div class='v " + (n ? "" : "zero") + "'>" + esc(n) + "</div></div>";
   }).join("") + (pipelineStalled
     ? "<div class='state stalled'><div class='k'>Stalled</div><div class='v'>" + esc(pipelineStalled) + "</div></div>"
     : "");
+  const board = document.getElementById("board");
+  if (board) board.innerHTML = dashHtml;
+
+  // Documents Browser board — each cell is a clickable filter.
+  const reviewHtml = STATES.map((st) => {
+    const n = pipelineCounts[st.k] || 0;
+    const sel = pipelineFilter === st.k ? " selected" : "";
+    return "<div class='state clickable " + esc(st.cls) + sel + "' data-state='" + esc(st.k) + "'>"
+      + "<div class='k'>" + esc(st.label) + "</div>"
+      + "<div class='v " + (n ? "" : "zero") + "'>" + esc(n) + "</div></div>";
+  }).join("") + (pipelineStalled
+    ? "<div class='state stalled'><div class='k'>Stalled</div><div class='v'>" + esc(pipelineStalled) + "</div></div>"
+    : "");
+  const boardReview = document.getElementById("boardReview");
+  if (boardReview) {
+    boardReview.innerHTML = reviewHtml;
+    boardReview.querySelectorAll(".state.clickable").forEach((cell) =>
+      cell.onclick = () => {
+        const s = cell.dataset.state;
+        pipelineFilter = (pipelineFilter === s) ? null : s;
+        renderPipelineBoard();
+        loadReview();
+      });
+  }
 }
 
 // Apply a PipelineStateChanged event to the live counts and re-render the
@@ -799,14 +990,9 @@ const DESC = {
   PipelineStateChanged: (e) => (e.from_state || "—") + " → " + e.to_state,
 };
 function push(type, data) {
-  const f = document.getElementById("feed");
-  if (f.dataset.virgin !== "1") { f.innerHTML = ""; f.dataset.virgin = "1"; }
-  const d = document.createElement("div");
-  d.className = "fe " + type;
-  const say = DESC[type] ? DESC[type](data) : type;
-  d.innerHTML = "<span class='t'>" + clock() + "</span><span class='n'>" + esc(say) + "</span>";
-  f.prepend(d);
-  while (f.children.length > 80) f.lastChild.remove();
+  // The Live Events feed was removed from the Dashboard. The push function
+  // is kept as a no-op so the SSE handler doesn't break — pipeline state
+  // changes are handled directly by onPipelineStateChanged/onDocumentReceived.
 }
 
 function connect() {
@@ -822,6 +1008,14 @@ function connect() {
       // so the user can watch documents flow through the pipeline live.
       if (type === "PipelineStateChanged") onPipelineStateChanged(d);
       else if (type === "DocumentReceived") onDocumentReceived();
+      // JobStateChanged is a safety net: if any state change bypasses
+      // PipelineStateChanged (e.g. a raw SQL update in the API layer),
+      // the job event still fires and we refresh the pipeline counts
+      // from the authoritative /v1/intake/status endpoint.
+      if (type === "JobStateChanged") {
+        clearTimeout(window.__pr);
+        window.__pr = setTimeout(() => refreshPipeline(), 300);
+      }
       if (["TransactionRecorded", "MatchProposed", "AnalysisComplete",
            "DocumentReceived", "JobStateChanged"].includes(type)) {
         clearTimeout(window.__rt);
@@ -1237,48 +1431,123 @@ dangerGoBtn.onclick = async () => {
 // ════════════════════════════════════════════════════════════════════════
 // PEOPLE TAB
 // ════════════════════════════════════════════════════════════════════════
+// Collapsible section headers — toggle open/closed on click.
+document.querySelectorAll(".collapse .collapse-hdr").forEach((hdr) => {
+  hdr.onclick = () => hdr.parentElement.classList.toggle("open");
+});
+// People tab state. peopleCache feeds the merge dropdown; selectedPersonId
+// highlights the open row across reloads.
+let peopleCache = [];
+let selectedPersonId = null;
+
+// Relationship presets. The schema's subtype is free TEXT, so a preset is a
+// convenience, not a constraint — "Custom…" reveals a free-text input.
+const RELATIONSHIPS = ["spouse", "family", "merchant", "landlord", "tenant", "employer", "contractor", "friend"];
+
+function personRow(x, selectedId) {
+  const isHouse = x.is_owner || x.is_member;
+  const role = x.is_owner
+    ? "<span class='role owner'>★ owner</span>"
+    : x.is_member
+      ? "<span class='role member'>member</span>"
+      : "<span class='role other'>person</span>";
+  const rel = x.subtype
+    ? "<span class='rel'>" + esc(x.subtype) + "</span>"
+    : (isHouse ? "" : "<span class='rel'><span class='none'>unclassified</span></span>");
+  return "<div class='ent" + (x.id === selectedId ? " sel" : "") + "' data-id='" + esc(x.id) + "' data-kind='person'>"
+    + "<div><span class='nm'>" + esc(x.display_name) + "</span> " + role + " " + rel + "</div>"
+    + "<span class='kind person'>person</span>"
+    + "<span class='stat " + esc(x.status) + "'>" + esc(x.status) + "</span>"
+    + "<span class='ct'>" + esc(x.document_count) + " docs · " + esc(x.transaction_count) + " txns</span></div>";
+}
+
 async function loadPeople() {
   const [p, e] = await Promise.all([api("/v1/people"), api("/v1/entities")]);
   const people = p.people || [];
-  document.getElementById("peopleCount").textContent = "· " + people.length + " people";
-  document.getElementById("peopleList").innerHTML = !people.length
-    ? "<div class='empty'>No people yet.</div>"
-    : people.map((x) =>
-      "<div class='ent' data-id='" + esc(x.id) + "' data-kind='person'>"
-      + "<div><span class='nm'>" + esc(x.display_name)
-      + (x.is_owner ? " <span class='sub'>★ owner</span>" : x.is_member ? " <span class='sub'>member</span>" : "")
-      + "</span><span class='sub'>" + esc(x.subtype || "") + "</span></div>"
-      + "<span class='kind person'>person</span>"
-      + "<span class='stat " + esc(x.status) + "'>" + esc(x.status) + "</span>"
-      + "<span class='ct'>" + esc(x.document_count) + " docs · " + esc(x.transaction_count) + " txns</span></div>"
-    ).join("");
+  peopleCache = people;
+  const house = people.filter((x) => x.is_owner || x.is_member);
+  const others = people.filter((x) => !x.is_owner && !x.is_member);
 
-  const ents = e.entities || [];
-  document.getElementById("entCount").textContent = "· " + ents.length + " entities";
-  document.getElementById("entList").innerHTML = !ents.length
-    ? "<div class='empty'>No entities yet.</div>"
-    : ents.map((x) =>
+  document.getElementById("houseCount").textContent = "· " + house.length + (house.length === 1 ? " person" : " people");
+  document.getElementById("otherCount").textContent = "· " + others.length + (others.length === 1 ? " person" : " people");
+  document.getElementById("houseList").innerHTML = !house.length
+    ? "<div class='empty'>No household yet. Mark someone as “owner” or “member” to add them.</div>"
+    : house.map((x) => personRow(x, selectedPersonId)).join("");
+  document.getElementById("otherList").innerHTML = !others.length
+    ? "<div class='empty'>No other people detected yet.</div>"
+    : others.map((x) => personRow(x, selectedPersonId)).join("");
+
+  const ents = (e.entities || []).filter((x) => x.kind !== "person");
+  const orgs = ents.filter((x) => x.kind === "organisation");
+  const accts = ents.filter((x) => x.kind === "account" || x.kind === "instrument");
+
+  const entRow = (x) =>
       "<div class='ent' data-id='" + esc(x.id) + "' data-kind='" + esc(x.kind) + "'>"
-      + "<div><span class='nm'>" + esc(x.display_name) + "</span></div>"
+      + "<div><span class='nm'>" + esc(x.display_name) + "</span>"
+      + (x.subtype ? " <span class='rel'>" + esc(x.subtype) + "</span>" : "") + "</div>"
       + "<span class='kind " + esc(x.kind) + "'>" + esc(x.kind) + "</span>"
       + "<span class='stat " + esc(x.status) + "'>" + esc(x.status) + "</span>"
-      + "<span class='ct'>" + esc((x.conflicts || []).length) + " conflicts</span></div>"
-    ).join("");
+      + "<span class='ct'>" + esc((x.conflicts || []).length) + " conflicts</span></div>";
 
-  document.querySelectorAll("#peopleList .ent, #entList .ent").forEach((el) =>
-    el.onclick = () => showPerson(el.dataset.id));
+  document.getElementById("orgCount").textContent = "· " + orgs.length + (orgs.length === 1 ? " entity" : " entities");
+  document.getElementById("orgList").innerHTML = !orgs.length
+    ? "<div class='empty'>No organisations detected yet.</div>"
+    : orgs.map(entRow).join("");
+
+  document.getElementById("acctCount").textContent = "· " + accts.length + (accts.length === 1 ? " entity" : " entities");
+  document.getElementById("acctList").innerHTML = !accts.length
+    ? "<div class='empty'>No accounts or instruments detected yet.</div>"
+    : accts.map(entRow).join("");
+
+  document.querySelectorAll("#houseList .ent, #otherList .ent").forEach((el) =>
+    el.onclick = () => showPerson(el.dataset.id, el));
+  document.querySelectorAll("#orgList .ent, #acctList .ent").forEach((el) =>
+    el.onclick = () => showEntity(el.dataset.id, el));
 }
 
-async function showPerson(id) {
+// Render the detail panel inline, right after the clicked row. A previously
+// opened panel is removed first so only one is visible at a time.
+function renderDetail(html, afterEl) {
+  const old = document.querySelector(".detail-inline");
+  if (old) old.remove();
+  const wrap = document.createElement("div");
+  wrap.className = "detail-inline";
+  wrap.innerHTML = html;
+  afterEl.insertAdjacentElement("afterend", wrap);
+}
+
+async function showPerson(id, rowEl) {
+  selectedPersonId = id;
+  // Re-render lists to reflect the selection highlight without a refetch.
+  document.querySelectorAll("#houseList .ent, #otherList .ent").forEach((el) =>
+    el.classList.toggle("sel", el.dataset.id === id));
   const d = await api("/v1/people/" + encodeURIComponent(id));
   const person = d.person || {};
   const aliases = d.aliases || [];
   const docs = d.documents || [];
   const txns = d.transactions || [];
-  const aliasesHtml = aliases.map((a) =>
-    "<div class='rule'><span class='k'>" + esc(a.alias_type) + "</span>"
-    + "<span class='v'>" + esc(a.alias) + " <span style='color:var(--faint)'>· " + esc(a.status) + "</span></span>"
-    + "<span class='n'>" + esc(a.supporting_documents || 0) + " docs</span></div>").join("");
+
+  const role = person.is_owner ? "owner" : person.is_member ? "member" : "other";
+  const relCur = person.subtype || "";
+  const relIsPreset = RELATIONSHIPS.includes(relCur);
+  const relOptions = ["<option value=''>— none —</option>"]
+    .concat(RELATIONSHIPS.map((r) => "<option value='" + esc(r) + "'" + (r === relCur ? " selected" : "") + ">" + esc(r) + "</option>"))
+    .concat(relCur && !relIsPreset
+      ? ["<option value='" + esc(relCur) + "' selected>" + esc(relCur) + " (custom)</option>"]
+      : [])
+    .concat(["<option value='__custom'>Custom…</option>"])
+    .join("");
+
+  const aliasHtml = aliases.map((a) =>
+    "<div class='aliasrow'>"
+    + "<span class='at'>" + esc(a.alias_type) + "</span>"
+    + "<span class='ax" + (a.status === "rejected" ? " rej" : "") + "'>" + esc(a.alias)
+    + " <span class='src'>· " + esc(a.status) + " · " + esc(a.source) + "</span></span>"
+    + (a.status === "rejected"
+        ? ""
+        : "<button class='x' data-alias='" + esc(a.id) + "'>reject</button>")
+    + "</div>").join("");
+
   const docsHtml = docs.map((x) =>
     "<div class='rule'><span class='k'>" + esc(x.role) + "</span>"
     + "<span class='v'>" + esc(x.original_filename) + "</span>"
@@ -1287,88 +1556,417 @@ async function showPerson(id) {
     "<div class='rule'><span class='k'>" + esc(x.direction) + "</span>"
     + "<span class='v'>" + money(x.amount_minor) + " · " + esc(x.counterparty_name || "transfer") + "</span>"
     + "<span class='n'>" + esc(String(x.occurred_at || "").slice(0, 10)) + "</span></div>").join("");
-  document.getElementById("personDetail").innerHTML =
-    "<div class='panel'><h3>" + esc(person.display_name) + " · " + esc(person.kind) + "</h3>"
-    + "<div class='grid3'>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Status</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(person.status) + "</div></div>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Confidence</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(person.confidence) + "</div></div>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Subtype</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(person.subtype || "—") + "</div></div>"
+
+  // Merge targets: every OTHER person. Merging folds this person into the
+  // chosen survivor (every alias is kept), so the current row disappears.
+  const mergeOpts = peopleCache
+    .filter((x) => x.id !== id)
+    .map((x) => "<option value='" + esc(x.id) + "'>" + esc(x.display_name) + "</option>").join("");
+
+  renderDetail(
+    "<div class='panel'>"
+    + "<h3>" + esc(person.display_name) + " <span style='color:var(--ink);font-weight:400;text-transform:none'>· person · " + esc(person.status) + " · confidence " + esc(person.confidence) + "</span></h3>"
+    + "<div class='pedit'>"
+    // ── left: edit ──
+    + "<div class='blk'>"
+    + "<h4>Identity</h4>"
+    + "<div class='field' style='margin-bottom:12px'><label>Display name</label>"
+    + "<input type='text' id='pName' value='" + esc(person.display_name) + "'></div>"
+    + "<h4>Role in this vault</h4>"
+    + "<div class='rolepick' id='rolePick'>"
+    + "<label data-role='owner'><input type='radio' name='role'" + (role === "owner" ? " checked" : "") + ">This is me (owner)</label>"
+    + "<label data-role='member'><input type='radio' name='role'" + (role === "member" ? " checked" : "") + ">Household member</label>"
+    + "<label data-role='other'><input type='radio' name='role'" + (role === "other" ? " checked" : "") + ">Other person</label>"
     + "</div>"
-    + "<h3 style='margin-top:18px'>Aliases</h3>" + (aliasesHtml || "<div class='empty'>No aliases.</div>")
-    + "<h3 style='margin-top:18px'>Documents</h3>" + (docsHtml || "<div class='empty'>No linked documents.</div>")
-    + "<h3 style='margin-top:18px'>Transactions</h3>" + (txnsHtml || "<div class='empty'>No linked transactions.</div>")
-    + "</div>";
+    + "<div class='field' style='margin-bottom:12px'><label>Relationship</label>"
+    + "<select id='pRel'>" + relOptions + "</select>"
+    + "<input type='text' id='pRelCustom' placeholder='custom relationship' style='margin-top:8px" + (relIsPreset || !relCur ? ";display:none" : "") + "' value='" + esc(relIsPreset || !relCur ? "" : relCur) + "'>"
+    + "<div class='hint'>How this person relates to you — merchant, landlord, tenant, spouse…</div></div>"
+    + "<div class='savebar'><button class='act' id='pSave'>Save changes</button><span class='msg' id='pMsg'></span></div>"
+    // ── merge + delete ──
+    + (mergeOpts
+      ? "<div class='mergebar'><div class='field' style='margin:0;flex:1'><label>Merge into…</label>"
+        + "<select id='pMerge'>" + mergeOpts + "</select></div>"
+        + "<button class='ghost' id='pMergeGo'>merge</button></div>"
+        + "<div class='hint' style='margin-top:6px'>Folds this person into the chosen survivor; every alias and document link is kept.</div>"
+      : "")
+    + "<div style='margin-top:14px'><button class='dangerbtn' id='pDel'>Delete person</button>"
+    + "<span class='msg' id='pDelMsg' style='margin-left:10px'></span></div>"
+    + "</div>"
+    // ── right: evidence ──
+    + "<div class='blk'>"
+    + "<h4>Aliases <span style='color:var(--faint);font-weight:400;text-transform:none'>· other names, emails, phones, handles this person goes by</span></h4>"
+    + (aliasHtml || "<div class='empty'>No aliases yet.</div>")
+    + "<div class='aliasadd'><input type='text' id='pAliasAdd' placeholder='e.g. a name variant, email, phone, handle — type is detected automatically'>"
+    + "<button class='ghost' id='pAliasGo'>add</button></div>"
+    + "<div class='msg' id='pAliasMsg' style='margin-top:6px'></div>"
+    + "<h4 style='margin-top:18px'>Documents</h4>" + (docsHtml || "<div class='empty'>No linked documents.</div>")
+    + "<h4 style='margin-top:18px'>Transactions</h4>" + (txnsHtml || "<div class='empty'>No linked transactions.</div>")
+    + "</div>"
+    + "</div></div>",
+    rowEl);
+
+  // wire up the editor
+  wireRolePick();
+  const relSel = document.getElementById("pRel");
+  const relCustom = document.getElementById("pRelCustom");
+  relSel.onchange = () => {
+    if (relSel.value === "__custom") {
+      relCustom.style.display = "";
+      relCustom.focus();
+    } else {
+      relCustom.style.display = "none";
+      relCustom.value = "";
+    }
+  };
+  document.getElementById("pSave").onclick = () => savePerson(id);
+  document.getElementById("pAliasGo").onclick = () => addAlias(id);
+  document.getElementById("pAliasAdd").onkeydown = (e) => { if (e.key === "Enter") addAlias(id); };
+  document.querySelectorAll(".detail-inline .aliasrow .x").forEach((b) =>
+    b.onclick = () => rejectAlias(id, b.dataset.alias));
+  if (mergeOpts) document.getElementById("pMergeGo").onclick = () => mergePerson(id);
+  document.getElementById("pDel").onclick = () => deletePerson(id);
+}
+
+// Keep the role radio labels in sync with their checked input.
+function wireRolePick() {
+  const pick = document.getElementById("rolePick");
+  if (!pick) return;
+  const sync = () => pick.querySelectorAll("label").forEach((l) =>
+    l.classList.toggle("on", l.querySelector("input").checked));
+  sync();
+  pick.querySelectorAll("input").forEach((r) => r.onchange = sync);
+}
+
+function chosenRole() {
+  const on = document.querySelector("#rolePick input:checked");
+  return on ? on.closest("label").dataset.role : "other";
+}
+
+function chosenRelationship() {
+  const sel = document.getElementById("pRel");
+  const custom = document.getElementById("pRelCustom");
+  if (sel.value === "__custom") return (custom.value || "").trim();
+  return (sel.value || "").trim();
+}
+
+async function savePerson(id) {
+  const msg = document.getElementById("pMsg");
+  msg.className = "msg";
+  msg.textContent = "saving…";
+  const name = (document.getElementById("pName").value || "").trim();
+  const rel = chosenRelationship();
+  const role = chosenRole();
+  if (!name) { msg.className = "msg bad"; msg.textContent = "name cannot be empty"; return; }
+  const patch = { display_name: name, relationship: rel || null };
+  if (role === "owner") { patch.is_owner = true; patch.is_member = true; }
+  else if (role === "member") { patch.is_owner = false; patch.is_member = true; }
+  else { patch.is_owner = false; patch.is_member = false; }
+  const r = await apiPatch("/v1/people/" + encodeURIComponent(id), patch);
+  if (r.error) {
+    msg.className = "msg bad";
+    msg.textContent = r.error === "name_taken" ? "That name is taken — use merge instead." : (r.message || r.error);
+    return;
+  }
+  msg.className = "msg ok";
+  msg.textContent = "saved";
+  await loadPeople();
+  const row = document.querySelector("#houseList .ent[data-id='" + CSS.escape(id) + "'], #otherList .ent[data-id='" + CSS.escape(id) + "']");
+  showPerson(id, row);
+}
+
+async function addAlias(id) {
+  const inp = document.getElementById("pAliasAdd");
+  const msg = document.getElementById("pAliasMsg");
+  const alias = (inp.value || "").trim();
+  if (!alias) return;
+  msg.className = "msg"; msg.textContent = "adding…";
+  const r = await apiPost("/v1/people/" + encodeURIComponent(id) + "/aliases", { alias });
+  if (r.error) {
+    msg.className = "msg bad";
+    msg.textContent = r.error === "alias_in_use" ? "Already on file for another person — merge them if they are the same human." : (r.message || r.error);
+    return;
+  }
+  msg.className = "msg ok"; msg.textContent = "added as " + r.alias_type;
+  showPerson(id);
+}
+
+async function rejectAlias(id, aliasId) {
+  await apiDelete("/v1/people/" + encodeURIComponent(id) + "/aliases/" + encodeURIComponent(aliasId));
+  showPerson(id);
+}
+
+async function mergePerson(id) {
+  const into = document.getElementById("pMerge").value;
+  if (!into) return;
+  if (!confirm("Merge this person into the selected survivor? This cannot be undone.")) return;
+  const r = await apiPost("/v1/people/merge", { from_id: id, into_id: into });
+  if (r.error) { alert(r.message || r.error); return; }
+  selectedPersonId = into;
+  await loadPeople();
+  const row = document.querySelector("#houseList .ent[data-id='" + CSS.escape(into) + "'], #otherList .ent[data-id='" + CSS.escape(into) + "']");
+  showPerson(into, row);
+}
+
+async function deletePerson(id) {
+  const btn = document.getElementById("pDel");
+  const msg = document.getElementById("pDelMsg");
+  if (!confirm("Delete this person?")) return;
+  btn.disabled = true;
+  let r = await apiDelete("/v1/people/" + encodeURIComponent(id));
+  if (r.error === "person_in_use") {
+    msg.className = "msg";
+    msg.textContent = "Named on " + r.documents + " document(s). ";
+    if (confirm(r.message + "\n\nForce-delete will reassign those links to “Unidentified” and remove this person. Continue?")) {
+      r = await apiDelete("/v1/people/" + encodeURIComponent(id) + "?force=1");
+    } else { btn.disabled = false; return; }
+  }
+  if (r.error) { msg.className = "msg bad"; msg.textContent = r.message || r.error; btn.disabled = false; return; }
+  selectedPersonId = null;
+  const old = document.querySelector(".detail-inline");
+  if (old) old.remove();
+  await loadPeople();
+}
+
+// Non-person entities (organisations, accounts, instruments) are editable:
+// display name, subtype, status, and same-kind merge.
+async function showEntity(id, rowEl) {
+  const e = await api("/v1/entities");
+  const ent = (e.entities || []).find((x) => x.id === id);
+  if (!ent) return;
+  const conflicts = ent.conflicts || [];
+  const confHtml = conflicts.map((c) =>
+    "<div class='rule'><span class='k'>" + esc(c.identifier) + "</span>"
+    + "<span class='v'>" + esc(c.other_name) + " <span style='color:var(--faint)'>· " + esc(c.other_kind) + " · " + esc(c.identifier_type) + "</span></span></div>").join("");
+
+  // Merge targets: other entities of the SAME kind only (anti-pollution invariant).
+  const sameKind = (e.entities || []).filter((x) => x.id !== id && x.kind === ent.kind);
+  const mergeOpts = sameKind
+    .map((x) => "<option value='" + esc(x.id) + "'>" + esc(x.display_name) + "</option>").join("");
+
+  // Subtype presets by kind.
+  const SUBTYPES = {
+    organisation: ["merchant", "vendor", "employer", "service provider", "government"],
+    account: ["bank", "credit card", "wallet", "brokerage", "savings"],
+    instrument: ["equity", "bond", "fund", "crypto"],
+  };
+  const subPresets = SUBTYPES[ent.kind] || [];
+  const subCur = ent.subtype || "";
+  const subIsPreset = subPresets.includes(subCur);
+  const subOptions = ["<option value=''>— none —</option>"]
+    .concat(subPresets.map((s) => "<option value='" + esc(s) + "'" + (s === subCur ? " selected" : "") + ">" + esc(s) + "</option>"))
+    .concat(subCur && !subIsPreset
+      ? ["<option value='" + esc(subCur) + "' selected>" + esc(subCur) + " (custom)</option>"]
+      : [])
+    .concat(["<option value='__custom'>Custom…</option>"])
+    .join("");
+
+  renderDetail(
+    "<div class='panel'>"
+    + "<h3>" + esc(ent.display_name) + " <span style='color:var(--faint);font-weight:400;text-transform:none'>· " + esc(ent.kind) + " · " + esc(ent.status) + "</span></h3>"
+    + "<div class='pedit'>"
+    // ── left: edit ──
+    + "<div class='blk'>"
+    + "<h4>Identity</h4>"
+    + "<div class='field' style='margin-bottom:12px'><label>Display name</label>"
+    + "<input type='text' id='eName' value='" + esc(ent.display_name) + "'></div>"
+    + "<div class='field' style='margin-bottom:12px'><label>Subtype</label>"
+    + "<select id='eSub'>" + subOptions + "</select>"
+    + "<input type='text' id='eSubCustom' style='display:none;margin-top:6px' placeholder='custom subtype'></div>"
+    + "<div class='field' style='margin-bottom:12px'><label>Status</label>"
+    + "<select id='eStatus'><option value='candidate'" + (ent.status === "candidate" ? " selected" : "") + ">candidate</option>"
+    + "<option value='confirmed'" + (ent.status === "confirmed" ? " selected" : "") + ">confirmed</option></select></div>"
+    + "<div class='row' style='gap:8px'>"
+    + "<button class='btn' id='eSave'>Save changes</button>"
+    + (ent.status === "candidate" ? "<button class='btn' id='eConfirm'>Confirm entity</button>" : "")
+    + "<span class='msg' id='eMsg'></span>"
+    + "</div>"
+    + "</div>"
+    // ── right: merge + conflicts ──
+    + "<div class='blk'>"
+    + (sameKind.length ? "<h4>Merge into another " + esc(ent.kind) + "</h4>"
+      + "<div class='row' style='gap:8px;margin-bottom:14px'>"
+      + "<select id='eMerge'><option value=''>— select target —</option>" + mergeOpts + "</select>"
+      + "<button class='btn' id='eMergeBtn'>Merge</button></div>" : "")
+    + "<h4>Confidence</h4>"
+    + "<div style='font:12px var(--mono);color:var(--dim);margin-bottom:14px'>" + esc(ent.confidence) + "</div>"
+    + "<h4>Cross-kind identifier conflicts</h4>"
+    + (confHtml || "<div class='empty'>No conflicts.</div>")
+    + "<h4 style='margin-top:18px;color:var(--bad)'>Delete this " + esc(ent.kind) + "</h4>"
+    + "<div class='row' style='gap:8px;align-items:center'>"
+    + "<button class='btn' id='eDelete' style='border-color:var(--bad);color:var(--bad)'>Delete</button>"
+    + "<span class='msg' id='eDelMsg'></span></div>"
+    + "</div>"
+    + "</div>"
+    + "</div>",
+    rowEl);
+
+  // Subtype custom toggle
+  const eSub = document.getElementById("eSub");
+  const eSubCustom = document.getElementById("eSubCustom");
+  if (eSub) eSub.onchange = () => {
+    if (eSub.value === "__custom") { eSubCustom.style.display = ""; eSubCustom.focus(); }
+    else eSubCustom.style.display = "none";
+  };
+
+  // Save
+  const eSave = document.getElementById("eSave");
+  if (eSave) eSave.onclick = async () => {
+    const msg = document.getElementById("eMsg");
+    const body = {
+      display_name: document.getElementById("eName").value.trim(),
+      subtype: eSub.value === "__custom" ? eSubCustom.value.trim() : eSub.value,
+      status: document.getElementById("eStatus").value,
+    };
+    msg.className = "msg"; msg.textContent = "saving…";
+    const r = await apiPatch("/v1/entities/" + encodeURIComponent(id), body);
+    if (r.error) { msg.className = "msg bad"; msg.textContent = "error: " + r.error; return; }
+    msg.className = "msg ok"; msg.textContent = "saved";
+    await loadPeople();
+    const row = document.querySelector("#orgList .ent[data-id='" + CSS.escape(id) + "'], #acctList .ent[data-id='" + CSS.escape(id) + "']");
+    if (row) showEntity(id, row);
+  };
+
+  // Confirm
+  const eConfirm = document.getElementById("eConfirm");
+  if (eConfirm) eConfirm.onclick = async () => {
+    const r = await apiPost("/v1/entities/confirm", { entity_id: id });
+    if (r.error) return;
+    await loadPeople();
+    const row = document.querySelector("#orgList .ent[data-id='" + CSS.escape(id) + "'], #acctList .ent[data-id='" + CSS.escape(id) + "']");
+    if (row) showEntity(id, row);
+  };
+
+  // Merge
+  const eMergeBtn = document.getElementById("eMergeBtn");
+  if (eMergeBtn) eMergeBtn.onclick = async () => {
+    const into = document.getElementById("eMerge").value;
+    if (!into) return;
+    if (!confirm("Merge this " + ent.kind + " into the selected target? This cannot be undone.")) return;
+    const r = await apiPost("/v1/entities/merge", { from_id: id, into_id: into });
+    if (r.error) { alert(r.error); return; }
+    selectedPersonId = null;
+    const old = document.querySelector(".detail-inline");
+    if (old) old.remove();
+    await loadPeople();
+  };
+
+  // Delete
+  const eDelete = document.getElementById("eDelete");
+  if (eDelete) eDelete.onclick = async () => {
+    const msg = document.getElementById("eDelMsg");
+    if (!confirm("Delete " + ent.display_name + "? Documents referencing it will be reassigned to Unidentified.")) return;
+    msg.className = "msg"; msg.textContent = "deleting…";
+    let r = await apiDelete("/v1/entities/" + encodeURIComponent(id));
+    if (r.error === "entity_in_use") {
+      if (!confirm(r.message + "\n\nForce delete and reassign documents?")) {
+        msg.className = "msg bad"; msg.textContent = r.message; return;
+      }
+      r = await apiDelete("/v1/entities/" + encodeURIComponent(id) + "?force=1");
+    }
+    if (r.error) { msg.className = "msg bad"; msg.textContent = "error: " + r.error; return; }
+    msg.className = "msg ok"; msg.textContent = "deleted";
+    const old = document.querySelector(".detail-inline");
+    if (old) old.remove();
+    await loadPeople();
+  };
 }
 
 // ════════════════════════════════════════════════════════════════════════
 // DOCUMENTS REVIEW TAB
 // ════════════════════════════════════════════════════════════════════════
 async function loadReview() {
-  const [r, d] = await Promise.all([api("/v1/reviews"), api("/v1/documents?limit=100")]);
-  const revs = r.reviews || [];
-  document.getElementById("revCount").textContent = "· " + revs.length + " items";
-  document.getElementById("revList").innerHTML = !revs.length
-    ? "<div class='empty'>Review queue is empty.</div>"
-    : revs.map((rv) => {
-      const meta = [];
-      if (rv.amount_minor) meta.push(money(rv.amount_minor) + " " + esc(rv.currency || ""));
-      if (rv.counterparty) meta.push(esc(rv.counterparty));
-      if (rv.doc_type) meta.push(esc(rv.doc_type));
-      if (rv.detail) meta.push(esc(rv.detail));
-      const actions = rv.kind === "unconfirmed_entity"
-        ? "<button class='yes' data-act='confirm' data-id='" + esc(rv.entity_id) + "'>Confirm entity</button>"
-        : rv.kind === "orphan_document"
-          ? "<button class='yes' data-act='link' data-id='" + esc(rv.document_id) + "'>Review document</button>"
-          : rv.kind === "failed_job"
-            ? "<button class='yes' data-act='reprocess' data-id='" + esc(rv.document_id) + "'>Reprocess</button>"
-            : "";
-      return "<div class='rev'><div class='kind " + esc(rv.kind) + "'>" + esc(rv.kind.replace(/_/g, " ")) + "</div>"
-        + "<div class='q'>" + esc(rv.question) + "</div>"
-        + (meta.length ? "<div class='meta'>" + meta.join(" · ") + "</div>" : "")
-        + "<div class='actions'>" + actions + "</div></div>";
-    }).join("");
-
-  document.querySelectorAll("#revList .yes").forEach((b) => b.onclick = () => handleReviewAction(b.dataset.act, b.dataset.id));
-
+  // Refresh the pipeline board so it's populated when the user switches to
+  // this tab — SSE events keep it live thereafter.
+  refreshPipeline();
+  renderPeriodsReview();
+  // Collapse any inline expansion before re-rendering the list — the row
+  // elements are about to be replaced, so a dangling detail slot would
+  // reference a removed card.
+  collapseOpenDoc();
+  let url = "/v1/documents?period=" + encodeURIComponent(period) + "&limit=500";
+  if (pipelineFilter) url += "&state=" + encodeURIComponent(pipelineFilter);
+  const d = await api(url);
   const docs = d.documents || [];
-  document.getElementById("docCount").textContent = "· " + docs.length + " documents";
-  document.getElementById("docList").innerHTML = !docs.length
-    ? "<div class='empty'>No documents.</div>"
-    : docs.map((x) =>
+  const label = (d.period && d.period.label) ? d.period.label : "all time";
+  const dp = document.getElementById("docPeriod");
+  if (dp) dp.textContent = "— " + label;
+  const stateLabel = pipelineFilter
+    ? (STATES.find((s) => s.k === pipelineFilter) || {}).label || pipelineFilter
+    : null;
+  document.getElementById("docCount").textContent = "· " + docs.length + " documents"
+    + (stateLabel ? " · filtered: " + stateLabel : "");
+
+  if (!docs.length) {
+    document.getElementById("docList").innerHTML = "<div class='empty'>No documents in this period.</div>";
+    return;
+  }
+
+  // The API already sorts by merchant ASC, invoice_date DESC. Group by
+  // merchant so each group has a header with a count, and the documents
+  // within are newest invoice date first.
+  let lastMerchant = null;
+  let html = "";
+  for (const x of docs) {
+    const merchant = x.merchant || "Unidentified";
+    if (merchant !== lastMerchant) {
+      if (lastMerchant !== null) html += "</div>";
+      const groupDocs = docs.filter((y) => (y.merchant || "Unidentified") === merchant);
+      html += "<div class='dgroup'><h4>" + esc(merchant)
+        + " <span class='n'>· " + groupDocs.length + " document" + (groupDocs.length === 1 ? "" : "s") + "</span></h4>";
+      lastMerchant = merchant;
+    }
+    const invDate = String(x.invoice_date || x.received_at || "").slice(0, 10);
+    html +=
       "<div class='drow' data-id='" + esc(x.id) + "'>"
       + "<div><div class='fn'>" + esc(x.original_filename) + "</div>"
       + "<div class='meta'>" + esc(x.doc_type || "unknown") + " · " + esc(x.ext || "")
       + " · " + esc(x.markdown_chars || 0) + " chars · " + esc(x.lifecycle) + "</div></div>"
       + "<span class='kind'>" + esc(x.source) + "</span>"
-      + "<span class='dt'>" + esc(String(x.received_at || "").slice(0, 10)) + "</span></div>"
-    ).join("");
-  document.querySelectorAll("#docList .drow").forEach((el) =>
-    el.onclick = () => showDoc(el.dataset.id));
-}
-
-async function handleReviewAction(act, id) {
-  if (act === "confirm") {
-    const r = await apiPost("/v1/entities/confirm", { entity_id: id });
-    if (!r.error) loadReview();
-  } else if (act === "reprocess") {
-    const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/reprocess", {});
-    if (!r.error) loadReview();
-  } else if (act === "link") {
-    // Open the document detail for review.
-    showDoc(id);
+      + "<span class='dt'>" + esc(invDate) + "</span></div>";
   }
+  if (lastMerchant !== null) html += "</div>";
+  document.getElementById("docList").innerHTML = html;
+  document.querySelectorAll("#docList .drow").forEach((el) =>
+    el.onclick = () => toggleDoc(el, el.dataset.id));
 }
 
-async function showDoc(id) {
+// Collapse any open document card, then expand the clicked one — or collapse
+// it if it's already open. The detail renders inline below the card so the
+// user doesn't have to scroll to the bottom of the page.
+let openDocRow = null;
+function collapseOpenDoc() {
+  if (!openDocRow) return;
+  openDocRow.classList.remove("open");
+  const next = openDocRow.nextElementSibling;
+  if (next && next.classList.contains("drow-detail")) next.remove();
+  openDocRow = null;
+}
+function toggleDoc(row, id) {
+  if (openDocRow === row) { collapseOpenDoc(); return; }
+  collapseOpenDoc();
+  row.classList.add("open");
+  const slot = document.createElement("div");
+  slot.className = "drow-detail";
+  slot.innerHTML = "<div class='empty'>loading…</div>";
+  row.after(slot);
+  openDocRow = row;
+  showDoc(id, slot);
+}
+
+async function showDoc(id, container) {
   const d = await api("/v1/documents/" + encodeURIComponent(id) + "/detail");
   const doc = d.document || {};
   const x = d.extraction || {};
   const parties = d.parties || [];
   const txns = d.transactions || [];
   const eff = d.effective || {};
+  const editableFields = d.editable_fields || [];
+  const pipelineState = d.pipeline_state;
+
+  // Load vocabularies for dropdown editing.
+  let vocab = {};
+  try { vocab = await api("/v1/vocabularies"); } catch {}
 
   const partiesHtml = parties.map((p) =>
     "<div class='rule'><span class='k'>" + esc(p.role) + "</span>"
@@ -1381,15 +1979,39 @@ async function showDoc(id) {
     + " <span style='color:var(--faint)'>· " + esc(t.evidence_role) + " · " + esc(t.linked_by) + "</span></span>"
     + "<span class='n'>" + esc(String(t.occurred_at || "").slice(0, 10)) + "</span></div>").join("");
 
-  const effRows = Object.entries(eff).filter(([, v]) => v && v.value !== null && v.value !== undefined).map(([k, v]) =>
-    "<div class='rule'><span class='k'>" + esc(k) + "</span>"
-    + "<span class='v'>" + esc(v.value) + " <span style='color:var(--faint)'>· " + esc(v.source) + "</span></span></div>"
-  ).join("");
+  // Render effective fields as editable rows. Fields in editableFields get
+  // a click-to-edit handler; fields with a vocabulary (doc_type, financial_impact)
+  // get a dropdown; others get a text input.
+  const FIELD_LABELS = {
+    doc_type: "Doc Type", amount_minor: "Amount", currency: "Currency",
+    document_date: "Invoice Date", posted_at: "Posted At",
+    counterparty: "Counterparty", person: "Person",
+    financial_impact: "Impact Bucket", issuer: "Issuer", vendor: "Vendor",
+    document_number: "Doc Number", financial_year: "FY",
+    category: "Category", purpose_text: "Purpose",
+  };
+  const DROPDOWN_FIELDS = {
+    doc_type: vocab.document_types || [],
+    financial_impact: vocab.impact_buckets || [],
+    currency: ["INR", "USD", "EUR", "GBP", "SGD", "AED"],
+  };
+
+  const effEntries = Object.entries(eff).filter(([, v]) => v && v.value !== null && v.value !== undefined);
+  const effRows = effEntries.map(([k, v]) => {
+    const label = FIELD_LABELS[k] || k;
+    const isEditable = editableFields.includes(k);
+    const displayVal = (k === "amount_minor" && v.value) ? money(Number(v.value)) : String(v.value);
+    const cls = isEditable ? "rule editable" : "rule";
+    return "<div class='" + cls + "' data-field='" + esc(k) + "' data-value='" + esc(String(v.value)) + "'>"
+      + "<span class='k'>" + esc(label) + "</span>"
+      + "<span class='v'>" + esc(displayVal) + " <span style='color:var(--faint)'>· " + esc(v.source) + "</span></span>"
+      + "</div>";
+  }).join("");
 
   const refIds = x.reference_ids ? Object.entries(x.reference_ids).map(([k, v]) =>
     esc(k) + "=" + esc(v)).join("  ") : "";
 
-  document.getElementById("docDetail").innerHTML =
+  const detailHtml =
     "<div class='panel'><h3>" + esc(doc.original_filename) + "</h3>"
     + "<div class='grid3' style='margin-bottom:14px'>"
     + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Type</div>"
@@ -1403,7 +2025,452 @@ async function showDoc(id) {
     + "<h3>Effective fields</h3>" + (effRows || "<div class='empty'>No extracted fields.</div>")
     + "<h3 style='margin-top:18px'>Parties</h3>" + (partiesHtml || "<div class='empty'>No resolved parties.</div>")
     + "<h3 style='margin-top:18px'>Transactions evidenced</h3>" + (txnsHtml || "<div class='empty'>Not linked to any transaction.</div>")
+    // Action bar: reprocess, exclude, download, delete + status message.
+    + "<div class='doc-actions'>"
+    + "<button class='primary' id='reprocessBtn-" + esc(id) + "'>Reprocess</button>"
+    + "<button id='excludeBtn-" + esc(id) + "'>Exclude</button>"
+    + "<button id='downloadBtn-" + esc(id) + "'>Download</button>"
+    + "<button class='danger' id='deleteBtn-" + esc(id) + "'>Delete</button>"
+    + "<span class='msg' id='docActionMsg-" + esc(id) + "'></span>"
+    + "</div>"
     + "</div>";
+
+  // Two-column layout: details on the left, document viewer on the right.
+  // The viewer has an Image/Text toggle. The toggle and default mode are
+  // determined by initDocViewer() after checking /pageinfo — documents with
+  // a page image default to Image; emails and text-only docs default to Text.
+  const html =
+    "<div class='doc-split'>"
+    + "<div class='doc-details'>" + detailHtml + "</div>"
+    + "<div class='doc-viewer'>"
+    + "<div class='viewer-toggle' id='vToggle-" + esc(id) + "'>"
+    + "<button id='vImg-" + esc(id) + "' class='on'>Image</button>"
+    + "<button id='vTxt-" + esc(id) + "'>Text</button>"
+    + "</div>"
+    + "<div class='viewer-box' id='viewerBox-" + esc(id) + "'><div class='viewer-fallback'>loading document…</div></div>"
+    + "<div class='pager' id='pager-" + esc(id) + "' style='display:none'>"
+    + "<button id='pgPrev-" + esc(id) + "'>‹ Prev</button>"
+    + "<span id='pgInfo-" + esc(id) + "'></span>"
+    + "<button id='pgNext-" + esc(id) + "'>Next ›</button>"
+    + "</div>"
+    + "</div></div>";
+
+  if (container) container.innerHTML = html;
+  initDocViewer(id, { pipelineState: d.pipeline_state, intakeId: d.intake_id });
+  initDocActions(id, editableFields, DROPDOWN_FIELDS);
+}
+
+// ── document action bar + inline field editing ───────────────────
+function initDocActions(id, editableFields, dropdownFields) {
+  const msg = document.getElementById("docActionMsg-" + id);
+  function setMsg(text, cls) {
+    if (msg) { msg.textContent = text; msg.className = "msg" + (cls ? " " + cls : ""); }
+  }
+
+  // Reprocess button — re-enqueues analysis (or conversion if no markdown).
+  const reprocBtn = document.getElementById("reprocessBtn-" + id);
+  if (reprocBtn) {
+    reprocBtn.onclick = async () => {
+      reprocBtn.disabled = true;
+      setMsg("Reprocessing…");
+      try {
+        const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/reprocess", {});
+        setMsg("Reprocessing (" + (r.phase || "analyse") + ")…", "ok");
+      } catch (e) {
+        setMsg("Failed: " + esc(String(e.message || e)), "err");
+      }
+      reprocBtn.disabled = false;
+    };
+  }
+
+  // Exclude button — soft remove from active view. File and claims stay
+  // on disk; reprocess brings it back. Reversible.
+  const excludeBtn = document.getElementById("excludeBtn-" + id);
+  if (excludeBtn) {
+    excludeBtn.onclick = async () => {
+      if (!confirm("Exclude this document from the active view?\n\nThe file and all claims stay on disk. You can bring it back with Reprocess.")) return;
+      excludeBtn.disabled = true;
+      setMsg("Excluding…");
+      try {
+        await apiPost("/v1/documents/" + encodeURIComponent(id) + "/remove-from-active", {});
+        setMsg("Excluded from active.", "ok");
+        // Collapse the detail panel — the doc is no longer active.
+        collapseOpenDoc();
+        // Refresh the document list to remove it.
+        loadReview();
+      } catch (e) {
+        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        excludeBtn.disabled = false;
+      }
+    };
+  }
+
+  // Download button — fetches the original file bytes and triggers a
+  // browser download with the original filename.
+  const downloadBtn = document.getElementById("downloadBtn-" + id);
+  if (downloadBtn) {
+    downloadBtn.onclick = async () => {
+      downloadBtn.disabled = true;
+      setMsg("Downloading…");
+      try {
+        const resp = await fetch("/v1/documents/" + encodeURIComponent(id) + "/file", { headers: H });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const blob = await resp.blob();
+        const cd = resp.headers.get("content-disposition") || "";
+        const fnameMatch = cd.match(/filename="?([^"]+)"?/);
+        const fname = fnameMatch ? fnameMatch[1] : id;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fname;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setMsg("Downloaded.", "ok");
+      } catch (e) {
+        setMsg("Failed: " + esc(String(e.message || e)), "err");
+      }
+      downloadBtn.disabled = false;
+    };
+  }
+
+  // Delete button — permanent. Unlinks files, tombstones the row.
+  // Requires explicit confirmation typing the document ID.
+  const deleteBtn = document.getElementById("deleteBtn-" + id);
+  if (deleteBtn) {
+    deleteBtn.onclick = async () => {
+      const confirmed = confirm(
+        "DELETE PERMANENTLY?\n\n"
+        + "This will unlink the original file and markdown from disk, "
+        + "and tombstone the document row. The sha256 dedupe guard "
+        + "will still reject a re-drop of the same bytes.\n\n"
+        + "This action is IRREVERSIBLE."
+      );
+      if (!confirmed) return;
+      deleteBtn.disabled = true;
+      setMsg("Deleting…");
+      try {
+        await apiDelete("/v1/documents/" + encodeURIComponent(id));
+        setMsg("Deleted permanently.", "ok");
+        collapseOpenDoc();
+        loadReview();
+      } catch (e) {
+        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        deleteBtn.disabled = false;
+      }
+    };
+  }
+
+  // Click-to-edit on editable effective fields.
+  const detailPanel = document.querySelector(".doc-details .panel");
+  if (!detailPanel) return;
+  detailPanel.querySelectorAll(".rule.editable").forEach((row) => {
+    row.onclick = (e) => {
+      if (row.classList.contains("editing")) return;
+      startEditField(id, row, dropdownFields);
+    };
+  });
+}
+
+function startEditField(id, row, dropdownFields) {
+  const field = row.dataset.field;
+  const currentValue = row.dataset.value;
+  row.classList.add("editing");
+
+  const valSpan = row.querySelector(".v");
+  if (!valSpan) return;
+
+  const options = dropdownFields[field] || [];
+  // amount_minor is stored in paise; the user edits in rupees.
+  const isMoney = field === "amount_minor";
+  const editValue = isMoney && currentValue
+    ? (Number(currentValue) / 100).toFixed(2)
+    : currentValue;
+  let inputHtml;
+  if (options.length > 0) {
+    const opts = options.map((o) =>
+      "<option value='" + esc(String(o)) + "'" + (String(o) === currentValue ? " selected" : "") + ">"
+      + esc(String(o)) + "</option>"
+    ).join("");
+    inputHtml = "<select class='edit-input' id='editSel-" + esc(field) + "'>" + opts + "</select>";
+  } else {
+    inputHtml = "<input class='edit-input' id='editInp-" + esc(field) + "' value='" + esc(editValue) + "'>";
+  }
+
+  valSpan.style.display = "none";
+  valSpan.insertAdjacentHTML("afterend", inputHtml);
+
+  const inp = row.querySelector(".edit-input");
+  if (inp) inp.focus();
+
+  // Select all text on focus for text inputs so the user can just type.
+  if (inp && inp.tagName === "INPUT") inp.select();
+
+  let saved = false;
+
+  async function save() {
+    if (saved) return;
+    saved = true;
+    let newVal = inp ? inp.value : "";
+    // Convert rupees to paise for amount_minor.
+    if (isMoney && newVal !== "") {
+      const rupees = parseFloat(newVal);
+      if (isNaN(rupees)) { saved = false; inp.focus(); return; }
+      newVal = String(Math.round(rupees * 100));
+    }
+    if (newVal === currentValue) { restore(); return; }
+    try {
+      await apiPatch("/v1/documents/" + encodeURIComponent(id) + "/claims",
+        { field, value: newVal });
+      row.dataset.value = newVal;
+      const displayVal = isMoney && newVal ? money(Number(newVal)) : newVal;
+      valSpan.innerHTML = esc(displayVal) + " <span style='color:var(--faint)'>· user</span>";
+      restore();
+    } catch (e) {
+      saved = false;
+      inp.focus();
+      alert("Failed to save: " + (e.message || e));
+    }
+  }
+
+  function restore() {
+    row.classList.remove("editing");
+    valSpan.style.display = "";
+    if (inp) inp.remove();
+  }
+
+  // Blur saves — clicking away commits the value.
+  if (inp) inp.onblur = () => save();
+
+  // Enter saves; Escape reverts without saving.
+  if (inp) inp.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); save(); }
+    if (e.key === "Escape") { saved = true; restore(); }
+  };
+}
+
+// ── document viewer with magnifier ───────────────────────────────
+// Fetches /pageinfo to discover page count and render capability, then
+// loads the first page as a blob (the /page endpoint requires a Bearer
+// header, which <img> can't set). A circular magnifier follows the cursor
+// on hover, mirroring the Flutter app's MagnifiedDocument widget.
+//
+// The viewer has two modes:
+//   Image — the rasterised page (PDF/photo) with magnifier + pager
+//   Text  — the extracted markdown (works for emails and any document)
+// Documents with a page image default to Image; documents without (emails,
+// .txt) default to Text with the Image button disabled.
+const LENS_RADIUS = 110;
+const LENS_ZOOM = 2.5;
+
+async function initDocViewer(id, ctx) {
+  const box = document.getElementById("viewerBox-" + id);
+  const imgBtn = document.getElementById("vImg-" + id);
+  const txtBtn = document.getElementById("vTxt-" + id);
+  if (!box || !imgBtn || !txtBtn) return;
+
+  // If the document is in the password_needed pipeline state, show a
+  // password prompt instead of the image/text viewer. The user enters a
+  // password, we POST it to /v1/documents/<id>/password, and the daemon
+  // re-enqueues conversion. The SSE stream will refresh the pipeline board.
+  const pipelineState = ctx && ctx.pipelineState;
+  if (pipelineState === "password_needed") {
+    imgBtn.disabled = true;
+    txtBtn.disabled = true;
+    imgBtn.classList.remove("on");
+    txtBtn.classList.remove("on");
+    renderPasswordPrompt(id, box);
+    return;
+  }
+
+  let info;
+  try {
+    info = await api("/v1/documents/" + encodeURIComponent(id) + "/pageinfo");
+  } catch {
+    info = null;
+  }
+  const hasImage = !!(info && info.kind !== "none" && info.pages);
+
+  let mode = hasImage ? "image" : "text";
+
+  // If no page image, disable the Image toggle and default to Text.
+  if (!hasImage) {
+    imgBtn.disabled = true;
+    imgBtn.classList.remove("on");
+    txtBtn.classList.add("on");
+  }
+
+  // Toggle handlers.
+  imgBtn.onclick = () => { if (!imgBtn.disabled) switchMode("image"); };
+  txtBtn.onclick = () => { switchMode("text"); };
+
+  function switchMode(m) {
+    mode = m;
+    imgBtn.classList.toggle("on", m === "image");
+    txtBtn.classList.toggle("on", m === "text");
+    const pager = document.getElementById("pager-" + id);
+    if (pager) pager.style.display = "none";
+    if (m === "image") renderPage(1);
+    else renderText();
+  }
+
+  // ── Image mode ──
+  let currentPage = 1;
+  const totalPages = info ? info.pages : 0;
+  const pagerAvailable = info ? info.pager_available : false;
+
+  async function renderPage(n) {
+    if (!hasImage) return;
+    // Lock the box height so it doesn't collapse while the loading placeholder
+    // replaces the image — this prevents the card from shrinking and jumping
+    // back to full size when the next page arrives.
+    const lockedH = box.offsetHeight;
+    if (lockedH > 0) box.style.minHeight = lockedH + "px";
+    box.innerHTML = "<div class='viewer-fallback'>rendering page " + esc(n) + "…</div>";
+    const url = "/v1/documents/" + encodeURIComponent(id) + "/page?n=" + n + "&w=2400";
+    let blobUrl;
+    try {
+      const r = await fetch(url, { headers: H });
+      if (!r.ok) throw new Error("http_" + r.status);
+      const blob = await r.blob();
+      blobUrl = URL.createObjectURL(blob);
+    } catch {
+      box.innerHTML = "<div class='viewer-fallback'>Failed to render page.</div>";
+      return;
+    }
+    box.innerHTML = "<img class='page' id='pageImg-" + esc(id) + "' src='" + esc(blobUrl) + "'>"
+      + "<div class='lens' id='lens-" + esc(id) + "'><img id='lensImg-" + esc(id) + "'></div>";
+    attachMagnifier(id);
+    // Release the height lock once the new image is in place.
+    box.style.minHeight = "";
+
+    // Pager controls.
+    const pager = document.getElementById("pager-" + id);
+    if (pager) {
+      pager.style.display = totalPages > 1 && pagerAvailable ? "flex" : "none";
+      const prev = document.getElementById("pgPrev-" + id);
+      const next = document.getElementById("pgNext-" + id);
+      const lbl = document.getElementById("pgInfo-" + id);
+      if (lbl) lbl.textContent = "Page " + n + " of " + totalPages;
+      if (prev) prev.disabled = n <= 1;
+      if (next) next.disabled = n >= totalPages;
+      if (prev) prev.onclick = () => { if (currentPage > 1) { currentPage--; renderPage(currentPage); } };
+      if (next) next.onclick = () => { if (currentPage < totalPages) { currentPage++; renderPage(currentPage); } };
+    }
+  }
+
+  // ── Text mode ──
+  async function renderText() {
+    box.innerHTML = "<div class='viewer-fallback'>loading text…</div>";
+    try {
+      const r = await api("/v1/documents/" + encodeURIComponent(id) + "/markdown");
+      const md = r.markdown || "";
+      if (!md) {
+        box.innerHTML = "<div class='viewer-fallback'>No text extracted for this document.</div>";
+        return;
+      }
+      box.innerHTML = "<div class='md-view' id='mdView-" + esc(id) + "'></div>";
+      document.getElementById("mdView-" + id).textContent = md;
+    } catch {
+      box.innerHTML = "<div class='viewer-fallback'>Text not available (document may not be converted yet).</div>";
+    }
+  }
+
+  // Initial render based on the default mode.
+  if (mode === "image") renderPage(currentPage);
+  else renderText();
+}
+
+// Render a password prompt in the viewer box for encrypted documents.
+// The user enters a password and submits it; we POST to the document-level
+// password endpoint, which stores it and re-enqueues conversion.
+function renderPasswordPrompt(id, box) {
+  box.innerHTML =
+    "<div class='pw-prompt'>"
+    + "<div class='pw-icon'>🔒</div>"
+    + "<div class='pw-title'>Password required</div>"
+    + "<div class='pw-hint'>This document is encrypted. Enter the password to unlock and convert it.</div>"
+    + "<div class='pw-row'>"
+    + "<input type='password' id='pwInput-" + esc(id) + "' placeholder='Password' autocomplete='off'>"
+    + "<button id='pwSubmit-" + esc(id) + "'>Unlock</button>"
+    + "</div>"
+    + "<div class='pw-msg' id='pwMsg-" + esc(id) + "'></div>"
+    + "</div>";
+
+  const input = document.getElementById("pwInput-" + id);
+  const btn = document.getElementById("pwSubmit-" + id);
+  const msg = document.getElementById("pwMsg-" + id);
+  if (input) input.focus();
+
+  async function submit() {
+    const pw = input ? input.value : "";
+    if (!pw) return;
+    if (btn) btn.disabled = true;
+    if (msg) { msg.textContent = "Submitting…"; msg.className = "pw-msg"; }
+    try {
+      const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/password",
+        { password: pw });
+      if (r.ok) {
+        if (msg) { msg.textContent = "Password accepted — converting…"; msg.className = "pw-msg ok"; }
+        if (input) input.disabled = true;
+        if (btn) btn.disabled = true;
+      } else {
+        throw new Error(r.error || "submission failed");
+      }
+    } catch (e) {
+      if (msg) {
+        msg.textContent = "Failed: " + esc(String(e.message || e));
+        msg.className = "pw-msg err";
+      }
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  if (btn) btn.onclick = submit;
+  if (input) input.onkeydown = (e) => { if (e.key === "Enter") submit(); };
+}
+
+// Attach the circular magnifier to the page image. On mousemove the lens
+// follows the cursor and shows a zoomed region of the source image.
+function attachMagnifier(id) {
+  const img = document.getElementById("pageImg-" + id);
+  const lens = document.getElementById("lens-" + id);
+  const lensImg = document.getElementById("lensImg-" + id);
+  if (!img || !lens || !lensImg) return;
+
+  lensImg.src = img.src;
+
+  function showLens() { lens.style.display = "block"; }
+  function hideLens() { lens.style.display = "none"; }
+
+  function onMove(e) {
+    const rect = img.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) { hideLens(); return; }
+    showLens();
+
+    // Position the lens centered on the cursor — no clamping so the user
+    // can magnify details right up to the corners and edges of the image.
+    lens.style.left = (x - LENS_RADIUS) + "px";
+    lens.style.top = (y - LENS_RADIUS) + "px";
+    lens.style.width = (LENS_RADIUS * 2) + "px";
+    lens.style.height = (LENS_RADIUS * 2) + "px";
+
+    // The lens image must be sized so that the zoomed region fills the lens.
+    const zoomedW = rect.width * LENS_ZOOM;
+    const zoomedH = rect.height * LENS_ZOOM;
+    lensImg.style.width = zoomedW + "px";
+    lensImg.style.height = zoomedH + "px";
+    // Offset so the cursor point in the source maps to the lens center.
+    lensImg.style.left = -(x * LENS_ZOOM - LENS_RADIUS) + "px";
+    lensImg.style.top = -(y * LENS_ZOOM - LENS_RADIUS) + "px";
+  }
+
+  img.addEventListener("mousemove", onMove);
+  img.addEventListener("mouseenter", showLens);
+  img.addEventListener("mouseleave", hideLens);
 }
 
 // ════════════════════════════════════════════════════════════════════════
