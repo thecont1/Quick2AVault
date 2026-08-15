@@ -269,6 +269,28 @@ async function main() {
     );
   });
 
+  // ── gmail scheduled sync ──────────────────────────────────────────────────
+  // Checks the Gmail dropbox at every 5th minute of the hour (:00, :05, :10…)
+  // so new messages are picked up without manual resync. The timer fires every
+  // minute but only triggers a sync when the current minute is divisible by 5.
+  if (gmail) {
+    const scheduledSync = async () => {
+      const now = new Date();
+      if (now.getMinutes() % 5 !== 0) return;
+      try {
+        ports.logger.info("gmail: scheduled sync starting");
+        await gmail.sync();
+        ports.logger.info("gmail: scheduled sync complete");
+      } catch (err) {
+        ports.logger.error("gmail: scheduled sync failed", { error: (err as Error)?.message });
+      }
+    };
+    setInterval(scheduledSync, 60_000); // check every minute
+    // Run an initial sync shortly after startup if we're already on a 5-min mark.
+    setTimeout(scheduledSync, 5_000);
+    ports.logger.info("gmail: scheduled sync every 5 minutes (:00, :05, :10…)");
+  }
+
   const shutdown = async () => {
     ports.logger.info("shutting down");
     worker.stop();

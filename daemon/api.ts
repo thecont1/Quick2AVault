@@ -263,6 +263,37 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return res.end(html);
       }
 
+      // ── static assets for the dev UI (CSS + JS modules) ──────────────────
+      // Serves files from daemon/ui/ with safe content types. Only enabled
+      // when devUi is on, same as the HTML shell. No token substitution —
+      // the JS files use the TOKEN constant set by ui.html's inline script.
+      if (p.startsWith("/ui/") && opts.devUi) {
+        const rel = p.slice("/ui/".length);
+        // Confine to the ui/ directory — no path traversal.
+        if (rel.includes("..") || rel.includes("\0")) {
+          return send(res, 400, { error: "bad path" });
+        }
+        const ext = rel.slice(rel.lastIndexOf(".") + 1).toLowerCase();
+        const types: Record<string, string> = {
+          css: "text/css; charset=utf-8",
+          js: "application/javascript; charset=utf-8",
+          map: "application/json; charset=utf-8",
+        };
+        if (!types[ext]) return send(res, 404, { error: "not_found" });
+        const file = path.join(import.meta.dirname ?? __dirname, "ui", rel);
+        try {
+          const body = await fsp.readFile(file);
+          res.writeHead(200, {
+            "content-type": types[ext],
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
+          });
+          return res.end(body);
+        } catch {
+          return send(res, 404, { error: "not_found", expected: file });
+        }
+      }
+
       // ── unauthenticated: health ──────────────────────────────────────────
       if (p === "/v1/health") {
         const jobs = db.prepare("SELECT state, COUNT(*) n FROM jobs GROUP BY state").all() as {
@@ -381,6 +412,31 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
               WHERE id=?`,
           ).run(now, now, now, id);
+          // Reset the canonical pipeline state via transitionPipeline so a
+          // PipelineStateChanged event is published for the SSE stream. The
+          // state machine has password_needed as terminal with no outgoing
+          // edges, and null → triaged is also illegal, so we insert the row
+          // directly at 'triaged' and publish the event manually.
+          const prevState = (db
+            .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+            .get(intake.document_id) as { state: string } | undefined)?.state ?? null;
+          db.prepare(
+            `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+             ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+          ).run(intake.document_id, "triaged", now);
+          db.prepare(
+            `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+             VALUES (?,?,?,?,?,?,?)`,
+          ).run(intake.document_id, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+          ports.bus.publish({
+            type: "PipelineStateChanged",
+            document_id: intake.document_id,
+            from_state: prevState,
+            to_state: "triaged",
+            source: "password-submit",
+            reason: "password submitted, re-enqueuing conversion",
+            at: now,
+          });
           // Re-enqueue the convert job.
           enqueue(db, ports, intake.document_id, "convert");
           ports.logger.info("password submitted, re-enqueuing conversion", {
@@ -391,6 +447,76 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             ok: true,
             intake_id: id,
             document_id: intake.document_id,
+            state: "queued",
+          });
+        }
+      }
+
+      // Document-level password submission — same as the intake-level
+      // endpoint above but keyed by document_id, which is what the web UI's
+      // document viewer has on hand. Looks up the intake row, then delegates
+      // to the same store-and-re-enqueue flow.
+      //
+      // The pipeline state machine has password_needed as a terminal state
+      // with no outgoing edges, so we must reset document_pipeline back to
+      // 'triaged' before re-enqueuing — otherwise the worker's transition
+      // from password_needed → converting throws and crashes the daemon.
+      {
+        const m = /^\/v1\/documents\/([^/]+)\/password$/.exec(p);
+        if (m && req.method === "POST") {
+          const docId = decodeURIComponent(m[1]);
+          const body = await readJson(req);
+          const password = body?.password;
+          if (typeof password !== "string") {
+            return send(res, 400, { error: "password required" });
+          }
+          const intake = db
+            .prepare("SELECT id, document_id, processing_state FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+            .get(docId) as { id: number; document_id: string | null; processing_state: string } | undefined;
+          if (!intake) {
+            return send(res, 404, { error: "intake not found for document", document_id: docId });
+          }
+          db.prepare("UPDATE documents SET password=? WHERE id=?").run(password, docId);
+          const now = ports.clock.isoNow();
+          db.prepare(
+            `UPDATE intake_events
+                SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
+              WHERE id=?`,
+          ).run(now, now, now, intake.id);
+          // Reset the canonical pipeline state and publish a
+          // PipelineStateChanged event for the SSE stream. Same approach as
+          // the intake-level endpoint above — insert directly at 'triaged'
+          // and publish manually, since the state machine has no legal path
+          // from password_needed to triaged.
+          const prevState = (db
+            .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+            .get(docId) as { state: string } | undefined)?.state ?? null;
+          db.prepare(
+            `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+             ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+          ).run(docId, "triaged", now);
+          db.prepare(
+            `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+             VALUES (?,?,?,?,?,?,?)`,
+          ).run(docId, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+          ports.bus.publish({
+            type: "PipelineStateChanged",
+            document_id: docId,
+            from_state: prevState,
+            to_state: "triaged",
+            source: "password-submit",
+            reason: "password submitted, re-enqueuing conversion",
+            at: now,
+          });
+          enqueue(db, ports, docId, "convert");
+          ports.logger.info("password submitted (by document), re-enqueuing conversion", {
+            intake_id: intake.id,
+            document_id: docId,
+          });
+          return send(res, 200, {
+            ok: true,
+            intake_id: intake.id,
+            document_id: docId,
             state: "queued",
           });
         }
@@ -1052,6 +1178,105 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         if (!b.entity_id) return send(res, 400, { error: "entity_id required" });
         const info = db.prepare("UPDATE entities SET status='confirmed', confidence=1.0 WHERE id=?").run(b.entity_id);
         return send(res, 200, { confirmed: Number(info.changes ?? 0) > 0 });
+      }
+
+      // Edit an entity's display_name, subtype, or status. Kind is immutable.
+      // Mirrors PATCH /v1/people/:id for non-person entities.
+      if (p.startsWith("/v1/entities/") && req.method === "PATCH") {
+        const id = p.split("/")[3];
+        if (!id) return send(res, 400, { error: "entity id required" });
+        const b = await readJson(req);
+        const cur = db.prepare("SELECT id, kind, display_name, subtype, status FROM entities WHERE id=?").get(id) as
+          | { id: string; kind: string; display_name: string; subtype: string | null; status: string }
+          | undefined;
+        if (!cur) return send(res, 404, { error: "entity not found" });
+
+        const updates: string[] = [];
+        const params: (string | number | null)[] = [];
+        if (typeof b.display_name === "string" && b.display_name.trim() && b.display_name !== cur.display_name) {
+          // Save old name as an alias so search still finds it.
+          db.prepare(
+            "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at) VALUES (?,?,?,?,'name_variant','user-edit','confirmed',?)",
+          ).run(id, cur.kind, cur.display_name, normaliseName(cur.display_name), ports.clock.isoNow());
+          updates.push("display_name=?");
+          params.push(b.display_name.trim());
+        }
+        if (typeof b.subtype === "string") {
+          updates.push("subtype=?");
+          params.push(b.subtype.trim() || null);
+        }
+        if (typeof b.status === "string" && ["candidate", "confirmed"].includes(b.status)) {
+          updates.push("status=?");
+          params.push(b.status);
+        }
+        if (!updates.length) return send(res, 200, { updated: false });
+        params.push(id);
+        db.prepare(`UPDATE entities SET ${updates.join(", ")} WHERE id=?`).run(...params);
+        ports.logger.info("entity edited", { id, fields: updates });
+        return send(res, 200, { updated: true });
+      }
+
+      // Delete a non-person entity. Same force semantics as person delete:
+      // refuses while documents reference it, unless ?force=1 reassigns
+      // document_parties to the Unidentified placeholder.
+      if (p.startsWith("/v1/entities/") && req.method === "DELETE") {
+        const id = decodeURIComponent(p.slice("/v1/entities/".length));
+        const row = db
+          .prepare("SELECT id, display_name, kind FROM entities WHERE id=? AND kind<>'person'")
+          .get(id) as { id: string; display_name: string; kind: string } | undefined;
+        if (!row) return send(res, 404, { error: "no such entity" });
+
+        let refs = 0;
+        try {
+          refs = (
+            db
+              .prepare("SELECT COUNT(*) n FROM document_parties WHERE entity_id=?")
+              .get(id) as { n: number }
+          ).n;
+        } catch {
+          /* table optional */
+        }
+        const force = new URL(req.url ?? "", "http://x").searchParams.get("force") === "1";
+        if (refs > 0 && !force) {
+          return send(res, 409, {
+            error: "entity_in_use",
+            message: `${row.display_name} is named on ${refs} document(s). Re-run with ?force=1 to unlink and delete.`,
+            documents: refs,
+          });
+        }
+        if (refs > 0) {
+          const UNIDENTIFIED_ID = UNIDENTIFIED_PERSON_ID;
+          const already = db.prepare("SELECT 1 FROM entities WHERE id=?").get(UNIDENTIFIED_ID);
+          if (!already) {
+            db.prepare(
+              `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
+               VALUES (?, 'person', 'Unidentified', 'confirmed', 1.0, 0, ?)`,
+            ).run(UNIDENTIFIED_ID, ports.clock.isoNow());
+          }
+          const rows = db
+            .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
+            .all(id) as { document_id: string; role: string }[];
+          for (const r of rows) {
+            db.prepare(
+              "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+            ).run(r.document_id, UNIDENTIFIED_ID, r.role);
+          }
+          db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
+        }
+        try {
+          db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
+        } catch {
+          /* optional */
+        }
+        // Clean up transaction references that point to this entity.
+        try {
+          db.prepare("UPDATE transactions SET counterparty_entity_id=NULL WHERE counterparty_entity_id=?").run(id);
+        } catch {
+          /* column may not exist */
+        }
+        db.prepare("DELETE FROM entities WHERE id=?").run(id);
+        ports.logger.warn("entity deleted", { id, name: row.display_name, kind: row.kind, reassigned: refs });
+        return send(res, 200, { deleted: id, reassigned_documents: refs });
       }
 
       // mergeEntities — WITHIN ONE KIND ONLY. This is the anti-pollution
@@ -1779,6 +2004,23 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           changed.push("is_owner");
         }
 
+        // Membership ("shares this vault") is distinct from ownership ("this
+        // is me"). An owner is trivially a member; demoting a member who
+        // currently holds owner also clears owner — the invariant "owner ⇒
+        // member" must never be broken from this side.
+        if (typeof b.is_member === "boolean") {
+          if (b.is_member) {
+            db.prepare(
+              "UPDATE entities SET is_member=1, status='confirmed', updated_at=? WHERE id=?",
+            ).run(ports.clock.isoNow(), id);
+          } else {
+            db.prepare(
+              "UPDATE entities SET is_member=0, is_owner=0, updated_at=? WHERE id=?",
+            ).run(ports.clock.isoNow(), id);
+          }
+          changed.push("is_member");
+        }
+
         const after = db.prepare("SELECT * FROM entities WHERE id=?").get(id);
         ports.logger.info("person edited", { id, changed });
         return send(res, 200, { person: after, changed });
@@ -2326,17 +2568,85 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           // WO11 Track B: removed/deleted rows are hidden by default. The
           // ?include=removed escape hatch exists for the rare caller that
           // needs the soft-hidden set; deleted tombstones never list.
+          //
+          // The Documents Browser tab sorts by merchant then descending
+          // invoice date. The merchant is resolved with the same precedence
+          // as the detail endpoint's effective("counterparty"): a user/rule
+          // claim wins, then a linked counterparty party, then the issuer,
+          // then the extraction's counterparty_descriptor, then
+          // 'Unidentified'. The invoice date follows effective("document_date"):
+          // claim > extraction occurred_at > received_at (fallback so a
+          // document with no extracted date still appears in the right period).
+          //
+          // ?period= / ?month= / ?fy= filter on the invoice date (with the
+          // received_at fallback) using the same resolvePeriod helper as the
+          // Dashboard, so the two tabs share identical date boundaries.
+          //
+          // ?state= filters by the canonical document_pipeline.state. The UI
+          // pipeline board uses the legacy intake_events vocabulary where
+          // "queued" and "processing" mean the same thing as the canonical
+          // "converting" and "analysing"; map those so a click on either cell
+          // filters correctly.
           const includeRemoved = url.searchParams.get("include") === "removed";
+          const period = resolvePeriod(pack, url.searchParams);
+          const bounded = period.from !== null && period.to !== null;
+          const sort = url.searchParams.get("sort") === "received"
+            ? "received_at DESC"
+            : "merchant ASC, invoice_date DESC";
+          const where = includeRemoved ? listableDocumentSql("d") : activeDocumentSql("d");
+          const periodClause = bounded
+            ? ` AND (invoice_date >= ? AND invoice_date <= ?)`
+            : "";
+          const STATE_MAP: Record<string, string> = {
+            queued: "converting",
+            processing: "analysing",
+          };
+          const stateParam = url.searchParams.get("state");
+          const pipelineState = stateParam ? STATE_MAP[stateParam] ?? stateParam : null;
+          const stateClause = pipelineState
+            ? ` AND EXISTS (SELECT 1 FROM document_pipeline dp WHERE dp.document_id=d.id AND dp.state=?)`
+            : "";
+          const args: (string | number)[] = [];
+          if (pipelineState) args.push(pipelineState);
+          if (bounded) { args.push(period.from!, period.to!); }
+          args.push(Number(url.searchParams.get("limit") ?? 500));
           return send(res, 200, {
+            period: { label: period.label, key: period.key, from: period.from, to: period.to },
+            state: stateParam,
             documents: db
               .prepare(
-                `SELECT id, original_filename, ext, byte_size, doc_type, source, sha256,
-                        markdown_chars, received_at, converted_at, analysed_at, lifecycle
-                 FROM documents
-                 WHERE ${includeRemoved ? listableDocumentSql("documents") : activeDocumentSql("documents")}
-                 ORDER BY received_at DESC LIMIT ?`,
+                `SELECT d.id, d.original_filename, d.ext, d.byte_size, d.doc_type, d.source,
+                        d.sha256, d.markdown_chars, d.received_at, d.converted_at, d.analysed_at,
+                        d.lifecycle,
+                        COALESCE(
+                          (SELECT fc.value FROM field_claims fc
+                            WHERE fc.subject_type='document' AND fc.subject_id=d.id
+                              AND fc.field='counterparty'
+                              AND fc.status NOT IN ('rejected','superseded')
+                            ORDER BY fc.id DESC LIMIT 1),
+                          (SELECT e.display_name FROM document_parties dp
+                            JOIN entities e ON e.id=dp.entity_id
+                           WHERE dp.document_id=d.id AND dp.role='counterparty' LIMIT 1),
+                          (SELECT e.display_name FROM document_parties dp
+                            JOIN entities e ON e.id=dp.entity_id
+                           WHERE dp.document_id=d.id AND dp.role='issuer' LIMIT 1),
+                          json_extract(d.extraction_json, '$.counterparty_descriptor'),
+                          'Unidentified'
+                        ) AS merchant,
+                        COALESCE(
+                          (SELECT fc.value FROM field_claims fc
+                            WHERE fc.subject_type='document' AND fc.subject_id=d.id
+                              AND fc.field='document_date'
+                              AND fc.status NOT IN ('rejected','superseded')
+                            ORDER BY fc.id DESC LIMIT 1),
+                          json_extract(d.extraction_json, '$.occurred_at'),
+                          d.received_at
+                        ) AS invoice_date
+                 FROM documents d
+                 WHERE ${where}${stateClause}${periodClause}
+                 ORDER BY ${sort} LIMIT ?`,
               )
-              .all(Number(url.searchParams.get("limit") ?? 100)),
+              .all(...args),
           });
         }
         case "/v1/transactions": {
@@ -2649,11 +2959,24 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               )
               .all(docId);
 
+            // Pipeline state + intake ID — needed by the UI to show a
+            // password prompt for encrypted documents. The canonical state
+            // lives in document_pipeline; the intake_events row carries the
+            // numeric ID the /v1/intake/<id>/password endpoint expects.
+            const pipeline = db
+              .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+              .get(docId) as { state: string } | undefined;
+            const intake = db
+              .prepare("SELECT id FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+              .get(docId) as { id: number } | undefined;
+
             return send(res, 200, {
               document: doc,
               extraction,
               claims: claimMap,
               editable_fields: [...allowedFields("document")],
+              pipeline_state: pipeline?.state ?? null,
+              intake_id: intake?.id ?? null,
               effective: {
                 doc_type: effective("doc_type"),
                 amount_minor: effective("amount_minor"),
