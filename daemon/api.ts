@@ -381,6 +381,31 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
               WHERE id=?`,
           ).run(now, now, now, id);
+          // Reset the canonical pipeline state via transitionPipeline so a
+          // PipelineStateChanged event is published for the SSE stream. The
+          // state machine has password_needed as terminal with no outgoing
+          // edges, and null → triaged is also illegal, so we insert the row
+          // directly at 'triaged' and publish the event manually.
+          const prevState = (db
+            .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+            .get(intake.document_id) as { state: string } | undefined)?.state ?? null;
+          db.prepare(
+            `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+             ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+          ).run(intake.document_id, "triaged", now);
+          db.prepare(
+            `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+             VALUES (?,?,?,?,?,?,?)`,
+          ).run(intake.document_id, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+          ports.bus.publish({
+            type: "PipelineStateChanged",
+            document_id: intake.document_id,
+            from_state: prevState,
+            to_state: "triaged",
+            source: "password-submit",
+            reason: "password submitted, re-enqueuing conversion",
+            at: now,
+          });
           // Re-enqueue the convert job.
           enqueue(db, ports, intake.document_id, "convert");
           ports.logger.info("password submitted, re-enqueuing conversion", {
@@ -391,6 +416,76 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             ok: true,
             intake_id: id,
             document_id: intake.document_id,
+            state: "queued",
+          });
+        }
+      }
+
+      // Document-level password submission — same as the intake-level
+      // endpoint above but keyed by document_id, which is what the web UI's
+      // document viewer has on hand. Looks up the intake row, then delegates
+      // to the same store-and-re-enqueue flow.
+      //
+      // The pipeline state machine has password_needed as a terminal state
+      // with no outgoing edges, so we must reset document_pipeline back to
+      // 'triaged' before re-enqueuing — otherwise the worker's transition
+      // from password_needed → converting throws and crashes the daemon.
+      {
+        const m = /^\/v1\/documents\/([^/]+)\/password$/.exec(p);
+        if (m && req.method === "POST") {
+          const docId = decodeURIComponent(m[1]);
+          const body = await readJson(req);
+          const password = body?.password;
+          if (typeof password !== "string") {
+            return send(res, 400, { error: "password required" });
+          }
+          const intake = db
+            .prepare("SELECT id, document_id, processing_state FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+            .get(docId) as { id: number; document_id: string | null; processing_state: string } | undefined;
+          if (!intake) {
+            return send(res, 404, { error: "intake not found for document", document_id: docId });
+          }
+          db.prepare("UPDATE documents SET password=? WHERE id=?").run(password, docId);
+          const now = ports.clock.isoNow();
+          db.prepare(
+            `UPDATE intake_events
+                SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
+              WHERE id=?`,
+          ).run(now, now, now, intake.id);
+          // Reset the canonical pipeline state and publish a
+          // PipelineStateChanged event for the SSE stream. Same approach as
+          // the intake-level endpoint above — insert directly at 'triaged'
+          // and publish manually, since the state machine has no legal path
+          // from password_needed to triaged.
+          const prevState = (db
+            .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+            .get(docId) as { state: string } | undefined)?.state ?? null;
+          db.prepare(
+            `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+             ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+          ).run(docId, "triaged", now);
+          db.prepare(
+            `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+             VALUES (?,?,?,?,?,?,?)`,
+          ).run(docId, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+          ports.bus.publish({
+            type: "PipelineStateChanged",
+            document_id: docId,
+            from_state: prevState,
+            to_state: "triaged",
+            source: "password-submit",
+            reason: "password submitted, re-enqueuing conversion",
+            at: now,
+          });
+          enqueue(db, ports, docId, "convert");
+          ports.logger.info("password submitted (by document), re-enqueuing conversion", {
+            intake_id: intake.id,
+            document_id: docId,
+          });
+          return send(res, 200, {
+            ok: true,
+            intake_id: intake.id,
+            document_id: docId,
             state: "queued",
           });
         }
