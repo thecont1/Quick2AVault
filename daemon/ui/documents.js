@@ -107,10 +107,6 @@ async function showDoc(id, container) {
   let vocab = {};
   try { vocab = await api("/v1/vocabularies"); } catch {}
 
-  const partiesHtml = parties.map((p) =>
-    "<div class='rule'><span class='k'>" + esc(p.role) + "</span>"
-    + "<span class='v'>" + esc(p.display_name) + " <span style='color:var(--faint)'>· " + esc(p.kind) + " · " + esc(p.status) + "</span></span>"
-    + "</div>").join("");
   const txnsHtml = txns.map((t) =>
     "<div class='rule'><span class='k'>" + esc(t.direction) + "</span>"
     + "<span class='v'>" + money(t.amount_minor) + " " + esc(t.currency || "")
@@ -122,11 +118,15 @@ async function showDoc(id, container) {
   // a click-to-edit handler; fields with a vocabulary (doc_type, financial_impact,
   // currency, financial_year) get a dropdown; document_date gets a date picker;
   // others get a text input.
+  // "Vendor" from the extraction is relabelled "Counterparty" here — they
+  // map to the same party role. "Person" maps to the "owner" party role.
+  // The separate Parties section was removed: it duplicated these fields
+  // with different names and was not editable.
   const FIELD_LABELS = {
     doc_type: "Doc Type", amount_minor: "Amount", currency: "Currency",
     document_date: "Transaction Date", posted_at: "Posted At",
     counterparty: "Counterparty", person: "Person",
-    financial_impact: "Impact Bucket", issuer: "Issuer", vendor: "Vendor",
+    financial_impact: "Impact Bucket", issuer: "Issuer", vendor: "Counterparty",
     document_number: "Reference No.", financial_year: "FY",
     category: "Category", purpose_text: "Purpose",
   };
@@ -150,20 +150,30 @@ async function showDoc(id, container) {
   // AI missed (e.g. Amount on an invoice the model failed to parse).
   // Complex fields (line_items, trades, reference_ids) are only shown when
   // they have a value — they can't be edited as simple text.
+  // "vendor" is excluded — it maps to the same party role as "counterparty"
+  // and showing both creates confusion. If vendor has a value but counterparty
+  // doesn't, the vendor value is shown under the counterparty row.
   const FIXED_FIELDS = [
     "doc_type", "amount_minor", "currency", "document_date",
-    "counterparty", "issuer", "vendor", "person",
+    "counterparty", "issuer", "person",
     "document_number", "purpose_text", "financial_impact",
     "financial_year",
   ];
   const EXTRA_FIELDS = ["posted_at", "category"];
+  // Merge vendor into counterparty: if counterparty is empty but vendor has
+  // a value, use vendor's value for the counterparty row.
+  if ((!eff.counterparty || !eff.counterparty.value) && eff.vendor && eff.vendor.value) {
+    eff.counterparty = eff.vendor;
+  }
 
   // Build the list: fixed fields first (in order), then any extra effective
-  // fields that have a value but aren't in the fixed set.
+  // fields that have a value but aren't in the fixed set. Skip "vendor" —
+  // it's been merged into "counterparty" above.
+  const SKIP_FIELDS = new Set(["vendor", "reference_ids", "subtotal_minor", "tax_minor", "line_items", "trades"]);
   const seen = new Set(FIXED_FIELDS);
   const effEntries = FIXED_FIELDS.map((k) => [k, eff[k]]);
   for (const [k, v] of Object.entries(eff)) {
-    if (seen.has(k)) continue;
+    if (seen.has(k) || SKIP_FIELDS.has(k)) continue;
     if (v && v.value !== null && v.value !== undefined) {
       effEntries.push([k, v]);
       seen.add(k);
@@ -215,7 +225,6 @@ async function showDoc(id, container) {
     + "</div>"
     + (refIds ? "<h3>Reference IDs</h3><div style='font:11.5px var(--mono);color:var(--dim);margin-bottom:14px'>" + refIds + "</div>" : "")
     + "<h3>Effective fields</h3>" + (effRows || "<div class='empty'>No extracted fields.</div>")
-    + "<h3 style='margin-top:18px'>Parties</h3>" + (partiesHtml || "<div class='empty'>No resolved parties.</div>")
     + "<h3 style='margin-top:18px'>Transactions evidenced</h3>" + (txnsHtml || "<div class='empty'>Not linked to any transaction.</div>")
     // Action bar: reprocess, exclude, download, delete + status message.
     + "<div class='doc-actions'>"

@@ -1375,12 +1375,16 @@ function persistTypedExtraction(
     ["line_items", extraction.lineItems],
     ["trades", extraction.trades],
     ["financial_impact", impactFor(extraction.documentType, extraction.defaultImpactBucket, extraction.amountMinor ?? 0, extraction.currency ?? "INR")],
+    ["person", extraction.person?.name],
+    ["issuer", extraction.issuer?.name],
+    ["vendor", extraction.vendor?.name],
   ];
   for (const [field, value] of claims) writeTypedClaim(db, ports, documentId, field, value, confidence);
 
   const parties: Array<{ name?: string; kind: "person" | "organisation" | "account"; role: DocumentPartyRole; identifiers?: Record<string, string> }> = [];
   if (extraction.issuer) parties.push({ name: extraction.issuer.name, kind: extraction.issuer.kind, role: "issuer", identifiers: { email: extraction.issuer.email ?? "", gstin: extraction.issuer.gstin ?? "" } });
   if (extraction.client) parties.push({ name: extraction.client.name, kind: "person", role: "owner", identifiers: { pan: extraction.client.pan ?? "", ucc: extraction.client.ucc ?? "" } });
+  if (extraction.person) parties.push({ name: extraction.person.name, kind: "person", role: "owner" });
   if (extraction.vendor) parties.push({ name: extraction.vendor.name, kind: "organisation", role: "counterparty", identifiers: { email: extraction.vendor.email ?? "" } });
   else if (extraction.broker) parties.push({ name: extraction.broker.name, kind: "organisation", role: "counterparty", identifiers: { pan: extraction.broker.pan ?? "", gstin: extraction.broker.gstin ?? "" } });
   for (const party of parties) {

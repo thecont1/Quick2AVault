@@ -546,6 +546,7 @@ export interface TypedExtraction {
   vendor?: { name: string; kind: "organisation"; address?: string; contact?: string; email?: string };
   broker?: { name: string; kind: "organisation"; pan?: string; gstin?: string };
   client?: { name: string; kind: "person"; ucc?: string; pan?: string; mobile?: string };
+  person?: { name: string; kind: "person" };
   documentNumber?: string;
   documentDate?: string;
   dueDate?: string;
@@ -653,7 +654,9 @@ export function extractTypedDocument(text: string): TypedExtraction {
 
     const heading = structuredText.split(/\r?\n/).map(clean).find((line) => line && !/tax invoice/i.test(line));
     const headingPrefix = clean(structuredText.split(/tax\s+invoice/i)[0]);
-    const issuerName = headingPrefix || clean(/^\s*(?:#{1,4}\s*)?([^\n]+)$/m.exec(structuredText)?.[1]) || heading;
+    // The issuer is the merchant name — the line AFTER "TAX INVOICE", or
+    // the text before it if present. NEVER use the "TAX INVOICE" title itself.
+    const issuerName = headingPrefix || heading;
     if (issuerName) {
       const issuerGstin = capture(/gstin\s*:\s*([A-Z0-9]{15})/i);
       const address = [
@@ -681,6 +684,34 @@ export function extractTypedDocument(text: string): TypedExtraction {
         contact: capture(/contact\s+person\s*:\s*([^\n*]+?)(?=email|gst|$)/i),
         email: [...structuredText.matchAll(/[\w.+-]+@[\w.-]+/g)].map((m) => m[0]).find((email) => email !== out.issuer?.email),
       };
+    }
+    // Person detection for tax invoices: look for "Mr./Ms./Mrs./Dr." prefix
+    // or "Name:" label. OCR often splits the honorific, the "Name" label, and
+    // the actual name across multiple lines ("Mr.\nName\nGST : ...\nMahesh").
+    // Skip "Name", "GST", "Address", "Tel" etc. — they are labels, not names.
+    const SKIP_WORDS = new Set(["name", "gst", "gstin", "address", "tel", "phone", "mobile", "email", "pan", "aadhaar", "sr", "no", "date", "bill", "to", "contact"]);
+    const findNameAfterHonorific = (text: string): string | undefined => {
+      const m = /(?:Mr|Ms|Mrs|Dr|Shri|Smt)\.?\s*\n/i.exec(text);
+      if (!m) return undefined;
+      const after = text.slice(m.index + m[0].length);
+      for (const line of after.split(/\r?\n/)) {
+        const w = clean(line);
+        if (!w) continue;
+        // Skip labels and GST numbers
+        if (SKIP_WORDS.has(w.toLowerCase())) continue;
+        if (/^(?:gst|gstin|pan|sr|no|date|bill|address|tel|phone|mobile|email|contact)\s*[:#-]/i.test(w)) continue;
+        if (/^[A-Z0-9]{10,}$/.test(w)) continue; // GSTIN etc.
+        // A person name: starts with capital, has lowercase letters
+        if (/^[A-Z][a-z]+(?:[,\.]?\s*[A-Z]?[a-z]*)?/.test(w)) {
+          // Clean up trailing comma/s
+          return w.replace(/[,]+$/, "").replace(/,s$/, "").trim();
+        }
+      }
+      return undefined;
+    };
+    const detectedPerson = findNameAfterHonorific(structuredText);
+    if (detectedPerson) {
+      out.person = { name: detectedPerson, kind: "person" };
     }
     const bankText = capture(/bank\s+details\s*:(.+?)(?=notes|terms|supply meant|$)/is);
     if (bankText) {

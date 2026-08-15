@@ -35,6 +35,7 @@ import {
   type DocumentPartyRole,
   type ResolvedTransaction,
 } from "./claims.js";
+import { resolveEntity } from "./ledger.js";
 import { rebuildSearchIndex, searchDocuments, removeFromIndex } from "./search.js";
 import { activeDocumentSql, activeTransactionSql, isActive, listableDocumentSql } from "./lifecycle.js";
 import {
@@ -831,6 +832,30 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 newValue: value,
                 source: "user",
               });
+            }
+
+            // A corrected ISSUER or VENDOR/COUNTERPARTY relinks the
+            // document_party row so the resolved entity matches the user's
+            // correction. Without this, the party link still points to the
+            // wrongly-detected entity (e.g. "TAX INVOICE" as issuer).
+            if (subject === "document" && (field === "issuer" || field === "vendor" || field === "counterparty") && value) {
+              const partyRole = field === "issuer" ? "issuer" : "counterparty";
+              try {
+                const entityId = resolveEntity(db, ports, value, "organisation", { subtype: "merchant" });
+                // Remove the old party link for this role, then set the new one.
+                db.prepare("DELETE FROM document_parties WHERE document_id=? AND role=?").run(subjectId, partyRole);
+                setDocumentParty(db, ports, {
+                  documentId: subjectId,
+                  entityId,
+                  role: partyRole,
+                  confidence: 1,
+                  provenance: "user-confirmed",
+                });
+              } catch (err) {
+                ports.logger.warn("could not relink party after edit", {
+                  document_id: subjectId, field, value, err: (err as Error)?.message,
+                });
+              }
             }
 
             return send(res, 200, {
