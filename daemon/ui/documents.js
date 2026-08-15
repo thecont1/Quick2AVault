@@ -119,21 +119,31 @@ async function showDoc(id, container) {
     + "<span class='n'>" + esc(String(t.occurred_at || "").slice(0, 10)) + "</span></div>").join("");
 
   // Render effective fields as editable rows. Fields in editableFields get
-  // a click-to-edit handler; fields with a vocabulary (doc_type, financial_impact)
-  // get a dropdown; others get a text input.
+  // a click-to-edit handler; fields with a vocabulary (doc_type, financial_impact,
+  // currency, financial_year) get a dropdown; document_date gets a date picker;
+  // others get a text input.
   const FIELD_LABELS = {
     doc_type: "Doc Type", amount_minor: "Amount", currency: "Currency",
-    document_date: "Invoice Date", posted_at: "Posted At",
+    document_date: "Transaction Date", posted_at: "Posted At",
     counterparty: "Counterparty", person: "Person",
     financial_impact: "Impact Bucket", issuer: "Issuer", vendor: "Vendor",
-    document_number: "Doc Number", financial_year: "FY",
+    document_number: "Reference No.", financial_year: "FY",
     category: "Category", purpose_text: "Purpose",
   };
+  // Build FY dropdown options: current FY ± 3 years from today.
+  const currentYear = new Date().getUTCFullYear();
+  const fyOptions = [];
+  for (let y = currentYear - 3; y <= currentYear + 1; y++) {
+    fyOptions.push("FY " + y + "-" + String((y + 1) % 100).padStart(2, "0"));
+  }
   const DROPDOWN_FIELDS = {
     doc_type: vocab.document_types || [],
     financial_impact: vocab.impact_buckets || [],
     currency: ["INR", "USD", "EUR", "GBP", "SGD", "AED"],
+    financial_year: fyOptions,
   };
+  // Fields that use a date picker (<input type="date">) instead of text/dropdown.
+  const DATE_FIELDS = new Set(["document_date", "posted_at"]);
 
   // Fixed schema: these core fields always appear in this order, even when
   // the AI didn't extract them. This lets the user manually fill in what the
@@ -144,8 +154,9 @@ async function showDoc(id, container) {
     "doc_type", "amount_minor", "currency", "document_date",
     "counterparty", "issuer", "vendor", "person",
     "document_number", "purpose_text", "financial_impact",
+    "financial_year",
   ];
-  const EXTRA_FIELDS = ["posted_at", "financial_year", "category"];
+  const EXTRA_FIELDS = ["posted_at", "category"];
 
   // Build the list: fixed fields first (in order), then any extra effective
   // fields that have a value but aren't in the fixed set.
@@ -173,6 +184,7 @@ async function showDoc(id, container) {
     const hasValue = v && v.value !== null && v.value !== undefined;
     const displayVal = !hasValue ? "—"
       : (k === "amount_minor" && v.value) ? money(Number(v.value))
+      : (k === "document_date" || k === "posted_at") ? (v.value.slice(0, 10))
       : String(v.value);
     const prov = hasValue ? " <span style='color:var(--faint)'>· " + esc(v.source) + "</span>" : "";
     const cls = isEditable ? "rule editable" : "rule";
@@ -237,11 +249,11 @@ async function showDoc(id, container) {
 
   if (container) container.innerHTML = html;
   initDocViewer(id, { pipelineState: d.pipeline_state, intakeId: d.intake_id });
-  initDocActions(id, editableFields, DROPDOWN_FIELDS);
+  initDocActions(id, editableFields, DROPDOWN_FIELDS, DATE_FIELDS);
 }
 
 // ── document action bar + inline field editing ───────────────────
-function initDocActions(id, editableFields, dropdownFields) {
+function initDocActions(id, editableFields, dropdownFields, dateFields) {
   const msg = document.getElementById("docActionMsg-" + id);
   function setMsg(text, cls) {
     if (msg) { msg.textContent = text; msg.className = "msg" + (cls ? " " + cls : ""); }
@@ -348,12 +360,12 @@ function initDocActions(id, editableFields, dropdownFields) {
   detailPanel.querySelectorAll(".rule.editable").forEach((row) => {
     row.onclick = (e) => {
       if (row.classList.contains("editing")) return;
-      startEditField(id, row, dropdownFields);
+      startEditField(id, row, dropdownFields, dateFields);
     };
   });
 }
 
-function startEditField(id, row, dropdownFields) {
+function startEditField(id, row, dropdownFields, dateFields) {
   const field = row.dataset.field;
   const currentValue = row.dataset.value;
   row.classList.add("editing");
@@ -362,6 +374,7 @@ function startEditField(id, row, dropdownFields) {
   if (!valSpan) return;
 
   const options = dropdownFields[field] || [];
+  const isDate = dateFields && dateFields.has(field);
   // amount_minor is stored in paise; the user edits in rupees.
   const isMoney = field === "amount_minor";
   const editValue = isMoney && currentValue
@@ -373,9 +386,14 @@ function startEditField(id, row, dropdownFields) {
       "<option value='" + esc(String(o)) + "'" + (String(o) === currentValue ? " selected" : "") + ">"
       + esc(String(o)) + "</option>"
     ).join("");
-    inputHtml = "<select class='edit-input' id='editSel-" + esc(field) + "'>" + opts + "</select>";
+    // Include a blank "—" option when the current value is empty so the
+    // user can explicitly choose to set it.
+    const blank = !currentValue ? "<option value='' selected>—</option>" : "";
+    inputHtml = "<select class='edit-input' id='editSel-" + esc(field) + "'>" + blank + opts + "</select>";
+  } else if (isDate) {
+    inputHtml = "<input type='date' class='edit-input' id='editInp-" + esc(field) + "' value='" + esc(editValue) + "'>";
   } else {
-    inputHtml = "<input class='edit-input' id='editInp-" + esc(field) + "' value='" + esc(editValue) + "'>";
+    inputHtml = "<input class='edit-input' id='editInp-" + esc(field) + "' value='" + esc(editValue) + "' placeholder='—'>";
   }
 
   valSpan.style.display = "none";

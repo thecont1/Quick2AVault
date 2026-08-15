@@ -532,7 +532,7 @@ export function detectDocumentType(text: string): {type:DocumentType;confidence:
   if (/contract\s+note/i.test(text) && (/\bINE[A-Z0-9]{9}\b/.test(text) || /trade\s+date/i.test(text))) {
     return { type: "contract_note", confidence: 1 };
   }
-  if (/tax\s+invoice/i.test(text) && (/gstin/i.test(text) || /hsn\s*\/\s*sac/i.test(text))) {
+  if (/tax\s+invoice/i.test(text) && (/gstin/i.test(text) || /\bgst\b/i.test(text) || /hsn\s*\/\s*sac/i.test(text))) {
     return { type: "tax_invoice", confidence: 1 };
   }
   let best:DocumentType="unknown", score=0;
@@ -614,8 +614,12 @@ export function extractTypedDocument(text: string): TypedExtraction {
   };
   const capture = (pattern: RegExp): string | undefined => clean(pattern.exec(structuredText)?.[1]);
   const amount = (label: RegExp): number | undefined => {
-    const raw = capture(new RegExp(`${label.source}[^\\d]{0,30}([\\d,]+\\.\\d{2})`, "i"));
-    return raw ? minor(raw) : undefined;
+    // Match amounts with optional decimal places: "1,445.00" or "1445" or "1,42,356.28"
+    const raw = capture(new RegExp(`${label.source}[^\\d]{0,30}([\\d,]+(?:\\.\\d{1,2})?)`, "i"));
+    if (!raw) return undefined;
+    // If no decimal places, append ".00" so minor() works correctly.
+    const normalized = raw.includes(".") ? raw : raw + ".00";
+    return minor(normalized);
   };
   const personName = capture(/(?:issuer|invoice\s+for|receipt\s+for|person)\s*:?\s*(.+?)(?=\.\s+total\b|<|\n|$)/i);
   const organisationName = capture(/organisation\s*:?\s*(.+?)(?=\s*<|\.\s+total\b|\n|$)/i)
@@ -624,13 +628,16 @@ export function extractTypedDocument(text: string): TypedExtraction {
 
   if (detected.type === "tax_invoice") {
     out.documentNumber = capture(/invoice\s+number\s*[:#-]?\s*([^\n*]+)/i)
-      ?? capture(/^\s*invoice\s+no\.?\s*[:#-]?\s*([^\n*]+)/im);
-    out.documentDate = dateISO(capture(/invoice\s*date\s*[:#-]?\s*([^\n*]+)/i) ?? "");
+      ?? capture(/^\s*invoice\s+no\.?\s*[:#-]?\s*([^\n*]+)/im)
+      ?? capture(/(?:sr|s\.?no|receipt|bill)\s*(?:no|number)\s*[:#-]?\s*([A-Z0-9-]+)/i);
+    out.documentDate = dateISO(capture(/invoice\s*date\s*[:#-]?\s*([^\n*]+)/i) ?? "")
+      ?? dateISO(capture(/^\s*date\s*[:#|]?\s*([^\n*]+)/im) ?? "");
     out.dueDate = dateISO(capture(/due\s*date\s*[:#-]?\s*([^\n*]+)/i) ?? "");
     out.financialYear = financialYear(out.documentDate);
     out.currency = capture(/currency\s*[:#-]?\s*\**\s*([A-Z]{3})/i)?.toUpperCase();
     out.placeOfSupply = capture(/place\s+of\s+supply\s*[:#-]?\s*\**\s*([A-Za-z ]+)/i);
-    out.amountMinor = amount(/(?:grand\s+)?total/i) ?? [...structuredText.matchAll(/[$₹€£]\s*([\d,]+\.\d{2})/g)].map((m) => minor(m[1])).at(-1);
+    out.amountMinor = amount(/(?:grand\s+)?total/i)
+      ?? [...structuredText.matchAll(/[$₹€£]\s*([\d,]+(?:\.\d{1,2})?)/g)].map((m) => minor(m[1].includes(".") ? m[1] : m[1] + ".00")).at(-1);
     out.subtotalMinor = amount(/subtotal/i) ?? out.amountMinor;
     out.taxMinor = amount(/\btax\b/i) ?? 0;
     if (out.currency && out.currency !== "INR" && out.amountMinor && out.documentDate) {

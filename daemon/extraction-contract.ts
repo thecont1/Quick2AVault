@@ -358,7 +358,24 @@ Rules that matter more than anything else:
 8. If the document is not financial, set doc_type="irrelevant" and leave
    monetary fields null.
 
-9. A BANK OR CARD STATEMENT (many transactions, one document) is
+9. ALWAYS EXTRACT THE CORE FIELDS when the document is financial, even if
+   the document type is uncertain or the OCR is messy:
+   - amount_minor: the total amount (grand total, net amount, or settled amount).
+     Look for "Total", "Grand Total", "Rs.", "₹", "$" followed by a number.
+     Indian lakh/crore grouping: "1,42,356.28" = 14235628 minor units.
+   - currency: the currency symbol/code printed (₹/Rs. → INR, $ → USD).
+   - occurred_at: the transaction/invoice date. Look for "Date", "Invoice Date",
+     "Date :" followed by DD-MM-YYYY or DD/MM/YY. Emit ISO yyyy-mm-dd.
+   - parties: at minimum the issuer (who issued the document) and the
+     counterparty (who the document is addressed to / who pays).
+   - reference_ids: any invoice number, order number, receipt number, UTR.
+   A document with "TAX INVOICE" and "Grand total 1445" MUST produce
+   amount_minor=144500, currency="INR", doc_type="tax_invoice" — even if
+   the OCR text is noisy or partially garbled. Do NOT return a minimal
+   stub with only documentType and confidence. The extraction is useless
+   without the financial facts.
+
+10. A BANK OR CARD STATEMENT (many transactions, one document) is
    doc_type="bank_statement" or "card_statement" — never "statement_line".
    These are handled by a SEPARATE deterministic table parser
    (daemon/statements.ts), not by amount_minor/direction/parties on this
