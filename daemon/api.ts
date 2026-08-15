@@ -263,6 +263,37 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return res.end(html);
       }
 
+      // ── static assets for the dev UI (CSS + JS modules) ──────────────────
+      // Serves files from daemon/ui/ with safe content types. Only enabled
+      // when devUi is on, same as the HTML shell. No token substitution —
+      // the JS files use the TOKEN constant set by ui.html's inline script.
+      if (p.startsWith("/ui/") && opts.devUi) {
+        const rel = p.slice("/ui/".length);
+        // Confine to the ui/ directory — no path traversal.
+        if (rel.includes("..") || rel.includes("\0")) {
+          return send(res, 400, { error: "bad path" });
+        }
+        const ext = rel.slice(rel.lastIndexOf(".") + 1).toLowerCase();
+        const types: Record<string, string> = {
+          css: "text/css; charset=utf-8",
+          js: "application/javascript; charset=utf-8",
+          map: "application/json; charset=utf-8",
+        };
+        if (!types[ext]) return send(res, 404, { error: "not_found" });
+        const file = path.join(import.meta.dirname ?? __dirname, "ui", rel);
+        try {
+          const body = await fsp.readFile(file);
+          res.writeHead(200, {
+            "content-type": types[ext],
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
+          });
+          return res.end(body);
+        } catch {
+          return send(res, 404, { error: "not_found", expected: file });
+        }
+      }
+
       // ── unauthenticated: health ──────────────────────────────────────────
       if (p === "/v1/health") {
         const jobs = db.prepare("SELECT state, COUNT(*) n FROM jobs GROUP BY state").all() as {
