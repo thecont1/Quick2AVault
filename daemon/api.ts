@@ -193,6 +193,12 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   const UI_SESSION_TTL_MS = 15 * 60 * 1000;
   const uiSessions = new Map<string, number>();
 
+  // ── UI diagnostics state (daemon-lifetime, NOT per request) ──────
+  // The page reports its browser state here, fire-and-forget. GET reads
+  // the last N reports — how we see what an end-user's browser runs.
+  const uiDiagRing: Record<string, unknown>[] = [];
+  let uiDiagCount = 0;
+
   const mintUiSession = (): string => {
     const now = Date.now();
     for (const [t, exp] of uiSessions) if (exp <= now) uiSessions.delete(t);
@@ -332,11 +338,8 @@ async function uiAssetVersion(): Promise<string> {
 }
 
 // ── UI diagnostics ────────────────────────────────────────────────
-// The page reports its browser state (UA, viewport, tab, loader table,
-// storage) here, fire-and-forget. GET reads the last N reports — this is
-// how we see what an end-user's browser is actually running.
-const uiDiagRing: Record<string, unknown>[] = [];
-let uiDiagCount = 0;
+// (State lives inside createApi, next to uiSessions, so it survives across
+// requests. The routes below run per request and only touch that state.)
 
 // ── unauthenticated: health ──────────────────────────────────────────
 if (p === "/v1/diagnostics") {
