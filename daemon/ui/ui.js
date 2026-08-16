@@ -11,6 +11,21 @@ function checkAuth(r) {
 const api = (p) => fetch(p, { headers: H }).then(checkAuth).then((r) => r.json());
 // The folder watcher is the Drop folder — display it as such.
 const sourceLabel = (s) => (s === "folder" ? "DROP" : s);
+
+// The daemon serves UI files live from disk. If they change under an open
+// page (deploy, edit while browsing), reload once — the versioned asset
+// URLs guarantee the whole set comes back fresh together. This closes the
+// stale/mixed-cache class of "blank tab" bugs permanently.
+setInterval(async () => {
+  try {
+    const h = await fetch("/v1/health", { headers: H }).then((r) => r.json());
+    if (h && h.ui_version && UI_VERSION && String(h.ui_version) !== String(UI_VERSION)) {
+      location.reload();
+    }
+  } catch {
+    // daemon restarting — the next tick will sort it out
+  }
+}, 15000);
 const apiPost = (p, body) => fetch(p, {
   method: "POST", headers: { ...H, "content-type": "application/json" },
   body: JSON.stringify(body || {}),

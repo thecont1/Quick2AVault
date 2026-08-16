@@ -269,20 +269,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         // with new documents.js) breaks the tab loaders with reference
         // errors. Version every asset URL by the newest file mtime so any
         // change forces the browser to refetch the whole set together.
-        let uiVersion = "";
-        try {
-          const uiDir = path.join(import.meta.dirname ?? __dirname, "ui");
-          let newest = 0;
-          for (const e of await fsp.readdir(uiDir)) {
-            if (!/\.(js|css)$/.test(e)) continue;
-            const st = await fsp.stat(path.join(uiDir, e));
-            if (st.mtimeMs > newest) newest = st.mtimeMs;
-          }
-          uiVersion = "?v=" + Math.round(newest);
-        } catch {
-          uiVersion = "";
-        }
-        html = html.replace(/(src="\/ui\/[^"]+\.js"|href="\/ui\/[^"]+\.css")/g, (m) => m.slice(0, -1) + uiVersion + "\"");
+        const uiVersion = await uiAssetVersion();
+        html = html.replace("%%UIVERSION%%", uiVersion);
+        html = html.replace(/(src="\/ui\/[^"]+\.js"|href="\/ui\/[^"]+\.css")/g, (m) =>
+          m.slice(0, -1) + "?v=" + uiVersion + "\"");
         res.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
@@ -324,7 +314,24 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }
       }
 
-      // ── unauthenticated: health ──────────────────────────────────────────
+// Newest mtime across the ui/ assets — cache-busts asset URLs and lets
+// open pages auto-reload when the UI files change under them.
+async function uiAssetVersion(): Promise<string> {
+  try {
+    const uiDir = path.join(import.meta.dirname ?? __dirname, "ui");
+    let newest = 0;
+    for (const e of await fsp.readdir(uiDir)) {
+      if (!/\.(js|css)$/.test(e)) continue;
+      const st = await fsp.stat(path.join(uiDir, e));
+      if (st.mtimeMs > newest) newest = st.mtimeMs;
+    }
+    return String(Math.round(newest));
+  } catch {
+    return "";
+  }
+}
+
+// ── unauthenticated: health ──────────────────────────────────────────
       if (p === "/v1/health") {
         const jobs = db.prepare("SELECT state, COUNT(*) n FROM jobs GROUP BY state").all() as {
           state: string;
@@ -332,12 +339,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         }[];
         return send(res, 200, {
           status: "ok",
-          // Work order 07 §C1: the health contract. The client uses these to
-          // distinguish compatible, outdated, unreachable, and
-          // capability-unavailable states. A stale daemon must not masquerade
-          // as an empty vault.
           api_version: "1",
           version: opts.version,
+          ui_version: await uiAssetVersion(),
           build_id: opts.buildId ?? opts.version,
           schema_version: SCHEMA_VERSION,
           capabilities: DAEMON_CAPABILITIES,
