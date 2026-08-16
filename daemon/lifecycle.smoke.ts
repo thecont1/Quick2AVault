@@ -25,6 +25,7 @@ import { createApi } from "./api.js";
 import { createLogger, createEventBus, systemClock, createPaths } from "./adapters.js";
 import type { Ports } from "./ports.js";
 import { nullAiProvider, type MutableAiProvider } from "./ai-provider.js";
+import { recordTransaction } from "./ledger.js";
 import { JobWorker } from "./pipeline.js";
 
 let pass = 0;
@@ -188,6 +189,99 @@ await check("reprocess re-converts the markdown from the original bytes", () => 
 await check("a reactivated document is listed again", async () => {
   const ids = await listIds();
   assert.ok(ids.includes("doc_remove_B"), ids.join(","));
+});
+
+// ── concurrent reprocess (ITO QA: high severity) ────────────────────────────
+// Two resets on one document used to create two convert/analyse chains
+// against a shared state pointer; the stale chain crashed the daemon with
+// illegal terminal transitions (complete → analysing / complete → failed).
+// The newest job row is now the reprocess epoch: the reset retires older
+// pending jobs, and the worker skips any job that is not the document's
+// newest — stale work can never write to the shared pipeline state.
+await check("two concurrent reprocesses converge on one chain without crashing", async () => {
+  // Two resets back-to-back, exactly like two browser tabs or a retry
+  // arriving while the first request is still active.
+  const r1 = await req("POST", "/v1/documents/doc_remove_B/reprocess");
+  const r2 = await req("POST", "/v1/documents/doc_remove_B/reprocess");
+  assert.equal(r1.status, 200);
+  assert.equal(r2.status, 200);
+  // The newer reset must have retired the older pending chain.
+  const superseded = db
+    .prepare("SELECT COUNT(*) n FROM jobs WHERE document_id=? AND state='done' AND last_error LIKE 'superseded%'")
+    .get("doc_remove_B") as { n: number };
+  assert.ok(superseded.n >= 1, "older pending jobs must be retired by the newer reset");
+  // Drain with the worker — it must settle a terminal state, never crash.
+  const worker = new JobWorker(db, ports, nullAiProvider);
+  for (let i = 0; i < 12; i++) await worker.tick();
+  const state = db
+    .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+    .get("doc_remove_B") as { state: string };
+  assert.ok(
+    ["complete", "password_needed", "failed", "irrelevant"].includes(state.state),
+    `pipeline must settle on a terminal state, got ${state.state}`,
+  );
+  const running = db
+    .prepare("SELECT COUNT(*) n FROM jobs WHERE document_id=? AND state IN ('pending','running')")
+    .get("doc_remove_B") as { n: number };
+  assert.equal(running.n, 0, "no jobs may remain pending/running after the drain");
+});
+
+// ── evidence metadata refresh (ITO QA: medium) ─────────────────────────────
+// re-analysis used INSERT OR IGNORE, so linked_at stayed stale after a
+// reprocess. The upsert must refresh machine link metadata while
+// preserving user-controlled links.
+await check("re-analysis refreshes evidence link metadata, preserving user links", async () => {
+  const docId = "doc_evid";
+  seedDoc(docId);
+  const x = {
+    doc_type: "merchant_invoice",
+    occurred_at: "2026-08-01",
+    posted_at: "2026-08-02",
+    amount_minor: 5000,
+    currency: "INR",
+    direction: "in",
+    payment_rail: "netbanking",
+    parties: [
+      { name: "Owner", kind: "person", role: "owner" },
+      { name: "EVIDENCE TEST MERCHANT", kind: "organisation", role: "counterparty" },
+    ],
+    reference_ids: { invoice_no: "EV/001" },
+    counterparty_descriptor: "EVIDENCE TEST MERCHANT",
+    source_of_funds_text: null,
+    destination_of_funds_text: null,
+    purpose_text: "evidence refresh fixture",
+    category_hint: "consulting_income",
+    is_wallet_topup: false,
+    confidence: 0.85,
+    notes: null,
+    line_items: [],
+    holdings: [],
+  } as unknown as Parameters<typeof recordTransaction>[3];
+  const id = recordTransaction(db, ports, docId, x);
+  assert.ok(id, "first analysis must create the evidence link");
+  const first = db
+    .prepare("SELECT linked_at, linked_by FROM transaction_documents WHERE document_id=?")
+    .get(docId) as { linked_at: string; linked_by: string };
+  // A user manually claimed this link — it must survive re-analysis.
+  db.prepare("UPDATE transaction_documents SET linked_by='user' WHERE document_id=?").run(docId);
+  await new Promise((r) => setTimeout(r, 5));
+  recordTransaction(db, ports, docId, x);
+  const after = db
+    .prepare("SELECT linked_at, linked_by FROM transaction_documents WHERE document_id=?")
+    .get(docId) as { linked_at: string; linked_by: string };
+  assert.ok(after.linked_at > first.linked_at, "linked_at must refresh on re-analysis");
+  assert.equal(after.linked_by, "user", "user-controlled links must survive re-analysis");
+});
+
+// ── health query-token boundary (ITO QA: medium) ───────────────────────────
+// Query-token authentication is reserved for the SSE event stream; a
+// credential-bearing health URL must 401 while token-less probes stay open.
+await check("health rejects query-string credentials but stays open without them", async () => {
+  const withToken = await req("GET", "/v1/health?token=abc123");
+  assert.equal(withToken.status, 401);
+  const bare = await req("GET", "/v1/health");
+  assert.equal(bare.status, 200);
+  assert.equal(bare.json?.status, "ok");
 });
 
 // ── delete permanently ──────────────────────────────────────────────────────
