@@ -1,72 +1,58 @@
 {
-  "_comment": "Manually maintained trust/capability overrides. Keyed by 'providerId/modelId'. Merged over catalog.generated.json at runtime. Overrides win. Provider-level overrides use key 'provider:<providerId>'.",
-  "_format": "Model entries can override: trust, capabilities, jurisdictionTags, deprecated, notes, displayName. Provider entries can override: baseUrl, apiStyle, tier, name, docsUrl. New models (not in generated catalog) are added.",
-
   "provider:sarvam": {
     "baseUrl": "https://api.sarvam.ai/doc-ai/v1",
     "apiStyle": "openai"
   },
 
-  "poolside/default": {
+  "poolside/poolside/laguna-s-2.1": {
     "trust": "verified",
-    "capabilities": { "chat": true, "json": true, "vision": false },
-    "notes": "Tested end-to-end in Q2AV as primary inference provider."
+    "capabilities": { "chat": true, "json": true, "vision": false }
   },
 
   "sarvam/sarvam-105b": {
     "trust": "verified",
-    "capabilities": { "chat": true, "json": true, "vision": false },
-    "notes": "Sarvam's flagship chat model. Tools, always-on reasoning, 128K context. ₹29.28/1M input tokens."
+    "capabilities": { "chat": true, "json": true, "vision": false }
   },
   "sarvam/sarvam-105b-conversations": {
     "trust": "verified",
-    "capabilities": { "chat": true, "json": true, "vision": false },
-    "notes": "Dialogue-tuned variant of 105B. Not a capability upgrade — separate use case."
+    "capabilities": { "chat": true, "json": true, "vision": false }
   },
   "sarvam/parse": {
     "trust": "verified",
     "capabilities": { "chat": false, "json": true, "vision": true },
-    "jurisdictionTags": ["IN"],
-    "notes": "Document intelligence: OCR, tables, layout-aware. 23 Indian languages. ₹0.5/page. India-jurisdiction secondary default."
+    "jurisdictionTags": ["IN"]
   },
   "sarvam/vision": {
     "trust": "community",
-    "capabilities": { "chat": false, "json": true, "vision": true },
-    "notes": "General image understanding (captions, OCR, tables). Pricing not published."
+    "capabilities": { "chat": false, "json": true, "vision": true }
   },
   "sarvam/gemma4": {
     "trust": "community",
-    "capabilities": { "chat": true, "json": true, "vision": true },
-    "notes": "Open-weights Gemma 4 pass-through on Sarvam endpoint. Images + tools. ₹36.6/1M input tokens."
+    "capabilities": { "chat": true, "json": true, "vision": true }
   },
   "sarvam/glm5.2": {
     "trust": "community",
-    "capabilities": { "chat": true, "json": true, "vision": false },
-    "notes": "Open-weights GLM 5.2 pass-through on Sarvam endpoint. Tools, switchable reasoning. ₹128.1/1M input tokens."
+    "capabilities": { "chat": true, "json": true, "vision": false }
   },
 
   "sarvam/saaras:v4": {
     "trust": "verified",
     "capabilities": { "chat": false, "json": false, "vision": false },
-    "deprecated": true,
-    "notes": "Speech-to-text. Not eligible for inference slots."
+    "deprecated": true
   },
   "sarvam/saaras:v3": {
     "trust": "verified",
     "capabilities": { "chat": false, "json": false, "vision": false },
-    "deprecated": true,
-    "notes": "Speech-to-text. Not eligible for inference slots."
+    "deprecated": true
   },
   "sarvam/bulbul:v3": {
     "trust": "verified",
     "capabilities": { "chat": false, "json": false, "vision": false },
-    "deprecated": true,
-    "notes": "Text-to-speech. Not eligible for inference slots."
+    "deprecated": true
   },
   "sarvam/mayura:v1": {
     "trust": "verified",
     "capabilities": { "chat": false, "json": false, "vision": false },
-    "deprecated": true,
-    "notes": "Translation. Not eligible for inference slots."
+    "deprecated": true
   }
 }

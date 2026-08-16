@@ -56,32 +56,6 @@ function buildProviderDropdown(selectId, currentProviderId) {
   sel.innerHTML = html;
 }
 
-/**
- * Filter the provider dropdown by search query.
- * Uses provider aliases for fuzzy matching (e.g. "gemini" → Google).
- */
-function filterProviderDropdown(selectId, query) {
-  const sel = document.getElementById(selectId);
-  const q = query.toLowerCase().trim();
-  if (!q) {
-    // Restore full list — rebuild without filter
-    const currentId = sel.value;
-    const which = selectId === "aiProvider" ? "primary" : "secondary";
-    buildProviderDropdown(selectId, currentId);
-    return;
-  }
-  // Hide options that don't match
-  for (const opt of sel.querySelectorAll("option")) {
-    const pid = opt.value;
-    if (pid === "custom") { opt.hidden = false; continue; }
-    const provider = CATALOG.find((p) => p.id === pid);
-    if (!provider) { opt.hidden = true; continue; }
-    const name = provider.name.toLowerCase();
-    const matches = name.includes(q) || pid.toLowerCase().includes(q);
-    opt.hidden = !matches;
-  }
-}
-
 // ── Load settings ────────────────────────────────────────────────────────
 async function loadSettings() {
   // Load the catalog first (needed for provider dropdowns)
@@ -187,6 +161,36 @@ function providerBaseUrl(which) {
 }
 
 /**
+ * Show the provider's logo beside the provider dropdown.
+ * Logos come from models.dev via logoUrl in the catalog.
+ */
+function updateProviderLogo(which, provider) {
+  const isPrimary = which === "primary";
+  const sel = document.getElementById(isPrimary ? "aiProvider" : "ai2Provider");
+  const logoId = isPrimary ? "aiProviderLogo" : "ai2ProviderLogo";
+  let logo = document.getElementById(logoId);
+  if (!logo) {
+    // Wrap the select in an inline-flex container with the logo beside it
+    const wrapper = document.createElement("div");
+    wrapper.style.cssText = "display:flex;align-items:center;gap:8px";
+    sel.parentNode.insertBefore(wrapper, sel);
+    wrapper.appendChild(sel);
+    logo = document.createElement("img");
+    logo.id = logoId;
+    logo.style.cssText = "width:18px;height:18px;border-radius:3px;flex-shrink:0";
+    logo.onerror = () => { logo.style.display = "none"; };
+    wrapper.appendChild(logo);
+  }
+  if (provider && provider.logoUrl) {
+    logo.src = provider.logoUrl;
+    logo.alt = provider.name;
+    logo.style.display = "";
+  } else {
+    logo.style.display = "none";
+  }
+}
+
+/**
  * Called when the provider dropdown changes.
  * Shows the base URL (read-only for catalog providers, editable for Custom),
  * and populates the model dropdown using eligibleModels() for that slot.
@@ -197,6 +201,9 @@ function onProviderChange(which, savedModel) {
   const pid = sel.value;
   const provider = CATALOG.find((p) => p.id === pid);
   const baseUrl = provider ? provider.baseUrl : "";
+
+  // Show provider logo beside the dropdown
+  updateProviderLogo(which, provider);
 
   // Base URL: read-only for catalog providers, editable for Custom
   const customUrlRow = document.getElementById(isPrimary ? "aiCustomUrlRow" : "ai2CustomUrlRow");
@@ -595,8 +602,6 @@ document.getElementById("aiModel").onchange = () => {
   autoSave("primary");
 };
 document.getElementById("aiBaseUrl").oninput = () => autoSave("primary");
-document.getElementById("aiProviderSearch").oninput = (e) =>
-  filterProviderDropdown("aiProvider", e.target.value);
 
 document.getElementById("ai2Test").onclick = () => testAi("secondary");
 document.getElementById("ai2Provider").onchange = () => {
@@ -613,8 +618,6 @@ document.getElementById("ai2Model").onchange = () => {
   autoSave("secondary");
 };
 document.getElementById("ai2BaseUrl").oninput = () => autoSave("secondary");
-document.getElementById("ai2ProviderSearch").oninput = (e) =>
-  filterProviderDropdown("ai2Provider", e.target.value);
 
 document.getElementById("jurSave").onclick = saveJur;
 

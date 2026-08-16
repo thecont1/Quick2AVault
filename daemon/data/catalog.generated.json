@@ -1,11 +1,12 @@
 {
   "_generated_from": "https://models.dev/api.json",
-  "_generated_at": "2026-08-16T09:54:13.306Z",
+  "_generated_at": "2026-08-16T10:19:19.154Z",
   "_trust_policy": "All models default to trust:community. Verified models are in catalog.overrides.json.",
   "providers": [
     {
       "id": "anthropic",
       "name": "Anthropic",
+      "logoUrl": "https://models.dev/logos/anthropic.png",
       "baseUrl": "https://api.anthropic.com/v1",
       "apiStyle": "anthropic",
       "tier": "core",
@@ -185,6 +186,7 @@
     {
       "id": "deepseek",
       "name": "DeepSeek",
+      "logoUrl": "https://models.dev/logos/deepseek.png",
       "baseUrl": "https://api.deepseek.com",
       "apiStyle": "openai",
       "tier": "core",
@@ -247,6 +249,7 @@
     {
       "id": "google",
       "name": "Google",
+      "logoUrl": "https://models.dev/logos/google.png",
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
       "apiStyle": "gemini",
       "tier": "core",
@@ -764,6 +767,7 @@
     {
       "id": "meta",
       "name": "Meta",
+      "logoUrl": "https://models.dev/logos/meta.png",
       "baseUrl": "https://api.meta.ai/v1",
       "apiStyle": "openai",
       "tier": "core",
@@ -813,6 +817,7 @@
     {
       "id": "mistral",
       "name": "Mistral",
+      "logoUrl": "https://models.dev/logos/mistral.png",
       "baseUrl": "https://api.mistral.ai/v1",
       "apiStyle": "openai",
       "tier": "core",
@@ -1252,6 +1257,7 @@
     {
       "id": "openai",
       "name": "OpenAI",
+      "logoUrl": "https://models.dev/logos/openai.png",
       "baseUrl": "https://api.openai.com/v1",
       "apiStyle": "openai",
       "tier": "core",
@@ -1873,6 +1879,7 @@
     {
       "id": "openrouter",
       "name": "OpenRouter",
+      "logoUrl": "https://models.dev/logos/openrouter.png",
       "baseUrl": "https://openrouter.ai/api/v1",
       "apiStyle": "openai",
       "tier": "core",
@@ -6446,6 +6453,7 @@
     {
       "id": "google-vertex",
       "name": "Vertex",
+      "logoUrl": "https://models.dev/logos/google-vertex.png",
       "baseUrl": "https://us-central1-aiplatform.googleapis.com/v1",
       "apiStyle": "openai",
       "tier": "core",
@@ -7002,6 +7010,7 @@
     {
       "id": "xai",
       "name": "xAI",
+      "logoUrl": "https://models.dev/logos/xai.png",
       "baseUrl": "https://api.x.ai/v1",
       "apiStyle": "openai",
       "tier": "core",
@@ -7155,6 +7164,7 @@
     {
       "id": "alibaba",
       "name": "Alibaba",
+      "logoUrl": "https://models.dev/logos/alibaba.png",
       "baseUrl": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
       "apiStyle": "openai",
       "tier": "regional",
@@ -7867,6 +7877,7 @@
     {
       "id": "alibaba-token-plan",
       "name": "Alibaba Token Plan",
+      "logoUrl": "https://models.dev/logos/alibaba-token-plan.png",
       "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
       "apiStyle": "openai",
       "tier": "regional",
@@ -8202,6 +8213,7 @@
     {
       "id": "cohere",
       "name": "Cohere",
+      "logoUrl": "https://models.dev/logos/cohere.png",
       "baseUrl": "https://api.cohere.com/v2",
       "apiStyle": "openai",
       "tier": "regional",
@@ -8394,6 +8406,7 @@
     {
       "id": "inception",
       "name": "Inception",
+      "logoUrl": "https://models.dev/logos/inception.png",
       "baseUrl": "https://api.inceptionlabs.ai/v1/",
       "apiStyle": "openai",
       "tier": "regional",
@@ -8430,6 +8443,7 @@
     {
       "id": "kimi-for-coding",
       "name": "Kimi For Coding",
+      "logoUrl": "https://models.dev/logos/kimi-for-coding.png",
       "baseUrl": "https://api.kimi.com/coding/v1",
       "apiStyle": "anthropic",
       "tier": "regional",
@@ -8492,6 +8506,7 @@
     {
       "id": "minimax",
       "name": "MiniMax (minimax.io)",
+      "logoUrl": "https://models.dev/logos/minimax.png",
       "baseUrl": "https://api.minimax.io/anthropic/v1",
       "apiStyle": "anthropic",
       "tier": "regional",
@@ -8593,6 +8608,7 @@
     {
       "id": "moonshotai",
       "name": "Moonshot AI",
+      "logoUrl": "https://models.dev/logos/moonshotai.png",
       "baseUrl": "https://api.moonshot.ai/v1",
       "apiStyle": "openai",
       "tier": "regional",
@@ -8733,6 +8749,7 @@
     {
       "id": "moonshotai-cn",
       "name": "Moonshot AI (China)",
+      "logoUrl": "https://models.dev/logos/moonshotai-cn.png",
       "baseUrl": "https://api.moonshot.cn/v1",
       "apiStyle": "openai",
       "tier": "regional",
@@ -8873,6 +8890,7 @@
     {
       "id": "nvidia",
       "name": "Nvidia",
+      "logoUrl": "https://models.dev/logos/nvidia.png",
       "baseUrl": "https://integrate.api.nvidia.com/v1",
       "apiStyle": "openai",
       "tier": "regional",
@@ -10183,6 +10201,7 @@
     {
       "id": "poolside",
       "name": "Poolside",
+      "logoUrl": "https://models.dev/logos/poolside.png",
       "baseUrl": "https://inference.poolside.ai/v1",
       "apiStyle": "openai",
       "tier": "regional",
@@ -10232,6 +10251,7 @@
     {
       "id": "sarvam",
       "name": "Sarvam AI",
+      "logoUrl": "https://models.dev/logos/sarvam.png",
       "baseUrl": "https://api.sarvam.ai/v1",
       "apiStyle": "openai",
       "tier": "regional",
@@ -10268,6 +10288,7 @@
     {
       "id": "upstage",
       "name": "Upstage",
+      "logoUrl": "https://models.dev/logos/upstage.png",
       "baseUrl": "https://api.upstage.ai/v1/solar",
       "apiStyle": "openai",
       "tier": "regional",
@@ -10330,6 +10351,7 @@
     {
       "id": "xiaomi",
       "name": "Xiaomi",
+      "logoUrl": "https://models.dev/logos/xiaomi.png",
       "baseUrl": "https://api.xiaomimimo.com/v1",
       "apiStyle": "openai",
       "tier": "regional",
@@ -10418,6 +10440,7 @@
     {
       "id": "xiaomi-token-plan-sgp",
       "name": "Xiaomi Token Plan (Singapore)",
+      "logoUrl": "https://models.dev/logos/xiaomi-token-plan-sgp.png",
       "baseUrl": "https://token-plan-sgp.xiaomimimo.com/v1",
       "apiStyle": "openai",
       "tier": "regional",
@@ -10519,6 +10542,7 @@
     {
       "id": "zhipuai",
       "name": "Zhipu AI",
+      "logoUrl": "https://models.dev/logos/zhipuai.png",
       "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
       "apiStyle": "openai",
       "tier": "regional",
@@ -10698,6 +10722,7 @@
     {
       "id": "zhipuai-coding-plan",
       "name": "Zhipu AI Coding Plan",
+      "logoUrl": "https://models.dev/logos/zhipuai-coding-plan.png",
       "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
       "apiStyle": "openai",
       "tier": "regional",
@@ -10812,6 +10837,7 @@
     {
       "id": "302ai",
       "name": "302.AI",
+      "logoUrl": "https://models.dev/logos/302ai.png",
       "baseUrl": "https://api.302.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -12083,6 +12109,7 @@
     {
       "id": "abacus",
       "name": "Abacus",
+      "logoUrl": "https://models.dev/logos/abacus.png",
       "baseUrl": "https://routellm.abacus.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -13497,6 +13524,7 @@
     {
       "id": "abliteration-ai",
       "name": "abliteration.ai",
+      "logoUrl": "https://models.dev/logos/abliteration-ai.png",
       "baseUrl": "https://api.abliteration.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -13533,6 +13561,7 @@
     {
       "id": "ai-router",
       "name": "AI-ROUTER",
+      "logoUrl": "https://models.dev/logos/ai-router.png",
       "baseUrl": "https://api.ai-router.dev/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -13608,6 +13637,7 @@
     {
       "id": "aiand",
       "name": "ai&",
+      "logoUrl": "https://models.dev/logos/aiand.png",
       "baseUrl": "https://api.aiand.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -13735,6 +13765,7 @@
     {
       "id": "aki-io",
       "name": "AKI.IO",
+      "logoUrl": "https://models.dev/logos/aki-io.png",
       "baseUrl": "https://aki.io/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -13823,6 +13854,7 @@
     {
       "id": "alibaba-cn",
       "name": "Alibaba (China)",
+      "logoUrl": "https://models.dev/logos/alibaba-cn.png",
       "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -14951,6 +14983,7 @@
     {
       "id": "alibaba-coding-plan",
       "name": "Alibaba Coding Plan",
+      "logoUrl": "https://models.dev/logos/alibaba-coding-plan.png",
       "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -15117,6 +15150,7 @@
     {
       "id": "alibaba-coding-plan-cn",
       "name": "Alibaba Coding Plan (China)",
+      "logoUrl": "https://models.dev/logos/alibaba-coding-plan-cn.png",
       "baseUrl": "https://coding.dashscope.aliyuncs.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -15283,6 +15317,7 @@
     {
       "id": "alibaba-token-plan-cn",
       "name": "Alibaba Token Plan (China)",
+      "logoUrl": "https://models.dev/logos/alibaba-token-plan-cn.png",
       "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -15618,6 +15653,7 @@
     {
       "id": "ambient",
       "name": "Ambient",
+      "logoUrl": "https://models.dev/logos/ambient.png",
       "baseUrl": "https://api.ambient.xyz/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -15758,6 +15794,7 @@
     {
       "id": "anyapi",
       "name": "AnyAPI",
+      "logoUrl": "https://models.dev/logos/anyapi.png",
       "baseUrl": "https://api.anyapi.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -16158,6 +16195,7 @@
     {
       "id": "atomic-chat",
       "name": "Atomic Chat",
+      "logoUrl": "https://models.dev/logos/atomic-chat.png",
       "baseUrl": "http://127.0.0.1:1337/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -16233,6 +16271,7 @@
     {
       "id": "auriko",
       "name": "Auriko",
+      "logoUrl": "https://models.dev/logos/auriko.png",
       "baseUrl": "https://api.auriko.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -16438,6 +16477,7 @@
     {
       "id": "bailing",
       "name": "Bailing",
+      "logoUrl": "https://models.dev/logos/bailing.png",
       "baseUrl": "https://api.tbox.cn/api/llm/v1/chat/completions",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -16474,6 +16514,7 @@
     {
       "id": "baseten",
       "name": "Baseten",
+      "logoUrl": "https://models.dev/logos/baseten.png",
       "baseUrl": "https://inference.baseten.co/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -16731,6 +16772,7 @@
     {
       "id": "berget",
       "name": "Berget.AI",
+      "logoUrl": "https://models.dev/logos/berget.png",
       "baseUrl": "https://api.berget.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -16858,6 +16900,7 @@
     {
       "id": "blueclaw",
       "name": "Blue Claw",
+      "logoUrl": "https://models.dev/logos/blueclaw.png",
       "baseUrl": "https://openai.blueclaw.network/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -16894,6 +16937,7 @@
     {
       "id": "hyper",
       "name": "Charm Hyper",
+      "logoUrl": "https://models.dev/logos/hyper.png",
       "baseUrl": "https://hyper.charm.land/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -17229,6 +17273,7 @@
     {
       "id": "chutes",
       "name": "Chutes",
+      "logoUrl": "https://models.dev/logos/chutes.png",
       "baseUrl": "https://llm.chutes.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -17408,6 +17453,7 @@
     {
       "id": "clarifai",
       "name": "Clarifai",
+      "logoUrl": "https://models.dev/logos/clarifai.png",
       "baseUrl": "https://api.clarifai.com/v2/ext/openai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -17574,6 +17620,7 @@
     {
       "id": "claudinio",
       "name": "Claudinio",
+      "logoUrl": "https://models.dev/logos/claudinio.png",
       "baseUrl": "https://api.claudin.io/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -17610,6 +17657,7 @@
     {
       "id": "cline-pass",
       "name": "ClinePass",
+      "logoUrl": "https://models.dev/logos/cline-pass.png",
       "baseUrl": "https://api.cline.bot/api/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -17763,6 +17811,7 @@
     {
       "id": "cloudferro-sherlock",
       "name": "CloudFerro Sherlock",
+      "logoUrl": "https://models.dev/logos/cloudferro-sherlock.png",
       "baseUrl": "https://api-sherlock.cloudferro.com/openai/v1/",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -17838,6 +17887,7 @@
     {
       "id": "cloudflare-workers-ai",
       "name": "Cloudflare Workers AI",
+      "logoUrl": "https://models.dev/logos/cloudflare-workers-ai.png",
       "baseUrl": "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -18160,6 +18210,7 @@
     {
       "id": "coralbricks",
       "name": "CoralBricks",
+      "logoUrl": "https://models.dev/logos/coralbricks.png",
       "baseUrl": "https://inference.coralbricks.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -18209,6 +18260,7 @@
     {
       "id": "cortecs",
       "name": "Cortecs",
+      "logoUrl": "https://models.dev/logos/cortecs.png",
       "baseUrl": "https://api.cortecs.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -19610,6 +19662,7 @@
     {
       "id": "crof",
       "name": "CrofAI",
+      "logoUrl": "https://models.dev/logos/crof.png",
       "baseUrl": "https://crof.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -19958,6 +20011,7 @@
     {
       "id": "crossmodel",
       "name": "CrossModel",
+      "logoUrl": "https://models.dev/logos/crossmodel.png",
       "baseUrl": "https://api.crossmodel.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -20618,6 +20672,7 @@
     {
       "id": "crusoe",
       "name": "Crusoe",
+      "logoUrl": "https://models.dev/logos/crusoe.png",
       "baseUrl": "https://api.inference.crusoecloud.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -20732,6 +20787,7 @@
     {
       "id": "drun",
       "name": "D.Run (China)",
+      "logoUrl": "https://models.dev/logos/drun.png",
       "baseUrl": "https://chat.d.run/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -20781,6 +20837,7 @@
     {
       "id": "daoxe",
       "name": "DaoXE",
+      "logoUrl": "https://models.dev/logos/daoxe.png",
       "baseUrl": "https://daoxe.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -20908,6 +20965,7 @@
     {
       "id": "databricks",
       "name": "Databricks",
+      "logoUrl": "https://models.dev/logos/databricks.png",
       "baseUrl": "https://${DATABRICKS_HOST}/ai-gateway/mlflow/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -21308,6 +21366,7 @@
     {
       "id": "digitalocean",
       "name": "DigitalOcean",
+      "logoUrl": "https://models.dev/logos/digitalocean.png",
       "baseUrl": "https://inference.do-ai.run/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -22514,6 +22573,7 @@
     {
       "id": "dinference",
       "name": "DInference",
+      "logoUrl": "https://models.dev/logos/dinference.png",
       "baseUrl": "https://api.dinference.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -22602,6 +22662,7 @@
     {
       "id": "ebcloud",
       "name": "EBCloud",
+      "logoUrl": "https://models.dev/logos/ebcloud.png",
       "baseUrl": "https://maas-api.ebcloud.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -22664,6 +22725,7 @@
     {
       "id": "edenai",
       "name": "Eden AI",
+      "logoUrl": "https://models.dev/logos/edenai.png",
       "baseUrl": "https://api.edenai.run/v3",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -25534,6 +25596,7 @@
     {
       "id": "empiriolabs",
       "name": "EmpirioLabs AI",
+      "logoUrl": "https://models.dev/logos/empiriolabs.png",
       "baseUrl": "https://api.empiriolabs.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -26233,6 +26296,7 @@
     {
       "id": "evroc",
       "name": "evroc",
+      "logoUrl": "https://models.dev/logos/evroc.png",
       "baseUrl": "https://models.think.evroc.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -26438,6 +26502,7 @@
     {
       "id": "fastrouter",
       "name": "FastRouter",
+      "logoUrl": "https://models.dev/logos/fastrouter.png",
       "baseUrl": "https://go.fastrouter.ai/api/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -27059,6 +27124,7 @@
     {
       "id": "fireworks-ai",
       "name": "Fireworks AI",
+      "logoUrl": "https://models.dev/logos/fireworks-ai.png",
       "baseUrl": "https://api.fireworks.ai/inference/v1/",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -27368,6 +27434,7 @@
     {
       "id": "freemodel",
       "name": "FreeModel",
+      "logoUrl": "https://models.dev/logos/freemodel.png",
       "baseUrl": "https://cc.freemodel.dev/v1",
       "apiStyle": "anthropic",
       "tier": "aggregator",
@@ -27508,6 +27575,7 @@
     {
       "id": "friendli",
       "name": "Friendli",
+      "logoUrl": "https://models.dev/logos/friendli.png",
       "baseUrl": "https://api.friendli.ai/serverless/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -27583,6 +27651,7 @@
     {
       "id": "frogbot",
       "name": "FrogBot",
+      "logoUrl": "https://models.dev/logos/frogbot.png",
       "baseUrl": "https://app.frogbot.ai/api/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -27931,6 +28000,7 @@
     {
       "id": "github-copilot",
       "name": "GitHub Copilot",
+      "logoUrl": "https://models.dev/logos/github-copilot.png",
       "baseUrl": "https://api.githubcopilot.com",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -28370,6 +28440,7 @@
     {
       "id": "gmicloud",
       "name": "GMI Cloud",
+      "logoUrl": "https://models.dev/logos/gmicloud.png",
       "baseUrl": "https://api.gmi-serving.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -28549,6 +28620,7 @@
     {
       "id": "greenpt",
       "name": "GreenPT",
+      "logoUrl": "https://models.dev/logos/greenpt.png",
       "baseUrl": "https://api.greenpt.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -29040,6 +29112,7 @@
     {
       "id": "helicone",
       "name": "Helicone",
+      "logoUrl": "https://models.dev/logos/helicone.png",
       "baseUrl": "https://ai-gateway.helicone.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -30220,6 +30293,7 @@
     {
       "id": "hetzner",
       "name": "Hetzner",
+      "logoUrl": "https://models.dev/logos/hetzner.png",
       "baseUrl": "https://inference.hetzner.com/api/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -30282,6 +30356,7 @@
     {
       "id": "hpc-ai",
       "name": "HPC-AI",
+      "logoUrl": "https://models.dev/logos/hpc-ai.png",
       "baseUrl": "https://api.hpc-ai.com/inference/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -30409,6 +30484,7 @@
     {
       "id": "huggingface",
       "name": "Hugging Face",
+      "logoUrl": "https://models.dev/logos/huggingface.png",
       "baseUrl": "https://router.huggingface.co/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -31264,6 +31340,7 @@
     {
       "id": "iflowcn",
       "name": "iFlow",
+      "logoUrl": "https://models.dev/logos/iflowcn.png",
       "baseUrl": "https://apis.iflow.cn/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -31456,6 +31533,7 @@
     {
       "id": "impossibl",
       "name": "Impossibl",
+      "logoUrl": "https://models.dev/logos/impossibl.png",
       "baseUrl": "https://api.impossibl.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -32454,6 +32532,7 @@
     {
       "id": "inceptron",
       "name": "Inceptron",
+      "logoUrl": "https://models.dev/logos/inceptron.png",
       "baseUrl": "https://api.inceptron.io/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -32529,6 +32608,7 @@
     {
       "id": "inference",
       "name": "Inference",
+      "logoUrl": "https://models.dev/logos/inference.png",
       "baseUrl": "https://inference.net/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -32656,6 +32736,7 @@
     {
       "id": "inferx",
       "name": "InferX",
+      "logoUrl": "https://models.dev/logos/inferx.png",
       "baseUrl": "https://model.inferx.net/endpoints/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -32744,6 +32825,7 @@
     {
       "id": "infomaniak",
       "name": "Infomaniak",
+      "logoUrl": "https://models.dev/logos/infomaniak.png",
       "baseUrl": "https://api.infomaniak.com/2/ai/${INFOMANIAK_PRODUCT_ID}/openai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -32884,6 +32966,7 @@
     {
       "id": "io-net",
       "name": "IO.NET",
+      "logoUrl": "https://models.dev/logos/io-net.png",
       "baseUrl": "https://api.intelligence.io.solutions/api/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -33115,6 +33198,7 @@
     {
       "id": "jiekou",
       "name": "Jiekou.AI",
+      "logoUrl": "https://models.dev/logos/jiekou.png",
       "baseUrl": "https://api.jiekou.ai/openai",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -33918,6 +34002,7 @@
     {
       "id": "kenari",
       "name": "Kenari",
+      "logoUrl": "https://models.dev/logos/kenari.png",
       "baseUrl": "https://kenari.id/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -34422,6 +34507,7 @@
     {
       "id": "kilo",
       "name": "Kilo Gateway",
+      "logoUrl": "https://models.dev/logos/kilo.png",
       "baseUrl": "https://api.kilo.ai/api/gateway",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -39099,6 +39185,7 @@
     {
       "id": "kuae-cloud-coding-plan",
       "name": "KUAE Cloud Coding Plan",
+      "logoUrl": "https://models.dev/logos/kuae-cloud-coding-plan.png",
       "baseUrl": "https://coding-plan-endpoint.kuaecloud.net/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -39122,6 +39209,7 @@
     {
       "id": "lilac",
       "name": "Lilac",
+      "logoUrl": "https://models.dev/logos/lilac.png",
       "baseUrl": "https://api.getlilac.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -39184,6 +39272,7 @@
     {
       "id": "llama",
       "name": "Llama",
+      "logoUrl": "https://models.dev/logos/llama.png",
       "baseUrl": "https://api.llama.com/compat/v1/",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -39285,6 +39374,7 @@
     {
       "id": "llmgateway",
       "name": "LLM Gateway",
+      "logoUrl": "https://models.dev/logos/llmgateway.png",
       "baseUrl": "https://api.llmgateway.io/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -41752,6 +41842,7 @@
     {
       "id": "llmtr",
       "name": "LLMTR",
+      "logoUrl": "https://models.dev/logos/llmtr.png",
       "baseUrl": "https://llmtr.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -41840,6 +41931,7 @@
     {
       "id": "lmstudio",
       "name": "LMStudio",
+      "logoUrl": "https://models.dev/logos/lmstudio.png",
       "baseUrl": "http://127.0.0.1:1234/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -41889,6 +41981,7 @@
     {
       "id": "longcat",
       "name": "LongCat",
+      "logoUrl": "https://models.dev/logos/longcat.png",
       "baseUrl": "https://api.longcat.chat/openai",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -41912,6 +42005,7 @@
     {
       "id": "lucidquery",
       "name": "LucidQuery",
+      "logoUrl": "https://models.dev/logos/lucidquery.png",
       "baseUrl": "https://api.lucidquery.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -41974,6 +42068,7 @@
     {
       "id": "lynkr",
       "name": "Lynkr",
+      "logoUrl": "https://models.dev/logos/lynkr.png",
       "baseUrl": "http://127.0.0.1:8081/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -41997,6 +42092,7 @@
     {
       "id": "meganova",
       "name": "Meganova",
+      "logoUrl": "https://models.dev/logos/meganova.png",
       "baseUrl": "https://api.meganova.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -42254,6 +42350,7 @@
     {
       "id": "merge-gateway",
       "name": "Merge Gateway",
+      "logoUrl": "https://models.dev/logos/merge-gateway.png",
       "baseUrl": "https://api-gateway.merge.dev/v1/ai-sdk",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -44461,6 +44558,7 @@
     {
       "id": "minimax-cn",
       "name": "MiniMax (minimaxi.com)",
+      "logoUrl": "https://models.dev/logos/minimax-cn.png",
       "baseUrl": "https://api.minimaxi.com/anthropic/v1",
       "apiStyle": "anthropic",
       "tier": "aggregator",
@@ -44562,6 +44660,7 @@
     {
       "id": "minimax-coding-plan",
       "name": "MiniMax Token Plan (minimax.io)",
+      "logoUrl": "https://models.dev/logos/minimax-coding-plan.png",
       "baseUrl": "https://api.minimax.io/anthropic/v1",
       "apiStyle": "anthropic",
       "tier": "aggregator",
@@ -44663,6 +44762,7 @@
     {
       "id": "minimax-cn-coding-plan",
       "name": "MiniMax Token Plan (minimaxi.com)",
+      "logoUrl": "https://models.dev/logos/minimax-cn-coding-plan.png",
       "baseUrl": "https://api.minimaxi.com/anthropic/v1",
       "apiStyle": "anthropic",
       "tier": "aggregator",
@@ -44764,6 +44864,7 @@
     {
       "id": "mixlayer",
       "name": "Mixlayer",
+      "logoUrl": "https://models.dev/logos/mixlayer.png",
       "baseUrl": "https://models.mixlayer.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -44839,6 +44940,7 @@
     {
       "id": "moark",
       "name": "Moark",
+      "logoUrl": "https://models.dev/logos/moark.png",
       "baseUrl": "https://moark.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -44875,6 +44977,7 @@
     {
       "id": "modal",
       "name": "Modal",
+      "logoUrl": "https://models.dev/logos/modal.png",
       "baseUrl": "https://inference.us-west.modal.direct/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -44911,6 +45014,7 @@
     {
       "id": "model-oracle-ai",
       "name": "Model Oracle AI",
+      "logoUrl": "https://models.dev/logos/model-oracle-ai.png",
       "baseUrl": "https://api.modeloracle.com/api/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -45116,6 +45220,7 @@
     {
       "id": "modelis",
       "name": "Modelis",
+      "logoUrl": "https://models.dev/logos/modelis.png",
       "baseUrl": "https://modelishub.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -45243,6 +45348,7 @@
     {
       "id": "modelscope",
       "name": "ModelScope",
+      "logoUrl": "https://models.dev/logos/modelscope.png",
       "baseUrl": "https://api-inference.modelscope.cn/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -45344,6 +45450,7 @@
     {
       "id": "morph",
       "name": "Morph",
+      "logoUrl": "https://models.dev/logos/morph.png",
       "baseUrl": "https://api.morphllm.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -45393,6 +45500,7 @@
     {
       "id": "nano-gpt",
       "name": "NanoGPT",
+      "logoUrl": "https://models.dev/logos/nano-gpt.png",
       "baseUrl": "https://nano-gpt.com/api/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -53229,6 +53337,7 @@
     {
       "id": "nearai",
       "name": "NEAR AI Cloud",
+      "logoUrl": "https://models.dev/logos/nearai.png",
       "baseUrl": "https://cloud-api.near.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -53720,6 +53829,7 @@
     {
       "id": "nebius",
       "name": "Nebius Token Factory",
+      "logoUrl": "https://models.dev/logos/nebius.png",
       "baseUrl": "https://api.tokenfactory.nebius.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -54172,6 +54282,7 @@
     {
       "id": "neon",
       "name": "Neon",
+      "logoUrl": "https://models.dev/logos/neon.png",
       "baseUrl": "${NEON_AI_GATEWAY_BASE_URL}/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -54728,6 +54839,7 @@
     {
       "id": "neuralwatt",
       "name": "Neuralwatt",
+      "logoUrl": "https://models.dev/logos/neuralwatt.png",
       "baseUrl": "https://api.neuralwatt.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -55024,6 +55136,7 @@
     {
       "id": "nova",
       "name": "Nova",
+      "logoUrl": "https://models.dev/logos/nova.png",
       "baseUrl": "https://api.nova.amazon.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -55060,6 +55173,7 @@
     {
       "id": "novita-ai",
       "name": "NovitaAI",
+      "logoUrl": "https://models.dev/logos/novita-ai.png",
       "baseUrl": "https://api.novita.ai/openai",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -56461,6 +56575,7 @@
     {
       "id": "ofox",
       "name": "Ofox",
+      "logoUrl": "https://models.dev/logos/ofox.png",
       "baseUrl": "https://api.ofox.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -57810,6 +57925,7 @@
     {
       "id": "opencode-go",
       "name": "OpenCode Go",
+      "logoUrl": "https://models.dev/logos/opencode-go.png",
       "baseUrl": "https://opencode.ai/zen/go/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -58145,6 +58261,7 @@
     {
       "id": "opencode",
       "name": "OpenCode Zen",
+      "logoUrl": "https://models.dev/logos/opencode.png",
       "baseUrl": "https://opencode.ai/zen/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -59338,6 +59455,7 @@
     {
       "id": "orcarouter",
       "name": "OrcaRouter",
+      "logoUrl": "https://models.dev/logos/orcarouter.png",
       "baseUrl": "https://api.orcarouter.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -60401,6 +60519,7 @@
     {
       "id": "ovhcloud",
       "name": "OVHcloud AI Endpoints",
+      "logoUrl": "https://models.dev/logos/ovhcloud.png",
       "baseUrl": "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -60593,6 +60712,7 @@
     {
       "id": "perplexity-agent",
       "name": "Perplexity Agent",
+      "logoUrl": "https://models.dev/logos/perplexity-agent.png",
       "baseUrl": "https://api.perplexity.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -60889,6 +61009,7 @@
     {
       "id": "pioneer",
       "name": "Pioneer",
+      "logoUrl": "https://models.dev/logos/pioneer.png",
       "baseUrl": "https://api.pioneer.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -62225,6 +62346,7 @@
     {
       "id": "poe",
       "name": "Poe",
+      "logoUrl": "https://models.dev/logos/poe.png",
       "baseUrl": "https://api.poe.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -64016,6 +64138,7 @@
     {
       "id": "privatemode-ai",
       "name": "Privatemode AI",
+      "logoUrl": "https://models.dev/logos/privatemode-ai.png",
       "baseUrl": "http://localhost:8080/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -64117,6 +64240,7 @@
     {
       "id": "qihang-ai",
       "name": "QiHang",
+      "logoUrl": "https://models.dev/logos/qihang-ai.png",
       "baseUrl": "https://api.qhaigc.net/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -64244,6 +64368,7 @@
     {
       "id": "qiniu-ai",
       "name": "Qiniu",
+      "logoUrl": "https://models.dev/logos/qiniu-ai.png",
       "baseUrl": "https://api.qnaigc.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -65437,6 +65562,7 @@
     {
       "id": "regolo-ai",
       "name": "Regolo AI",
+      "logoUrl": "https://models.dev/logos/regolo-ai.png",
       "baseUrl": "https://api.regolo.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -65681,6 +65807,7 @@
     {
       "id": "requesty",
       "name": "Requesty",
+      "logoUrl": "https://models.dev/logos/requesty.png",
       "baseUrl": "https://router.requesty.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -66328,6 +66455,7 @@
     {
       "id": "routing-run",
       "name": "routing.run",
+      "logoUrl": "https://models.dev/logos/routing-run.png",
       "baseUrl": "https://api.routing.run/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -66533,6 +66661,7 @@
     {
       "id": "sakana",
       "name": "Sakana AI",
+      "logoUrl": "https://models.dev/logos/sakana.png",
       "baseUrl": "https://api.sakana.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -66582,6 +66711,7 @@
     {
       "id": "scaleway",
       "name": "Scaleway",
+      "logoUrl": "https://models.dev/logos/scaleway.png",
       "baseUrl": "https://api.scaleway.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -66774,6 +66904,7 @@
     {
       "id": "scnet-token-plan",
       "name": "SCNet Token Plan",
+      "logoUrl": "https://models.dev/logos/scnet-token-plan.png",
       "baseUrl": "https://api.scnet.cn/api/llm/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -66953,6 +67084,7 @@
     {
       "id": "scx",
       "name": "SCX.ai",
+      "logoUrl": "https://models.dev/logos/scx.png",
       "baseUrl": "https://api.scx.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -66989,6 +67121,7 @@
     {
       "id": "siliconflow",
       "name": "SiliconFlow",
+      "logoUrl": "https://models.dev/logos/siliconflow.png",
       "baseUrl": "https://api.siliconflow.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -67636,6 +67769,7 @@
     {
       "id": "siliconflow-cn",
       "name": "SiliconFlow (China)",
+      "logoUrl": "https://models.dev/logos/siliconflow-cn.png",
       "baseUrl": "https://api.siliconflow.cn/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -68257,6 +68391,7 @@
     {
       "id": "snowflake-cortex",
       "name": "Snowflake Cortex",
+      "logoUrl": "https://models.dev/logos/snowflake-cortex.png",
       "baseUrl": "https://${SNOWFLAKE_ACCOUNT}.snowflakecomputing.com/api/v2/cortex/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -68592,6 +68727,7 @@
     {
       "id": "stackit",
       "name": "STACKIT",
+      "logoUrl": "https://models.dev/logos/stackit.png",
       "baseUrl": "https://api.openai-compat.model-serving.eu01.onstackit.cloud/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -68706,6 +68842,7 @@
     {
       "id": "stepfun",
       "name": "StepFun (China)",
+      "logoUrl": "https://models.dev/logos/stepfun.png",
       "baseUrl": "https://api.stepfun.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -68820,6 +68957,7 @@
     {
       "id": "stepfun-ai",
       "name": "StepFun (Global)",
+      "logoUrl": "https://models.dev/logos/stepfun-ai.png",
       "baseUrl": "https://api.stepfun.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -68934,6 +69072,7 @@
     {
       "id": "stepfun-step-plan",
       "name": "StepFun Step Plan (China)",
+      "logoUrl": "https://models.dev/logos/stepfun-step-plan.png",
       "baseUrl": "https://api.stepfun.com/step_plan/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -68996,6 +69135,7 @@
     {
       "id": "stepfun-ai-step-plan",
       "name": "StepFun Step Plan (Global)",
+      "logoUrl": "https://models.dev/logos/stepfun-ai-step-plan.png",
       "baseUrl": "https://api.stepfun.ai/step_plan/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -69045,6 +69185,7 @@
     {
       "id": "subconscious",
       "name": "Subconscious",
+      "logoUrl": "https://models.dev/logos/subconscious.png",
       "baseUrl": "https://api.subconscious.dev/v1",
       "apiStyle": "anthropic",
       "tier": "aggregator",
@@ -69081,6 +69222,7 @@
     {
       "id": "submodel",
       "name": "submodel",
+      "logoUrl": "https://models.dev/logos/submodel.png",
       "baseUrl": "https://llm.submodel.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -69208,6 +69350,7 @@
     {
       "id": "synthetic",
       "name": "Synthetic",
+      "logoUrl": "https://models.dev/logos/synthetic.png",
       "baseUrl": "https://api.synthetic.new/openai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -69322,6 +69465,7 @@
     {
       "id": "tencent-coding-plan",
       "name": "Tencent Coding Plan (China)",
+      "logoUrl": "https://models.dev/logos/tencent-coding-plan.png",
       "baseUrl": "https://api.lkeap.cloud.tencent.com/coding/v3",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -69436,6 +69580,7 @@
     {
       "id": "tencent-token-plan",
       "name": "Tencent Token Plan",
+      "logoUrl": "https://models.dev/logos/tencent-token-plan.png",
       "baseUrl": "https://api.lkeap.cloud.tencent.com/plan/v3",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -69459,6 +69604,7 @@
     {
       "id": "tencent-tokenhub",
       "name": "Tencent TokenHub",
+      "logoUrl": "https://models.dev/logos/tencent-tokenhub.png",
       "baseUrl": "https://tokenhub.tencentmaas.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -69495,6 +69641,7 @@
     {
       "id": "tensorx",
       "name": "TensorX",
+      "logoUrl": "https://models.dev/logos/tensorx.png",
       "baseUrl": "https://api.tensorx.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -69830,6 +69977,7 @@
     {
       "id": "the-grid-ai",
       "name": "The Grid AI",
+      "logoUrl": "https://models.dev/logos/the-grid-ai.png",
       "baseUrl": "https://api.thegrid.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -69957,6 +70105,7 @@
     {
       "id": "thinkingmachines",
       "name": "Thinking Machines",
+      "logoUrl": "https://models.dev/logos/thinkingmachines.png",
       "baseUrl": "https://tinker.thinkingmachines.dev/services/tinker-prod/anthropic/api/v1",
       "apiStyle": "anthropic",
       "tier": "aggregator",
@@ -69993,6 +70142,7 @@
     {
       "id": "tinfoil",
       "name": "Tinfoil",
+      "logoUrl": "https://models.dev/logos/tinfoil.png",
       "baseUrl": "https://inference.tinfoil.sh/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -70107,6 +70257,7 @@
     {
       "id": "trustedrouter",
       "name": "TrustedRouter",
+      "logoUrl": "https://models.dev/logos/trustedrouter.png",
       "baseUrl": "https://api.trustedrouter.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -70208,6 +70359,7 @@
     {
       "id": "umans-ai",
       "name": "Umans AI",
+      "logoUrl": "https://models.dev/logos/umans-ai.png",
       "baseUrl": "https://api.code.umans.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -70322,6 +70474,7 @@
     {
       "id": "umans-ai-coding-plan",
       "name": "Umans AI Coding Plan",
+      "logoUrl": "https://models.dev/logos/umans-ai-coding-plan.png",
       "baseUrl": "https://api.code.umans.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -70449,6 +70602,7 @@
     {
       "id": "unorouter",
       "name": "UnoRouter",
+      "logoUrl": "https://models.dev/logos/unorouter.png",
       "baseUrl": "https://api.unorouter.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -70758,6 +70912,7 @@
     {
       "id": "vivgrid",
       "name": "Vivgrid",
+      "logoUrl": "https://models.dev/logos/vivgrid.png",
       "baseUrl": "https://api.vivgrid.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -71015,6 +71170,7 @@
     {
       "id": "vultr",
       "name": "Vultr",
+      "logoUrl": "https://models.dev/logos/vultr.png",
       "baseUrl": "https://api.vultrinference.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -71155,6 +71311,7 @@
     {
       "id": "wafer.ai",
       "name": "Wafer",
+      "logoUrl": "https://models.dev/logos/wafer.ai.png",
       "baseUrl": "https://pass.wafer.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -71230,6 +71387,7 @@
     {
       "id": "wandb",
       "name": "Weights & Biases",
+      "logoUrl": "https://models.dev/logos/wandb.png",
       "baseUrl": "https://api.inference.wandb.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -71604,6 +71762,7 @@
     {
       "id": "xiaomi-token-plan-cn",
       "name": "Xiaomi Token Plan (China)",
+      "logoUrl": "https://models.dev/logos/xiaomi-token-plan-cn.png",
       "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -71705,6 +71864,7 @@
     {
       "id": "xiaomi-token-plan-ams",
       "name": "Xiaomi Token Plan (Europe)",
+      "logoUrl": "https://models.dev/logos/xiaomi-token-plan-ams.png",
       "baseUrl": "https://token-plan-ams.xiaomimimo.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -71806,6 +71966,7 @@
     {
       "id": "xpersona",
       "name": "Xpersona",
+      "logoUrl": "https://models.dev/logos/xpersona.png",
       "baseUrl": "https://www.xpersona.co/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -71985,6 +72146,7 @@
     {
       "id": "zai",
       "name": "Z.AI",
+      "logoUrl": "https://models.dev/logos/zai.png",
       "baseUrl": "https://api.z.ai/api/paas/v4",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -72177,6 +72339,7 @@
     {
       "id": "zai-coding-plan",
       "name": "Z.AI Coding Plan",
+      "logoUrl": "https://models.dev/logos/zai-coding-plan.png",
       "baseUrl": "https://api.z.ai/api/coding/paas/v4",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -72252,6 +72415,7 @@
     {
       "id": "zeldoc",
       "name": "Zeldoc",
+      "logoUrl": "https://models.dev/logos/zeldoc.png",
       "baseUrl": "https://api.zeldoc.ai/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -72275,6 +72439,7 @@
     {
       "id": "zenifra",
       "name": "Zenifra",
+      "logoUrl": "https://models.dev/logos/zenifra.png",
       "baseUrl": "https://ai.zenifra.com/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -72298,6 +72463,7 @@
     {
       "id": "zenmux",
       "name": "ZenMux",
+      "logoUrl": "https://models.dev/logos/zenmux.png",
       "baseUrl": "https://zenmux.ai/api/v1",
       "apiStyle": "openai",
       "tier": "aggregator",
@@ -73868,6 +74034,7 @@
     {
       "id": "ollama-cloud",
       "name": "Ollama Cloud",
+      "logoUrl": "https://models.dev/logos/ollama-cloud.png",
       "baseUrl": "https://ollama.com/v1",
       "apiStyle": "openai",
       "tier": "local",

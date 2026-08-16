@@ -161,6 +161,7 @@ function normalizeProvider(
   return {
     id: p.id,
     name: p.name || p.id,
+    logoUrl: `https://models.dev/logos/${p.id}.png`,
     baseUrl,
     apiStyle,
     tier,

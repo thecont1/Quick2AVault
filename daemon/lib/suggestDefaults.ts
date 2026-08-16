@@ -21,7 +21,7 @@ const JURISDICTION_DEFAULTS: Record<string, Record<InferenceSlot, Suggestion>> =
   IN: {
     primary: {
       providerId: "poolside",
-      modelId: "default",
+      modelId: "poolside/laguna-s-2.1",
       reason: "Fast, free-tier primary — no vision needed for transaction parsing.",
     },
     secondary: {
