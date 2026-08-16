@@ -13,10 +13,21 @@ let currentPrimaryProviderId = "";
 let currentSecondaryProviderId = "";
 
 // ── Trust badge rendering ────────────────────────────────────────────────
-function trustBadge(trust) {
-  if (trust === "verified") return " <span style='color:var(--ok)'>●</span>";
-  if (trust === "community") return " <span style='color:var(--faint)'>●</span>";
-  return " <span style='color:var(--warn)'>●</span>";
+// Note: <option> elements in <select> don't render inline HTML/CSS colors.
+// We use text markers (✓ for verified, ~ for community) that work in plain
+// text, plus a legend below the dropdown with colored dots.
+function trustMarker(trust) {
+  if (trust === "verified") return " ✓";
+  if (trust === "community") return " ~";
+  return " ?";
+}
+
+function trustLegend() {
+  return "<div class='hint' style='margin-top:4px'>"
+    + "<span style='color:var(--ok)'>●</span> verified"
+    + " &nbsp; <span style='color:var(--faint)'>●</span> community"
+    + " &nbsp; ✓ = verified &nbsp; ~ = community"
+    + "</div>";
 }
 
 // ── Provider grouping ────────────────────────────────────────────────────
@@ -193,10 +204,21 @@ function updateProviderLogo(which, provider) {
     wrapper.appendChild(sel);
     logo = document.createElement("img");
     logo.id = logoId;
-    logo.style.cssText = "width:18px;height:18px;border-radius:3px;flex-shrink:0";
-    logo.onerror = () => { logo.style.display = "none"; };
+    logo.style.cssText = "width:18px;height:18px;border-radius:3px;flex-shrink:0;object-fit:contain";
+    // Fallback: show a generic provider glyph if the logo fails to load
+    logo.onerror = () => {
+      logo.style.display = "none";
+      const fallback = document.createElement("span");
+      fallback.style.cssText = "width:18px;height:18px;border-radius:3px;background:var(--panel-border,#ccc);display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:var(--faint,#888);flex-shrink:0";
+      fallback.textContent = provider?.name?.charAt(0)?.toUpperCase() || "?";
+      logo.parentNode?.appendChild(fallback);
+    };
     wrapper.appendChild(logo);
   }
+  // Remove any previous fallback glyph
+  const prevFallback = logo.parentNode?.querySelector("span:last-child");
+  if (prevFallback && prevFallback.textContent?.length === 1) prevFallback.remove();
+
   if (provider && provider.logoUrl) {
     logo.src = provider.logoUrl;
     logo.alt = provider.name;
@@ -293,18 +315,18 @@ function onProviderChange(which, savedModel) {
   }
   for (const m of result.models) {
     const selected = m.id === savedModel ? " selected" : "";
-    const badge = trustBadge(m.trust);
-    const notes = m.notes ? ` — ${esc(m.notes.slice(0, 60))}` : "";
-    html += `<option value="${esc(m.id)}"${selected}>${esc(m.displayName)}${badge}${notes}</option>`;
+    const marker = trustMarker(m.trust);
+    html += `<option value="${esc(m.id)}"${selected}>${esc(m.displayName)}${marker}</option>`;
   }
   // "Other model ID (advanced)" — always at the bottom
   html += `<option value="__other__">Other model ID (advanced)…</option>`;
   modelSelect.innerHTML = html;
   if (savedModel) modelSelect.value = savedModel;
 
-  // Show jurisdiction fallback note
+  // Show jurisdiction fallback note + trust legend
   if (modelNote) {
-    modelNote.textContent = result.jurisdictionFallback ? result.note : "";
+    const fallbackNote = result.jurisdictionFallback ? result.note : "";
+    modelNote.innerHTML = (fallbackNote ? esc(fallbackNote) + " " : "") + trustLegend();
   }
 }
 
