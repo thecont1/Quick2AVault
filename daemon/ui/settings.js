@@ -55,11 +55,10 @@ function buildProviderDropdown(selectId, currentProviderId) {
   // Build custom dropdown button
   const current = CATALOG.find((p) => p.id === currentProviderId);
   const currentName = currentProviderId === "custom" ? "Custom provider…" : (current?.name || "Select provider…");
-  const currentLogo = current?.logoUrl || "";
 
   let btnHtml = `<button type="button" class="pp-btn">`;
-  if (currentLogo) {
-    btnHtml += `<img class="pp-logo" src="${esc(currentLogo)}" width="20" height="20" onerror="this.style.display='none'">`;
+  if (current) {
+    btnHtml += logoImgHtml(providerLogoUrls(current), "pp-logo", 20);
   }
   btnHtml += `<span class="pp-name">${esc(currentName)}</span><span class="pp-arrow">▼</span></button>`;
 
@@ -70,7 +69,7 @@ function buildProviderDropdown(selectId, currentProviderId) {
     if (providers.length === 0) continue;
     panelHtml += `<div class="pp-group">${TIER_LABELS[tier]} (${providers.length})</div>`;
     for (const p of providers) {
-      const logo = p.logoUrl ? `<img class="pp-opt-logo" src="${esc(p.logoUrl)}" width="18" height="18" onerror="this.style.display='none'">` : "";
+      const logo = logoImgHtml(providerLogoUrls(p), "pp-opt-logo", 18);
       panelHtml += `<div class="pp-opt${p.id === currentProviderId ? " selected" : ""}" data-pid="${esc(p.id)}">${logo}<span class="pp-opt-name">${esc(p.name)}</span></div>`;
     }
   }
@@ -114,7 +113,8 @@ function providerLogoUrls(provider) {
   const urls = [];
   if (provider) {
     urls.push("https://models.dev/logos/" + encodeURIComponent(provider.id) + ".svg");
-    if (provider.logoUrl && provider.logoUrl !== urls[0]) urls.push(provider.logoUrl);
+    urls.push("https://models.dev/logos/" + encodeURIComponent(provider.id) + ".png");
+    if (provider.logoUrl && !urls.includes(provider.logoUrl)) urls.push(provider.logoUrl);
   }
   return urls;
 }
@@ -125,8 +125,8 @@ function logoImgHtml(urls, cls, w) {
   if (urls.length === 1) {
     onerr = "this.style.display='none'";
   } else {
-    const rest = urls.slice(1).map((u) => "'" + u.replace(/'/g, "\\'") + "'");
-    onerr = "if(this.dataset.i){this.style.display='none'}else{this.dataset.i='1';this.src=" + rest[0] + "}";
+    const rest = urls.slice(1).map((u) => "'" + u.replace(/'/g, "\\'") + "'").join(",");
+    onerr = `var n=Number(this.dataset.i||0);if(n>=${urls.length - 1}){this.style.display='none'}else{this.dataset.i=String(n+1);this.src=[${rest}][n]}`;
   }
   return `<img class="${cls}" src="${esc(urls[0])}" width="${w}" height="${w}" alt="" onerror="${onerr}">`;
 }
