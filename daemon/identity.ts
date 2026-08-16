@@ -463,6 +463,24 @@ export function unidentifiedPerson(db: DatabaseSync, ports: Ports): string {
 }
 
 /**
+ * A placeholder entity that shares `kind` with a deleted entity, so force-delete
+ * reassignment never renders a person as a merchant (or an organisation as an
+ * owner, or an account as a person). One well-known id per kind:
+ * `ent_unidentified_<kind>`, so "who is unattached?" stays one WHERE clause.
+ */
+export function unidentifiedEntity(db: DatabaseSync, ports: Ports, kind: string): string {
+  const id = `ent_unidentified_${kind}`;
+  const existing = db.prepare("SELECT 1 FROM entities WHERE id=?").get(id);
+  if (!existing) {
+    db.prepare(
+      `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
+       VALUES (?, ?, 'Unidentified', 'confirmed', 1.0, 0, ?)`,
+    ).run(id, kind, ports.clock.isoNow());
+  }
+  return id;
+}
+
+/**
  * WO11 A2: a user-confirmed merge emits a passive-learning candidate (same
  * pattern as the owner toggle — inactive until consistently confirmed; NOT a
  * standing rule). Shared by mergePeople and /v1/entities/merge so the two

@@ -241,8 +241,16 @@ async function savePerson(id) {
   msg.className = "msg ok";
   msg.textContent = "saved";
   await loadPeople();
-  const row = document.querySelector("#houseList .ent[data-id='" + CSS.escape(id) + "'], #otherList .ent[data-id='" + CSS.escape(id) + "']");
-  showPerson(id, row);
+  const row = personRowEl(id);
+  if (row) showPerson(id, row);
+}
+
+// Locate the list row for a person, in either the household or other list.
+// Returns null when the row isn't currently rendered — callers must guard, as
+// showEntity does, or renderDetail would throw on an undefined afterEl.
+function personRowEl(id) {
+  return document.querySelector(
+    "#houseList .ent[data-id='" + CSS.escape(id) + "'], #otherList .ent[data-id='" + CSS.escape(id) + "']");
 }
 
 async function addAlias(id) {
@@ -258,12 +266,14 @@ async function addAlias(id) {
     return;
   }
   msg.className = "msg ok"; msg.textContent = "added as " + r.alias_type;
-  showPerson(id);
+  const row = personRowEl(id);
+  if (row) showPerson(id, row);
 }
 
 async function rejectAlias(id, aliasId) {
   await apiDelete("/v1/people/" + encodeURIComponent(id) + "/aliases/" + encodeURIComponent(aliasId));
-  showPerson(id);
+  const row = personRowEl(id);
+  if (row) showPerson(id, row);
 }
 
 async function mergePerson(id) {
@@ -347,8 +357,8 @@ async function showEntity(id, rowEl) {
     + "<select id='eStatus'><option value='candidate'" + (ent.status === "candidate" ? " selected" : "") + ">candidate</option>"
     + "<option value='confirmed'" + (ent.status === "confirmed" ? " selected" : "") + ">confirmed</option></select></div>"
     + "<div class='row' style='gap:8px'>"
-    + "<button class='btn' id='eSave'>Save changes</button>"
-    + (ent.status === "candidate" ? "<button class='btn' id='eConfirm'>Confirm entity</button>" : "")
+    + "<button class='act' id='eSave'>Save changes</button>"
+    + (ent.status === "candidate" ? "<button class='act' id='eConfirm'>Confirm entity</button>" : "")
     + "<span class='msg' id='eMsg'></span>"
     + "</div>"
     + "</div>"
@@ -357,14 +367,14 @@ async function showEntity(id, rowEl) {
     + (sameKind.length ? "<h4>Merge into another " + esc(ent.kind) + "</h4>"
       + "<div class='row' style='gap:8px;margin-bottom:14px'>"
       + "<select id='eMerge'><option value=''>— select target —</option>" + mergeOpts + "</select>"
-      + "<button class='btn' id='eMergeBtn'>Merge</button></div>" : "")
+      + "<button class='ghost' id='eMergeBtn'>Merge</button></div>" : "")
     + "<h4>Confidence</h4>"
     + "<div style='font:12px var(--mono);color:var(--dim);margin-bottom:14px'>" + esc(ent.confidence) + "</div>"
     + "<h4>Cross-kind identifier conflicts</h4>"
     + (confHtml || "<div class='empty'>No conflicts.</div>")
     + "<h4 style='margin-top:18px;color:var(--bad)'>Delete this " + esc(ent.kind) + "</h4>"
     + "<div class='row' style='gap:8px;align-items:center'>"
-    + "<button class='btn' id='eDelete' style='border-color:var(--bad);color:var(--bad)'>Delete</button>"
+    + "<button class='dangerbtn' id='eDelete' style='border-color:var(--bad);color:var(--bad)'>Delete</button>"
     + "<span class='msg' id='eDelMsg'></span></div>"
     + "</div>"
     + "</div>"

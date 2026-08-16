@@ -201,6 +201,28 @@
   @media (max-width:780px){.settings-cols{grid-template-columns:1fr}}
   .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 
+  /* ── custom provider picker ──────────────────────────────────── */
+  .provider-picker{position:relative}
+  .pp-btn{display:flex;align-items:center;gap:8px;width:100%;font:13px var(--mono);
+    padding:8px 10px;border:1px solid var(--line);border-radius:4px;
+    background:var(--panel);color:var(--ink);cursor:pointer;box-sizing:border-box}
+  .pp-btn:hover{border-color:var(--blue)}
+  .pp-btn .pp-logo{width:20px;height:20px;border-radius:3px;flex-shrink:0;object-fit:contain}
+  .pp-btn .pp-name{flex:1;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pp-btn .pp-arrow{color:var(--faint);font-size:10px;flex-shrink:0}
+  .pp-panel{position:absolute;top:100%;left:0;right:0;z-index:100;max-height:320px;
+    overflow-y:auto;background:var(--panel);border:1px solid var(--line);border-radius:4px;
+    margin-top:2px;box-shadow:0 4px 12px rgba(0,0,0,.15);display:none}
+  .pp-panel.open{display:block}
+  .pp-group{font:600 10px var(--mono);letter-spacing:.5px;text-transform:uppercase;
+    color:var(--dim);padding:8px 10px 4px;position:sticky;top:0;background:var(--panel)}
+  .pp-opt{display:flex;align-items:center;gap:8px;padding:6px 10px;cursor:pointer;
+    font:13px var(--mono);color:var(--ink)}
+  .pp-opt:hover{background:color-mix(in srgb,var(--blue) 8%,transparent)}
+  .pp-opt.selected{background:color-mix(in srgb,var(--blue) 15%,transparent)}
+  .pp-opt .pp-opt-logo{width:18px;height:18px;border-radius:3px;flex-shrink:0;object-fit:contain}
+  .pp-opt .pp-opt-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
   /* ── forms ────────────────────────────────────────────────────── */
   .field{margin-bottom:14px}
   .field label{display:block;font:600 10.5px var(--mono);letter-spacing:.5px;
@@ -318,8 +340,8 @@
   .rule .n{color:var(--faint);font-size:10.5px}
 
   /* ── editable effective fields ─────────────────────────────────── */
-  .rule.editable .v{cursor:pointer;border-bottom:1px dashed var(--faint)}
-  .rule.editable .v:hover{border-bottom-color:var(--blue);color:var(--blue)}
+  .rule.editable .v{cursor:pointer}
+  .rule.editable .v:hover{color:var(--blue)}
   .rule.editing .v{display:none}
   .rule .edit-input{font:11.5px var(--mono);padding:2px 6px;border:1px solid var(--blue);
     border-radius:3px;background:var(--bg);color:var(--ink);width:100%;max-width:200px}

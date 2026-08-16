@@ -73,59 +73,79 @@
      SETTINGS TAB
 ════════════════════════════════════════════════════════════════════════ -->
 <div class="tab" id="tab-settings">
+  <!-- Suggestion banners (shown only when jurisdiction suggestions exist and slot is unset) -->
+  <div id="suggestionBanners"></div>
+
   <div class="settings-cols">
       <div class="panel">
-        <h3>Inference provider — primary</h3>
+        <h3>Primary inference</h3>
+        <div class="hint" style="margin-bottom:10px">Used for fast text tasks like categorization, normalization, and short explanations.</div>
         <div class="field">
           <label>Provider</label>
-          <select id="aiProvider"></select>
+          <div class="provider-picker" id="aiProviderPicker"></div>
+          <select id="aiProvider" style="display:none"></select>
         </div>
         <div class="field" id="aiCustomUrlRow" style="display:none">
           <label>Base URL</label>
           <input type="text" id="aiBaseUrl" placeholder="https://your-provider.com/v1">
         </div>
+        <div class="field" id="aiUrlRow">
+          <label>Base URL</label>
+          <input type="text" id="aiBaseUrlRo" readonly style="opacity:0.6">
+        </div>
         <div class="field">
           <label>API key</label>
-          <input type="password" id="aiApiKey" placeholder="paste your API key">
-          <div class="hint" id="aiKeySrc"></div>
+          <div id="aiKeyContainer">
+            <input type="password" id="aiApiKey" placeholder="paste your API key">
+            <div class="hint" id="aiKeySrc"></div>
+          </div>
         </div>
         <div class="field">
           <label>Model</label>
-          <input type="text" id="aiModel" list="aiModelList" placeholder="auto-fetched on provider select, or type your own">
-          <datalist id="aiModelList"></datalist>
+          <select id="aiModel"><option value="">select a provider first</option></select>
+          <div class="hint" id="aiModelNote"></div>
         </div>
         <div class="save-row">
-          <button class="act" id="aiTest">Test</button>
+          <button class="act" id="aiTest">Test connection</button>
           <span class="msg" id="aiMsg"></span>
         </div>
       </div>
 
       <div class="panel">
-        <h3>Inference provider — secondary (vision / fallback)</h3>
+        <h3>Secondary inference</h3>
+        <div class="hint" style="margin-bottom:10px">Used for image and document tasks like receipts, screenshots, and scanned statements.</div>
         <div class="field">
           <label>Provider</label>
-          <select id="ai2Provider"></select>
+          <div class="provider-picker" id="ai2ProviderPicker"></div>
+          <select id="ai2Provider" style="display:none"></select>
         </div>
         <div class="field" id="ai2CustomUrlRow" style="display:none">
           <label>Base URL</label>
           <input type="text" id="ai2BaseUrl" placeholder="https://your-provider.com/v1">
         </div>
+        <div class="field" id="ai2UrlRow">
+          <label>Base URL</label>
+          <input type="text" id="ai2BaseUrlRo" readonly style="opacity:0.6">
+        </div>
         <div class="field">
           <label>API key</label>
-          <input type="password" id="ai2ApiKey" placeholder="paste your API key">
-          <div class="hint" id="ai2KeySrc"></div>
+          <div id="ai2KeyContainer">
+            <input type="password" id="ai2ApiKey" placeholder="paste your API key">
+            <div class="hint" id="ai2KeySrc"></div>
+          </div>
         </div>
-        <div class="field">
+        <div class="field" id="ai2ModelRow">
           <label>Model</label>
-          <input type="text" id="ai2Model" list="ai2ModelList" placeholder="auto-fetched on provider select, or type your own">
-          <datalist id="ai2ModelList"></datalist>
+          <select id="ai2Model"><option value="">select a provider first</option></select>
+          <div class="hint" id="ai2ModelNote"></div>
         </div>
         <div class="save-row">
-          <button class="act" id="ai2Test">Test</button>
+          <button class="act" id="ai2Test">Test connection</button>
           <span class="msg" id="ai2Msg"></span>
         </div>
       </div>
   </div>
+
 
   <div class="settings-cols" style="margin-top:7px">
       <div class="panel">

@@ -192,7 +192,9 @@ await check("retry a failed analysis: no duplicate", async () => {
   const docId = "doc_invoice_retry";
   await seedDoc(db, docId, "# Invoice\n\nAmount: 15,000.00");
 
-  // First attempt: AI unavailable → no transaction.
+  // First attempt: AI unavailable → no transaction for an unclassified
+  // ("unknown") document; only a confidently-detected financial type records
+  // one from the deterministic path (see the separate no-AI invoice test).
   const aiUnavailable: AiProvider = { available: false, model: "none", async extract() { throw new Error("no AI"); } };
   await runAnalyseJob(db, ports, aiUnavailable, docId);
   assert.strictEqual(txnCount(db), 0, "no transaction when AI unavailable");
@@ -205,6 +207,21 @@ await check("retry a failed analysis: no duplicate", async () => {
   // Another retry: still one.
   await runAnalyseJob(db, ports, ai, docId);
   assert.strictEqual(txnCount(db), 1, "second retry must not duplicate");
+});
+
+await check("no-AI deterministic path records a confident invoice", async () => {
+  const db = freshDb();
+  const ports = testPorts();
+  const docId = "doc_invoice_no_ai";
+  await seedDoc(db, docId, "# Tax Invoice\n\nGSTIN: 29ABCDE1234F1Z5\n\nTotal: 1,445.00");
+
+  const aiUnavailable: AiProvider = { available: false, model: "none", async extract() { throw new Error("no AI"); } };
+  await runAnalyseJob(db, ports, aiUnavailable, docId);
+
+  assert.strictEqual(txnCount(db), 1, "a confident invoice reaches the ledger without AI");
+  const txn = db.prepare("SELECT amount_minor, direction FROM transactions").get() as { amount_minor: number; direction: string };
+  assert.strictEqual(txn.amount_minor, 144500, "₹1,445 → 144500 minor units");
+  assert.strictEqual(txn.direction, "out", "invoice is an expense");
 });
 
 await check("re-analyse a multi-trade contract note: one transaction/evidence identity per trade", async () => {

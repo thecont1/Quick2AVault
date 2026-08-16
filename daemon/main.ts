@@ -23,6 +23,9 @@ import { syncGmail } from "./gmail/sync.js";
 import { createMutableProvider } from "./ai-provider.js";
 import { createEmbeddingProvider } from "./embeddings.js";
 import { createSecretStore } from "./secret-store.js";
+import { migrateInferenceSettings, readSlotConfig } from "./lib/migrateInferenceSettings.js";
+import { loadCatalog, findProvider, findModel } from "./lib/catalog.js";
+import { CredentialManager } from "./lib/credentials.js";
 
 // Auto-derive the version from package.json so it stays in sync without
 // manual edits. Bump package.json's "version" field and the daemon follows.
@@ -149,8 +152,51 @@ async function main() {
     }
   }
 
-  const aiApiKey = (await secrets.get("ai.api_key")) ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
-  const ai2ApiKey = (await secrets.get("ai.secondary.api_key")) ?? "";
+  // Migrate old inference settings (ai.base_url, ai.model, etc.) to the new
+  // SlotConfig shape (inference.primary.provider_id, etc.) with per-provider
+  // credential storage. Idempotent — no-op if already migrated.
+  const migrationResult = await migrateInferenceSettings(db, secrets, ports.logger);
+  if (migrationResult.migrated) {
+    ports.logger.info("migrated inference settings to new SlotConfig shape", {
+      primary: migrationResult.primary,
+      secondary: migrationResult.secondary,
+    });
+  }
+
+  // Read inference config from the new SlotConfig shape (post-migration).
+  // Falls back to old app_settings keys if migration hasn't happened yet.
+  const credMgr = new CredentialManager(secrets);
+  const catalog = loadCatalog();
+  const primSlot = readSlotConfig(db, "primary");
+  const secSlot = readSlotConfig(db, "secondary");
+
+  let aiApiKey: string;
+  let aiBaseUrl: string;
+  let aiModel: string;
+  if (primSlot) {
+    const provider = findProvider(catalog, primSlot.providerId);
+    aiApiKey = (await credMgr.getKey(primSlot.providerId)) ?? "";
+    aiBaseUrl = primSlot.baseUrlOverride ?? provider?.baseUrl ?? "";
+    aiModel = primSlot.modelId;
+  } else {
+    aiApiKey = (await secrets.get("ai.api_key")) ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
+    aiBaseUrl = stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "";
+    aiModel = stored["ai.model"] || process.env.Q2AV_MODEL || "";
+  }
+
+  let ai2ApiKey: string;
+  let ai2BaseUrl: string;
+  let ai2Model: string;
+  if (secSlot) {
+    const provider = findProvider(catalog, secSlot.providerId);
+    ai2ApiKey = (await credMgr.getKey(secSlot.providerId)) ?? "";
+    ai2BaseUrl = secSlot.baseUrlOverride ?? provider?.baseUrl ?? "";
+    ai2Model = secSlot.modelId;
+  } else {
+    ai2ApiKey = (await secrets.get("ai.secondary.api_key")) ?? "";
+    ai2BaseUrl = stored["ai.secondary.base_url"] || "";
+    ai2Model = stored["ai.secondary.model"] || "";
+  }
 
   // Mutable so Settings changes apply immediately. See createMutableProvider:
   // this used to be a fixed provider, and saving a key did nothing until the
@@ -158,11 +204,11 @@ async function main() {
   const ai = createMutableProvider(
     {
       apiKey: aiApiKey,
-      baseUrl: stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "",
-      model: stored["ai.model"] || process.env.Q2AV_MODEL || "",
+      baseUrl: aiBaseUrl,
+      model: aiModel,
       secondaryApiKey: ai2ApiKey,
-      secondaryBaseUrl: stored["ai.secondary.base_url"] || "",
-      secondaryModel: stored["ai.secondary.model"] || "",
+      secondaryBaseUrl: ai2BaseUrl,
+      secondaryModel: ai2Model,
       routingMode: (stored["ai.routing_mode"] as "auto" | "primary_only" | "vision_fallback") ?? "auto",
     },
     ports.logger,

@@ -17,11 +17,23 @@ import {
   EXTRACTION_VERSION,
   type ExtractionResult,
 } from "./extraction-contract.js";
+import { createSarvamProvider } from "./sarvam.js";
 
 export interface AiProvider {
   readonly available: boolean;
   readonly model: string;
+  /**
+   * Model id of the document-intelligence provider when `extractDocument` is
+   * backed by one (e.g. "sarvam-doc-ai"). Undefined for plain LLM providers.
+   */
+  readonly documentIntelligenceModel?: string;
   extract(markdown: string, filename: string): Promise<ExtractionResult | null>;
+  /**
+   * Document intelligence extraction: takes the RAW file path (PDF/image)
+   * instead of markdown. Implemented by providers like Sarvam AI that do
+   * OCR + field extraction server-side. Returns null if not supported.
+   */
+  extractDocument?(rawPath: string, filename: string): Promise<ExtractionResult | null>;
 }
 
 export interface AiConfig {
@@ -70,7 +82,9 @@ export interface MutableAiProvider extends AiProvider {
 export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiProvider {
   let inner = createProvider(cfg, logger);
   // Work order 07 §D1: secondary (vision/fallback) provider. Blank secondary
-  // is valid — the user may configure only a primary model.
+  // is valid — the user may configure only a primary model. When the secondary
+  // base URL is Sarvam AI, the secondary is a SarvamProvider that exposes
+  // extractDocument() for raw-file document intelligence.
   let secondary = createSecondaryProvider(cfg, logger);
   let routingMode = cfg.routingMode ?? "auto";
   return {
@@ -80,12 +94,23 @@ export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiP
     get model() {
       return inner.model;
     },
+    get documentIntelligenceModel() {
+      return secondary.model;
+    },
     extract(markdown, filename) {
       // Work order 07 §D3: routing. In primary_only mode, always use primary.
       // In auto/vision_fallback mode, use primary for ordinary text; the
       // routing decision for vision/scanned input is made by the caller
       // (runAnalyseJob), not here — this method is called for text extraction.
       return inner.extract(markdown, filename);
+    },
+    /** Document intelligence: delegate to the secondary provider if it
+     *  supports extractDocument (Sarvam AI does; generic LLMs don't). */
+    async extractDocument(rawPath: string, filename: string): Promise<ExtractionResult | null> {
+      if (secondary.extractDocument && secondary.available) {
+        return secondary.extractDocument(rawPath, filename);
+      }
+      return null;
     },
     reconfigure(next: AiConfig) {
       inner = createProvider(next, logger);
@@ -106,11 +131,31 @@ export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiP
 /**
  * Work order 07 §D1: create the secondary (vision/fallback) provider. Returns
  * a null provider when no secondary is configured — a blank secondary is valid.
+ *
+ * When the secondary base URL is Sarvam AI's document intelligence endpoint,
+ * a SarvamProvider is created instead of a generic LLM provider. Sarvam uses
+ * a different API protocol (async job + multipart, not chat completions) and
+ * exposes extractDocument() instead of extract().
  */
 function createSecondaryProvider(cfg: AiConfig, logger: Logger): AiProvider {
   const apiKey = cfg.secondaryApiKey ?? "";
   if (!apiKey || !cfg.secondaryModel) {
     return nullAiProvider;
+  }
+  // Sarvam Document Intelligence: detect by base URL containing doc-ai.
+  // The Sarvam provider does OCR + field extraction on the raw file
+  // via an async job protocol, not text chat completions.
+  const baseUrl = cfg.secondaryBaseUrl || cfg.baseUrl || "";
+  if (baseUrl.includes("sarvam.ai") && baseUrl.includes("doc-ai")) {
+    const sarvam = createSarvamProvider({ apiKey, baseUrl }, logger);
+    // Wrap as an AiProvider: extract() returns null (Sarvam can't do text
+    // extraction), extractDocument() does the real work.
+    return {
+      get available() { return sarvam.available; },
+      model: sarvam.model,
+      async extract() { return null; },
+      extractDocument: (rawPath: string, filename: string) => sarvam.extractDocument(rawPath, filename),
+    };
   }
   return createProvider(
     {

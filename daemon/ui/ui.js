@@ -1,16 +1,23 @@
 // TOKEN is set by the inline script in ui.html (which gets %%TOKEN%%
 // substitution). ui.js runs after that script sets it on the global scope.
 const H = { Authorization: "Bearer " + TOKEN };
-const api = (p) => fetch(p, { headers: H }).then((r) => r.json());
+
+// If the daemon restarts, the token changes and API calls return 401.
+// Auto-reload the page to pick up the new token embedded in the HTML.
+function checkAuth(r) {
+  if (r.status === 401) location.reload();
+  return r;
+}
+const api = (p) => fetch(p, { headers: H }).then(checkAuth).then((r) => r.json());
 const apiPost = (p, body) => fetch(p, {
   method: "POST", headers: { ...H, "content-type": "application/json" },
   body: JSON.stringify(body || {}),
-}).then((r) => r.json());
+}).then(checkAuth).then((r) => r.json());
 const apiPatch = (p, body) => fetch(p, {
   method: "PATCH", headers: { ...H, "content-type": "application/json" },
   body: JSON.stringify(body || {}),
-}).then((r) => r.json());
-const apiDelete = (p) => fetch(p, { method: "DELETE", headers: H }).then((r) => r.json());
+}).then(checkAuth).then((r) => r.json());
+const apiDelete = (p) => fetch(p, { method: "DELETE", headers: H }).then(checkAuth).then((r) => r.json());
 
 const money = (m) => m === null || m === undefined ? "—"
   : "₹" + (m / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");

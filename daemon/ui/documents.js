@@ -1,6 +1,10 @@
 // ════════════════════════════════════════════════════════════════════════
 // DOCUMENTS REVIEW TAB
 // ════════════════════════════════════════════════════════════════════════
+// Monotonic generation counter so a slower earlier period request can't
+// overwrite a newer one when responses arrive out of order.
+let reviewLoadGen = 0;
+
 async function loadReview() {
   // Refresh the pipeline board so it's populated when the user switches to
   // this tab — SSE events keep it live thereafter.
@@ -10,9 +14,11 @@ async function loadReview() {
   // elements are about to be replaced, so a dangling detail slot would
   // reference a removed card.
   collapseOpenDoc();
+  const gen = ++reviewLoadGen;
   let url = "/v1/documents?period=" + encodeURIComponent(period) + "&limit=500";
   if (pipelineFilter) url += "&state=" + encodeURIComponent(pipelineFilter);
   const d = await api(url);
+  if (gen !== reviewLoadGen) return; // superseded by a newer period selection
   const docs = d.documents || [];
   const label = (d.period && d.period.label) ? d.period.label : "all time";
   const dp = document.getElementById("docPeriod");
@@ -61,12 +67,14 @@ async function loadReview() {
 // it if it's already open. The detail renders inline below the card so the
 // user doesn't have to scroll to the bottom of the page.
 let openDocRow = null;
+let openDocId = null;
 function collapseOpenDoc() {
   if (!openDocRow) return;
   openDocRow.classList.remove("open");
   const next = openDocRow.nextElementSibling;
   if (next && next.classList.contains("drow-detail")) next.remove();
   openDocRow = null;
+  openDocId = null;
 }
 function toggleDoc(row, id) {
   if (openDocRow === row) { collapseOpenDoc(); return; }
@@ -77,7 +85,18 @@ function toggleDoc(row, id) {
   slot.innerHTML = "<div class='empty'>loading…</div>";
   row.after(slot);
   openDocRow = row;
+  openDocId = id;
   showDoc(id, slot);
+}
+
+// Refresh the open document's detail when a pipeline state change arrives
+// via SSE — this is how the user sees reprocessing progress.
+function refreshOpenDocIfMatch(docId) {
+  if (!openDocId || !openDocRow) return;
+  if (docId !== openDocId) return;
+  const slot = openDocRow.nextElementSibling;
+  if (!slot || !slot.classList.contains("drow-detail")) return;
+  showDoc(openDocId, slot);
 }
 
 async function showDoc(id, container) {
@@ -94,10 +113,6 @@ async function showDoc(id, container) {
   let vocab = {};
   try { vocab = await api("/v1/vocabularies"); } catch {}
 
-  const partiesHtml = parties.map((p) =>
-    "<div class='rule'><span class='k'>" + esc(p.role) + "</span>"
-    + "<span class='v'>" + esc(p.display_name) + " <span style='color:var(--faint)'>· " + esc(p.kind) + " · " + esc(p.status) + "</span></span>"
-    + "</div>").join("");
   const txnsHtml = txns.map((t) =>
     "<div class='rule'><span class='k'>" + esc(t.direction) + "</span>"
     + "<span class='v'>" + money(t.amount_minor) + " " + esc(t.currency || "")
@@ -106,50 +121,116 @@ async function showDoc(id, container) {
     + "<span class='n'>" + esc(String(t.occurred_at || "").slice(0, 10)) + "</span></div>").join("");
 
   // Render effective fields as editable rows. Fields in editableFields get
-  // a click-to-edit handler; fields with a vocabulary (doc_type, financial_impact)
-  // get a dropdown; others get a text input.
+  // a click-to-edit handler; fields with a vocabulary (doc_type, financial_impact,
+  // currency, financial_year) get a dropdown; document_date gets a date picker;
+  // others get a text input.
+  // "Vendor" from the extraction is relabelled "Counterparty" here — they
+  // map to the same party role. "Person" maps to the "owner" party role.
+  // The separate Parties section was removed: it duplicated these fields
+  // with different names and was not editable.
   const FIELD_LABELS = {
     doc_type: "Doc Type", amount_minor: "Amount", currency: "Currency",
-    document_date: "Invoice Date", posted_at: "Posted At",
+    document_date: "Transaction Date", posted_at: "Posted At",
     counterparty: "Counterparty", person: "Person",
-    financial_impact: "Impact Bucket", issuer: "Issuer", vendor: "Vendor",
-    document_number: "Doc Number", financial_year: "FY",
+    financial_impact: "Impact Bucket", issuer: "Issuer", vendor: "Counterparty",
+    document_number: "Reference No.", financial_year: "FY",
     category: "Category", purpose_text: "Purpose",
   };
+  // Build FY dropdown options: current FY ± 3 years from today.
+  const currentYear = new Date().getUTCFullYear();
+  const fyOptions = [];
+  for (let y = currentYear - 3; y <= currentYear + 1; y++) {
+    fyOptions.push("FY " + y + "-" + String((y + 1) % 100).padStart(2, "0"));
+  }
   const DROPDOWN_FIELDS = {
     doc_type: vocab.document_types || [],
     financial_impact: vocab.impact_buckets || [],
     currency: ["INR", "USD", "EUR", "GBP", "SGD", "AED"],
+    financial_year: fyOptions,
   };
+  // Fields that use a date picker (<input type="date">) instead of text/dropdown.
+  const DATE_FIELDS = new Set(["document_date", "posted_at"]);
 
-  const effEntries = Object.entries(eff).filter(([, v]) => v && v.value !== null && v.value !== undefined);
+  // Fixed schema: these core fields always appear in this order, even when
+  // the AI didn't extract them. This lets the user manually fill in what the
+  // AI missed (e.g. Amount on an invoice the model failed to parse).
+  // Complex fields (line_items, trades, reference_ids) are only shown when
+  // they have a value — they can't be edited as simple text.
+  // "vendor" is excluded — it maps to the same party role as "counterparty"
+  // and showing both creates confusion. If vendor has a value but counterparty
+  // doesn't, the vendor value is shown under the counterparty row.
+  const FIXED_FIELDS = [
+    "doc_type", "amount_minor", "currency", "document_date",
+    "counterparty", "issuer", "person",
+    "document_number", "purpose_text", "financial_impact",
+    "financial_year",
+  ];
+  const EXTRA_FIELDS = ["posted_at", "category"];
+  // Merge vendor into counterparty: if counterparty is empty but vendor has
+  // a value, use vendor's value for the counterparty row.
+  if ((!eff.counterparty || !eff.counterparty.value) && eff.vendor && eff.vendor.value) {
+    eff.counterparty = eff.vendor;
+  }
+
+  // Build the list: fixed fields first (in order), then any extra effective
+  // fields that have a value but aren't in the fixed set. Skip "vendor" —
+  // it's been merged into "counterparty" above.
+  const SKIP_FIELDS = new Set(["vendor", "reference_ids", "subtotal_minor", "tax_minor", "line_items", "trades"]);
+  const seen = new Set(FIXED_FIELDS);
+  const effEntries = FIXED_FIELDS.map((k) => [k, eff[k]]);
+  for (const [k, v] of Object.entries(eff)) {
+    if (seen.has(k) || SKIP_FIELDS.has(k)) continue;
+    if (v && v.value !== null && v.value !== undefined) {
+      effEntries.push([k, v]);
+      seen.add(k);
+    }
+  }
+  // Also include extra editable fields that have no value, for completeness.
+  for (const k of EXTRA_FIELDS) {
+    if (seen.has(k)) continue;
+    if (editableFields.includes(k)) {
+      effEntries.push([k, eff[k]]);
+      seen.add(k);
+    }
+  }
+
   const effRows = effEntries.map(([k, v]) => {
     const label = FIELD_LABELS[k] || k;
     const isEditable = editableFields.includes(k);
-    const displayVal = (k === "amount_minor" && v.value) ? money(Number(v.value)) : String(v.value);
+    const hasValue = v && v.value !== null && v.value !== undefined;
+    const displayVal = !hasValue ? "—"
+      : (k === "amount_minor" && v.value) ? money(Number(v.value))
+      : (k === "document_date" || k === "posted_at") ? (v.value.slice(0, 10))
+      : String(v.value);
+    const prov = hasValue ? " <span style='color:var(--faint)'>· " + esc(v.source) + "</span>" : "";
     const cls = isEditable ? "rule editable" : "rule";
-    return "<div class='" + cls + "' data-field='" + esc(k) + "' data-value='" + esc(String(v.value)) + "'>"
+    return "<div class='" + cls + "' data-field='" + esc(k) + "' data-value='" + esc(hasValue ? String(v.value) : "") + "'>"
       + "<span class='k'>" + esc(label) + "</span>"
-      + "<span class='v'>" + esc(displayVal) + " <span style='color:var(--faint)'>· " + esc(v.source) + "</span></span>"
+      + "<span class='v'>" + esc(displayVal) + prov + "</span>"
       + "</div>";
   }).join("");
 
   const refIds = x.reference_ids ? Object.entries(x.reference_ids).map(([k, v]) =>
     esc(k) + "=" + esc(v)).join("  ") : "";
 
+  // Human-friendly date-time for the Received field.
+  const receivedFriendly = doc.received_at
+    ? new Date(doc.received_at).toLocaleString("en-US", {
+        year: "numeric", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit", hour12: false,
+      })
+    : "—";
+
   const detailHtml =
     "<div class='panel'><h3>" + esc(doc.original_filename) + "</h3>"
-    + "<div class='grid3' style='margin-bottom:14px'>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Type</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(doc.doc_type || "—") + "</div></div>"
+    + "<div class='grid2' style='margin-bottom:14px'>"
     + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Received</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(String(doc.received_at || "").slice(0, 19)) + "</div></div>"
+    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(receivedFriendly) + "</div></div>"
     + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Lifecycle</div>"
     + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(doc.lifecycle) + "</div></div>"
     + "</div>"
     + (refIds ? "<h3>Reference IDs</h3><div style='font:11.5px var(--mono);color:var(--dim);margin-bottom:14px'>" + refIds + "</div>" : "")
     + "<h3>Effective fields</h3>" + (effRows || "<div class='empty'>No extracted fields.</div>")
-    + "<h3 style='margin-top:18px'>Parties</h3>" + (partiesHtml || "<div class='empty'>No resolved parties.</div>")
     + "<h3 style='margin-top:18px'>Transactions evidenced</h3>" + (txnsHtml || "<div class='empty'>Not linked to any transaction.</div>")
     // Action bar: reprocess, exclude, download, delete + status message.
     + "<div class='doc-actions'>"
@@ -183,11 +264,11 @@ async function showDoc(id, container) {
 
   if (container) container.innerHTML = html;
   initDocViewer(id, { pipelineState: d.pipeline_state, intakeId: d.intake_id });
-  initDocActions(id, editableFields, DROPDOWN_FIELDS);
+  initDocActions(id, editableFields, DROPDOWN_FIELDS, DATE_FIELDS);
 }
 
 // ── document action bar + inline field editing ───────────────────
-function initDocActions(id, editableFields, dropdownFields) {
+function initDocActions(id, editableFields, dropdownFields, dateFields) {
   const msg = document.getElementById("docActionMsg-" + id);
   function setMsg(text, cls) {
     if (msg) { msg.textContent = text; msg.className = "msg" + (cls ? " " + cls : ""); }
@@ -201,9 +282,10 @@ function initDocActions(id, editableFields, dropdownFields) {
       setMsg("Reprocessing…");
       try {
         const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/reprocess", {});
+        if (r && r.error) throw new Error(r.message || r.error);
         setMsg("Reprocessing (" + (r.phase || "analyse") + ")…", "ok");
       } catch (e) {
-        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        setMsg("Failed: " + String(e.message || e), "err");
       }
       reprocBtn.disabled = false;
     };
@@ -218,14 +300,15 @@ function initDocActions(id, editableFields, dropdownFields) {
       excludeBtn.disabled = true;
       setMsg("Excluding…");
       try {
-        await apiPost("/v1/documents/" + encodeURIComponent(id) + "/remove-from-active", {});
+        const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/remove-from-active", {});
+        if (r && r.error) throw new Error(r.message || r.error);
         setMsg("Excluded from active.", "ok");
         // Collapse the detail panel — the doc is no longer active.
         collapseOpenDoc();
         // Refresh the document list to remove it.
         loadReview();
       } catch (e) {
-        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        setMsg("Failed: " + String(e.message || e), "err");
         excludeBtn.disabled = false;
       }
     };
@@ -255,7 +338,7 @@ function initDocActions(id, editableFields, dropdownFields) {
         URL.revokeObjectURL(url);
         setMsg("Downloaded.", "ok");
       } catch (e) {
-        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        setMsg("Failed: " + String(e.message || e), "err");
       }
       downloadBtn.disabled = false;
     };
@@ -277,12 +360,13 @@ function initDocActions(id, editableFields, dropdownFields) {
       deleteBtn.disabled = true;
       setMsg("Deleting…");
       try {
-        await apiDelete("/v1/documents/" + encodeURIComponent(id));
+        const r = await apiDelete("/v1/documents/" + encodeURIComponent(id));
+        if (r && r.error) throw new Error(r.message || r.error);
         setMsg("Deleted permanently.", "ok");
         collapseOpenDoc();
         loadReview();
       } catch (e) {
-        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        setMsg("Failed: " + String(e.message || e), "err");
         deleteBtn.disabled = false;
       }
     };
@@ -294,12 +378,12 @@ function initDocActions(id, editableFields, dropdownFields) {
   detailPanel.querySelectorAll(".rule.editable").forEach((row) => {
     row.onclick = (e) => {
       if (row.classList.contains("editing")) return;
-      startEditField(id, row, dropdownFields);
+      startEditField(id, row, dropdownFields, dateFields);
     };
   });
 }
 
-function startEditField(id, row, dropdownFields) {
+function startEditField(id, row, dropdownFields, dateFields) {
   const field = row.dataset.field;
   const currentValue = row.dataset.value;
   row.classList.add("editing");
@@ -308,6 +392,7 @@ function startEditField(id, row, dropdownFields) {
   if (!valSpan) return;
 
   const options = dropdownFields[field] || [];
+  const isDate = dateFields && dateFields.has(field);
   // amount_minor is stored in paise; the user edits in rupees.
   const isMoney = field === "amount_minor";
   const editValue = isMoney && currentValue
@@ -319,9 +404,14 @@ function startEditField(id, row, dropdownFields) {
       "<option value='" + esc(String(o)) + "'" + (String(o) === currentValue ? " selected" : "") + ">"
       + esc(String(o)) + "</option>"
     ).join("");
-    inputHtml = "<select class='edit-input' id='editSel-" + esc(field) + "'>" + opts + "</select>";
+    // Include a blank "—" option when the current value is empty so the
+    // user can explicitly choose to set it.
+    const blank = !currentValue ? "<option value='' selected>—</option>" : "";
+    inputHtml = "<select class='edit-input' id='editSel-" + esc(field) + "'>" + blank + opts + "</select>";
+  } else if (isDate) {
+    inputHtml = "<input type='date' class='edit-input' id='editInp-" + esc(field) + "' value='" + esc(editValue) + "'>";
   } else {
-    inputHtml = "<input class='edit-input' id='editInp-" + esc(field) + "' value='" + esc(editValue) + "'>";
+    inputHtml = "<input class='edit-input' id='editInp-" + esc(field) + "' value='" + esc(editValue) + "' placeholder='—'>";
   }
 
   valSpan.style.display = "none";
@@ -347,8 +437,9 @@ function startEditField(id, row, dropdownFields) {
     }
     if (newVal === currentValue) { restore(); return; }
     try {
-      await apiPatch("/v1/documents/" + encodeURIComponent(id) + "/claims",
+      const r = await apiPatch("/v1/documents/" + encodeURIComponent(id) + "/claims",
         { field, value: newVal });
+      if (r && r.error) throw new Error(r.message || r.error);
       row.dataset.value = newVal;
       const displayVal = isMoney && newVal ? money(Number(newVal)) : newVal;
       valSpan.innerHTML = esc(displayVal) + " <span style='color:var(--faint)'>· user</span>";
@@ -437,12 +528,13 @@ async function initDocViewer(id, ctx) {
     txtBtn.classList.toggle("on", m === "text");
     const pager = document.getElementById("pager-" + id);
     if (pager) pager.style.display = "none";
-    if (m === "image") renderPage(1);
+    if (m === "image") { currentPage = 1; renderPage(currentPage); }
     else renderText();
   }
 
   // ── Image mode ──
   let currentPage = 1;
+  let currentBlobUrl = null;
   const totalPages = info ? info.pages : 0;
   const pagerAvailable = info ? info.pager_available : false;
 
@@ -461,6 +553,8 @@ async function initDocViewer(id, ctx) {
       if (!r.ok) throw new Error("http_" + r.status);
       const blob = await r.blob();
       blobUrl = URL.createObjectURL(blob);
+      if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+      currentBlobUrl = blobUrl;
     } catch {
       box.innerHTML = "<div class='viewer-fallback'>Failed to render page.</div>";
       return;
@@ -546,7 +640,7 @@ function renderPasswordPrompt(id, box) {
       }
     } catch (e) {
       if (msg) {
-        msg.textContent = "Failed: " + esc(String(e.message || e));
+        msg.textContent = "Failed: " + String(e.message || e);
         msg.className = "pw-msg err";
       }
       if (btn) btn.disabled = false;

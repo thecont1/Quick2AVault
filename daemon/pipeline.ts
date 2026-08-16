@@ -9,7 +9,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
 import type { AiProvider } from "./ai-provider.js";
-import { EXTRACTION_VERSION } from "./extraction-contract.js";
+import { EXTRACTION_VERSION, type ExtractionResult } from "./extraction-contract.js";
 import { recordTransaction, resolveEntity } from "./ledger.js";
 import { resolvePerson } from "./identity.js";
 import { findMatches, linkEvidence, AUTO_LINK, REVIEW_FLOOR } from "./matcher.js";
@@ -1375,12 +1375,16 @@ function persistTypedExtraction(
     ["line_items", extraction.lineItems],
     ["trades", extraction.trades],
     ["financial_impact", impactFor(extraction.documentType, extraction.defaultImpactBucket, extraction.amountMinor ?? 0, extraction.currency ?? "INR")],
+    ["person", extraction.person?.name],
+    ["issuer", extraction.issuer?.name],
+    ["vendor", extraction.vendor?.name],
   ];
   for (const [field, value] of claims) writeTypedClaim(db, ports, documentId, field, value, confidence);
 
   const parties: Array<{ name?: string; kind: "person" | "organisation" | "account"; role: DocumentPartyRole; identifiers?: Record<string, string> }> = [];
   if (extraction.issuer) parties.push({ name: extraction.issuer.name, kind: extraction.issuer.kind, role: "issuer", identifiers: { email: extraction.issuer.email ?? "", gstin: extraction.issuer.gstin ?? "" } });
   if (extraction.client) parties.push({ name: extraction.client.name, kind: "person", role: "owner", identifiers: { pan: extraction.client.pan ?? "", ucc: extraction.client.ucc ?? "" } });
+  if (extraction.person) parties.push({ name: extraction.person.name, kind: "person", role: "owner" });
   if (extraction.vendor) parties.push({ name: extraction.vendor.name, kind: "organisation", role: "counterparty", identifiers: { email: extraction.vendor.email ?? "" } });
   else if (extraction.broker) parties.push({ name: extraction.broker.name, kind: "organisation", role: "counterparty", identifiers: { pan: extraction.broker.pan ?? "", gstin: extraction.broker.gstin ?? "" } });
   for (const party of parties) {
@@ -1404,6 +1408,85 @@ function persistTypedExtraction(
   }
   db.prepare("UPDATE documents SET doc_type=?, extraction_json=COALESCE(extraction_json,?), extraction_version=COALESCE(extraction_version,?), analysed_at=COALESCE(analysed_at,?) WHERE id=?")
     .run(extraction.documentType, JSON.stringify(extraction), EXTRACTION_VERSION, ports.clock.isoNow(), documentId);
+}
+
+/**
+ * Convert a deterministic TypedExtraction into the ledger-compatible
+ * ExtractionResult shape so the no-AI path can still record the transaction.
+ * persistTypedExtraction already wrote the claims and party links; the ledger
+ * transaction and its evidence link are the missing piece.
+ */
+function typedToExtractionResult(typed: TypedExtraction): ExtractionResult {
+  // The deterministic taxonomy names some types differently from the ledger:
+  // tax_invoice is the workorders name for merchant_invoice; form_16 (a TDS
+  // certificate) is not a money movement and maps to "irrelevant".
+  const DOC_TYPE_MAP: Record<string, ExtractionResult["doc_type"]> = {
+    tax_invoice: "merchant_invoice",
+    contract_note: "contract_note",
+    bank_statement: "bank_statement",
+    card_confirmation: "card_confirmation",
+    rent_receipt: "payment_receipt",
+    form_16: "irrelevant",
+  };
+  const doc_type = DOC_TYPE_MAP[typed.documentType] ?? "unknown";
+  const parties: ExtractionResult["parties"] = [];
+  if (typed.issuer?.name) {
+    parties.push({
+      name: typed.issuer.name,
+      kind: typed.issuer.kind,
+      role: "issuer",
+      identifiers: { email: typed.issuer.email ?? "", gstin: typed.issuer.gstin ?? "" },
+    });
+  }
+  if (typed.client?.name) {
+    parties.push({
+      name: typed.client.name,
+      kind: "person",
+      role: "owner",
+      identifiers: { pan: typed.client.pan ?? "", ucc: typed.client.ucc ?? "" },
+    });
+  }
+  if (typed.person?.name) {
+    parties.push({ name: typed.person.name, kind: "person", role: "owner" });
+  }
+  if (typed.vendor?.name) {
+    parties.push({
+      name: typed.vendor.name,
+      kind: "organisation",
+      role: "counterparty",
+      identifiers: { email: typed.vendor.email ?? "" },
+    });
+  } else if (typed.broker?.name) {
+    parties.push({
+      name: typed.broker.name,
+      kind: "organisation",
+      role: "counterparty",
+      identifiers: { pan: typed.broker.pan ?? "", gstin: typed.broker.gstin ?? "" },
+    });
+  }
+
+  return {
+    doc_type,
+    occurred_at: typed.documentDate ?? typed.tradeDate ?? null,
+    posted_at: typed.settlementDate ?? null,
+    amount_minor: typed.amountMinor ?? null,
+    currency: typed.currency ?? "",
+    subtotal_minor: typed.subtotalMinor ?? null,
+    tax_minor: typed.taxMinor ?? null,
+    line_items: typed.lineItems?.map((li) => ({ description: li.description, amount_minor: li.amountMinor })) ?? null,
+    direction: null,
+    payment_rail: null,
+    parties,
+    reference_ids: {},
+    counterparty_descriptor: typed.vendor?.name ?? typed.broker?.name ?? null,
+    source_of_funds_text: null,
+    destination_of_funds_text: null,
+    purpose_text: null,
+    category_hint: null,
+    is_wallet_topup: false,
+    confidence: typed.confidence,
+    notes: "Deterministic typed extraction (no AI provider configured)",
+  };
 }
 
 function typedLearningAmbiguities(db: DatabaseSync, documentId: string, extraction: TypedExtraction): LearningAmbiguity[] {
@@ -1450,9 +1533,9 @@ export async function runAnalyseJob(
   documentId: string,
 ): Promise<void> {
   const doc = db
-    .prepare("SELECT id, original_filename, markdown_path, markdown_chars FROM documents WHERE id=?")
+    .prepare("SELECT id, original_filename, raw_path, markdown_path, markdown_chars FROM documents WHERE id=?")
     .get(documentId) as
-    | { id: string; original_filename: string; markdown_path: string | null; markdown_chars: number | null }
+    | { id: string; original_filename: string; raw_path: string | null; markdown_path: string | null; markdown_chars: number | null }
     | undefined;
   if (!doc) throw new Error(`document ${documentId} not found`);
 
@@ -1474,9 +1557,36 @@ export async function runAnalyseJob(
       document_id: documentId,
       document_type: typed.documentType,
     });
+    // persistTypedExtraction wrote the claims and party links, but the ledger
+    // transaction (and its evidence link) are only written on the AI path
+    // below. Record it from the deterministic result when the type is a
+    // confidently-detected financial document; an "unknown" type defers to
+    // review / a later AI pass instead of guessing a transaction.
+    const result = typedToExtractionResult(typed);
+    if (result.doc_type !== "unknown") {
+      recordTransaction(db, ports, documentId, result);
+    }
     return;
   }
-  const x = await ai.extract(markdown, doc.original_filename);
+
+  // Document intelligence path: when the provider supports extractDocument
+  // (Sarvam AI for India jurisdiction), use the RAW file directly instead of
+  // feeding markdown text to a generic LLM. Sarvam does OCR + field extraction
+  // server-side, which is far more accurate for scanned/image documents.
+  let x: ExtractionResult | null = null;
+  let usedDocumentIntelligence = false;
+  if (ai.extractDocument && doc.raw_path) {
+    ports.logger.info("analyse: using document intelligence provider", {
+      document_id: documentId,
+      raw_path: doc.raw_path,
+    });
+    x = await ai.extractDocument(doc.raw_path, doc.original_filename);
+    usedDocumentIntelligence = x !== null;
+  }
+  // Fall back to the generic text extraction path (markdown → LLM)
+  if (!x) {
+    x = await ai.extract(markdown, doc.original_filename);
+  }
   const now = ports.clock.isoNow();
 
   if (!x) {
@@ -1489,7 +1599,9 @@ export async function runAnalyseJob(
 
   // markdown_hash is recorded against the text the model ACTUALLY read, not
   // whatever is on disk later. That is the whole point: if regeneration
-  // produces a different hash, this extraction is provably stale.
+  // produces a different hash, this extraction is provably stale. The document
+  // intelligence path reads the RAW file, not markdown, so it records its own
+  // model id and no markdown hash.
   db.prepare(
     `UPDATE documents
         SET extraction_json=?, extraction_version=?, doc_type=?, analysed_at=?,
@@ -1500,9 +1612,9 @@ export async function runAnalyseJob(
     EXTRACTION_VERSION,
     x.doc_type,
     now,
-    ai.model,
+    usedDocumentIntelligence ? (ai.documentIntelligenceModel ?? ai.model) : ai.model,
     now,
-    hashText(markdown),
+    usedDocumentIntelligence ? null : hashText(markdown),
     documentId,
   );
 
