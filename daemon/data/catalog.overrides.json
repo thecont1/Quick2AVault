@@ -1,7 +1,29 @@
 {
   "provider:sarvam": {
+    "name": "Sarvam AI"
+  },
+
+  "provider:sarvam-docai": {
+    "name": "Sarvam Document Intelligence",
     "baseUrl": "https://api.sarvam.ai/doc-ai/v1",
-    "apiStyle": "openai"
+    "apiStyle": "sarvam-docai",
+    "tier": "regional",
+    "logoUrl": "https://models.dev/logos/sarvam.png",
+    "models": [
+      {
+        "id": "parse",
+        "displayName": "Parse",
+        "trust": "verified",
+        "capabilities": { "chat": false, "json": true, "vision": true },
+        "jurisdictionTags": ["IN"]
+      },
+      {
+        "id": "vision",
+        "displayName": "Vision",
+        "trust": "community",
+        "capabilities": { "chat": false, "json": true, "vision": true }
+      }
+    ]
   },
 
   "poolside/poolside/laguna-s-2.1": {
@@ -16,15 +38,6 @@
   "sarvam/sarvam-105b-conversations": {
     "trust": "verified",
     "capabilities": { "chat": true, "json": true, "vision": false }
-  },
-  "sarvam/parse": {
-    "trust": "verified",
-    "capabilities": { "chat": false, "json": true, "vision": true },
-    "jurisdictionTags": ["IN"]
-  },
-  "sarvam/vision": {
-    "trust": "community",
-    "capabilities": { "chat": false, "json": true, "vision": true }
   },
   "sarvam/gemma4": {
     "trust": "community",

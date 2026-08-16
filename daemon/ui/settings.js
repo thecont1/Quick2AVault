@@ -83,8 +83,17 @@ async function loadSettings() {
   const ai = s.ai || {};
 
   // ── Primary inference ──────────────────────────────────────────────────
-  const primProviderId = inference?.primary?.providerId || ai.base_url ? providerIdFromCatalog(ai.base_url) : "";
-  const primModelId = inference?.primary?.modelId || ai.model || "";
+  const primProviderId = inference?.primary?.providerId
+    || (ai.base_url ? providerIdFromCatalog(ai.base_url) : "");
+  let primModelId = inference?.primary?.modelId || ai.model || "";
+  // Validate: if the saved model doesn't belong to the provider in the
+  // catalog, clear it (referential integrity — prevents gpt-4.1 under Poolside)
+  if (primProviderId && primProviderId !== "custom" && primModelId) {
+    const provider = CATALOG.find((p) => p.id === primProviderId);
+    if (provider && !provider.models.find((m) => m.id === primModelId)) {
+      primModelId = "";
+    }
+  }
 
   buildProviderDropdown("aiProvider", primProviderId);
   currentPrimaryProviderId = document.getElementById("aiProvider").value;
@@ -106,7 +115,14 @@ async function loadSettings() {
   // ── Secondary inference ────────────────────────────────────────────────
   const sec = ai.secondary || {};
   const secProviderId = inference?.secondary?.providerId || (sec.base_url ? providerIdFromCatalog(sec.base_url) : "");
-  const secModelId = inference?.secondary?.modelId || sec.model || "";
+  let secModelId = inference?.secondary?.modelId || sec.model || "";
+  // Validate referential integrity (same as primary)
+  if (secProviderId && secProviderId !== "custom" && secModelId) {
+    const provider = CATALOG.find((p) => p.id === secProviderId);
+    if (provider && !provider.models.find((m) => m.id === secModelId)) {
+      secModelId = "";
+    }
+  }
 
   buildProviderDropdown("ai2Provider", secProviderId);
   currentSecondaryProviderId = document.getElementById("ai2Provider").value;
@@ -589,12 +605,16 @@ function autoSave(which) {
 // ── Event handlers ───────────────────────────────────────────────────────
 document.getElementById("aiTest").onclick = () => testAi("primary");
 document.getElementById("aiProvider").onchange = () => {
-  saveAi("primary");
+  // Clear the model before saving — the old provider's model must not
+  // be saved under the new provider (referential integrity).
+  const modelSelect = document.getElementById("aiModel");
+  modelSelect.value = "";
   onProviderChange("primary", "");
   const pid = document.getElementById("aiProvider").value;
   currentPrimaryProviderId = pid;
   updateKeyUI("primary", pid);
-  autoSave("primary");
+  // Don't auto-save on provider change alone — wait for the user to
+  // pick a model. Saving with an empty modelId would clear the slot.
 };
 document.getElementById("aiApiKey").onchange = () => autoSave("primary");
 document.getElementById("aiModel").onchange = () => {
@@ -605,12 +625,13 @@ document.getElementById("aiBaseUrl").oninput = () => autoSave("primary");
 
 document.getElementById("ai2Test").onclick = () => testAi("secondary");
 document.getElementById("ai2Provider").onchange = () => {
-  saveAi("secondary");
+  // Clear the model before saving — referential integrity.
+  const modelSelect = document.getElementById("ai2Model");
+  modelSelect.value = "";
   onProviderChange("secondary", "");
   const pid = document.getElementById("ai2Provider").value;
   currentSecondaryProviderId = pid;
   updateKeyUI("secondary", pid);
-  autoSave("secondary");
 };
 document.getElementById("ai2ApiKey").onchange = () => autoSave("secondary");
 document.getElementById("ai2Model").onchange = () => {

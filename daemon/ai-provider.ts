@@ -134,10 +134,11 @@ function createSecondaryProvider(cfg: AiConfig, logger: Logger): AiProvider {
   if (!apiKey || !cfg.secondaryModel) {
     return nullAiProvider;
   }
-  // Sarvam AI: detect by base URL. The Sarvam provider does OCR + field
-  // extraction on the raw file, not text chat completions.
+  // Sarvam Document Intelligence: detect by base URL containing doc-ai.
+  // The Sarvam provider does OCR + field extraction on the raw file
+  // via an async job protocol, not text chat completions.
   const baseUrl = cfg.secondaryBaseUrl || cfg.baseUrl || "";
-  if (baseUrl.includes("sarvam.ai")) {
+  if (baseUrl.includes("sarvam.ai") && baseUrl.includes("doc-ai")) {
     const sarvam = createSarvamProvider({ apiKey, baseUrl }, logger);
     // Wrap as an AiProvider: extract() returns null (Sarvam can't do text
     // extraction), extractDocument() does the real work.

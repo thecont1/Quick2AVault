@@ -22,6 +22,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SecretStore } from "../secret-store.js";
 import type { SlotConfig } from "../data/schema.js";
+import type { ProviderPreset } from "../data/schema.js";
 import { CredentialManager } from "./credentials.js";
 
 interface OldSettings {
@@ -50,7 +51,8 @@ const BASE_URL_TO_PROVIDER: Record<string, string> = {
   "https://api.moonshot.ai/v1": "moonshotai",
   "https://api.minimax.io/v1": "minimax",
   "https://dashscope-intl.aliyuncs.com/api/v1": "alibaba",
-  "https://api.sarvam.ai/doc-ai/v1": "sarvam",
+  "https://api.sarvam.ai/v1": "sarvam",
+  "https://api.sarvam.ai/doc-ai/v1": "sarvam-docai",
   "https://inference.poolside.ai/v1": "poolside",
   "https://api.perplexity.ai/v1": "perplexity",
 };
@@ -169,6 +171,27 @@ export function writeSlotConfig(
       "DELETE FROM app_settings WHERE key=?",
     ).run(`inference.${slot}.base_url_override`);
   }
+}
+
+/**
+ * Validate that a SlotConfig's modelId actually belongs to its providerId
+ * in the catalog. If not, clear the modelId to prevent contradictory state
+ * (e.g. gpt-4.1 appearing under Poolside).
+ *
+ * Run at settings-load time (catches already-corrupted state) and on
+ * every provider-change event (prevents recurrence).
+ */
+export function validateSlotConfig(
+  config: SlotConfig | null,
+  catalog: ProviderPreset[],
+): SlotConfig | null {
+  if (!config) return null;
+  const provider = catalog.find((p) => p.id === config.providerId);
+  if (!provider) return config; // Unknown provider (e.g. custom) — leave as-is
+  const modelValid = provider.models.some((m) => m.id === config.modelId);
+  if (modelValid) return config;
+  // Model doesn't belong to this provider — clear it
+  return { ...config, modelId: "" };
 }
 
 /**

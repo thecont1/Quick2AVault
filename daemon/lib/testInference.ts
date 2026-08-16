@@ -46,9 +46,9 @@ export async function testInference(
   }
 
   try {
-    // Sarvam AI: different API protocol (async job, not chat completions)
-    if (provider.id === "sarvam") {
-      return await testSarvam(provider, apiKey, start);
+    // Sarvam Document Intelligence: async job protocol, not chat completions
+    if (provider.apiStyle === "sarvam-docai") {
+      return await testSarvamDocAi(provider, apiKey, start);
     }
 
     // Standard chat completion test
@@ -147,10 +147,10 @@ export async function testInference(
 }
 
 /**
- * Sarvam-specific test: probe the status endpoint with a dummy job ID.
- * 401/403 = bad key; 404 = key valid, job not found (expected).
+ * Sarvam Document Intelligence test: probe the job status endpoint with a
+ * dummy job ID. 401/403 = bad key; 404 = key valid, job not found (expected).
  */
-async function testSarvam(
+async function testSarvamDocAi(
   provider: ProviderPreset,
   apiKey: string,
   start: number,
@@ -174,7 +174,7 @@ async function testSarvam(
       error: authenticated ? null : "auth_failed",
       errorExplanation: authenticated
         ? null
-        : "API key was rejected by Sarvam AI.",
+        : "API key was rejected by Sarvam Document Intelligence.",
     };
   } catch (err) {
     return {
@@ -184,7 +184,7 @@ async function testSarvam(
       modelAvailable: false,
       latencyMs: Date.now() - start,
       error: "unreachable",
-      errorExplanation: `Could not reach Sarvam AI: ${(err as Error)?.message}`,
+      errorExplanation: `Could not reach Sarvam Document Intelligence: ${(err as Error)?.message}`,
     };
   }
 }

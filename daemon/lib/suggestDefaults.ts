@@ -25,7 +25,7 @@ const JURISDICTION_DEFAULTS: Record<string, Record<InferenceSlot, Suggestion>> =
       reason: "Fast, free-tier primary — no vision needed for transaction parsing.",
     },
     secondary: {
-      providerId: "sarvam",
+      providerId: "sarvam-docai",
       modelId: "parse",
       reason: "Tuned for Indian financial documents (GST invoices, bank statement screenshots).",
     },

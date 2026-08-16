@@ -9,7 +9,7 @@
  */
 
 /** API protocol style the provider speaks. */
-export type ApiStyle = "openai" | "anthropic" | "gemini" | "ollama";
+export type ApiStyle = "openai" | "anthropic" | "gemini" | "ollama" | "sarvam-docai";
 
 /** Provider grouping for the picker UI. */
 export type ProviderTier = "core" | "regional" | "aggregator" | "local";

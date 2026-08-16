@@ -38,6 +38,16 @@ interface ProviderOverrideEntry {
   tier?: ProviderPreset["tier"];
   name?: string;
   docsUrl?: string;
+  logoUrl?: string;
+  models?: Array<{
+    id: string;
+    displayName?: string;
+    trust?: ModelRecord["trust"];
+    capabilities?: ModelCapabilities;
+    jurisdictionTags?: string[];
+    deprecated?: boolean;
+    notes?: string;
+  }>;
 }
 
 type OverridesMap = Record<string, OverrideEntry | ProviderOverrideEntry>;
@@ -136,6 +146,34 @@ export function loadCatalog(): ProviderPreset[] {
 
     return { ...mergedProvider, models: mergedModels };
   });
+
+  // Add entirely new providers defined in overrides (not in generated catalog)
+  const generatedProviderIds = new Set(generated.providers.map((p) => p.id));
+  for (const [key, val] of Object.entries(providerOverrides)) {
+    if (generatedProviderIds.has(key)) continue;
+    const pov = val as ProviderOverrideEntry;
+    if (!pov.baseUrl || !pov.models) continue; // Need at least baseUrl + models
+    cachedCatalog.push({
+      id: key,
+      name: pov.name ?? key,
+      ...(pov.logoUrl !== undefined && { logoUrl: pov.logoUrl }),
+      baseUrl: pov.baseUrl,
+      apiStyle: pov.apiStyle ?? "openai",
+      tier: pov.tier ?? "regional",
+      ...(pov.docsUrl !== undefined && { docsUrl: pov.docsUrl }),
+      models: pov.models
+        .filter((m) => !m.deprecated)
+        .map((m) => ({
+          id: m.id,
+          displayName: m.displayName ?? m.id,
+          providerId: key,
+          capabilities: m.capabilities ?? { chat: false, json: false, vision: false },
+          trust: m.trust ?? "community",
+          ...(m.jurisdictionTags !== undefined && { jurisdictionTags: m.jurisdictionTags }),
+          ...(m.notes !== undefined && { notes: m.notes }),
+        })),
+    });
+  }
 
   return cachedCatalog;
 }

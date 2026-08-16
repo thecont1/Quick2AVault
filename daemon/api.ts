@@ -42,7 +42,7 @@ import { loadCatalog, findProvider, findModel } from "./lib/catalog.js";
 import { eligibleModels } from "./lib/eligibility.js";
 import { CredentialManager } from "./lib/credentials.js";
 import { suggestDefaults, hasSuggestions } from "./lib/suggestDefaults.js";
-import { readSlotConfig, writeSlotConfig, migrateInferenceSettings } from "./lib/migrateInferenceSettings.js";
+import { readSlotConfig, writeSlotConfig, migrateInferenceSettings, validateSlotConfig } from "./lib/migrateInferenceSettings.js";
 import { testInference } from "./lib/testInference.js";
 import { PROVIDER_ALIASES, searchProviderIds } from "./data/providerAliases.js";
 import {
@@ -1457,8 +1457,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           .prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'")
           .get() as { value?: string } | undefined)?.value ?? "IN";
 
-        const primary = readSlotConfig(db, "primary");
-        const secondary = readSlotConfig(db, "secondary");
+        const catalog = loadCatalog();
+        const primary = validateSlotConfig(readSlotConfig(db, "primary"), catalog);
+        const secondary = validateSlotConfig(readSlotConfig(db, "secondary"), catalog);
 
         const credMgr = secrets ? new CredentialManager(secrets) : null;
         const providerIds = [
