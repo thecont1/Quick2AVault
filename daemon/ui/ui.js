@@ -50,10 +50,15 @@ setInterval(async () => {
   }
 }, 15000);
 
-// Stamp the UI build into the footer — confirms which code a browser runs.
+// Stamp the UI build in a fixed corner badge — confirms which code a
+// browser actually runs (the footer gets repopulated by setFooter later).
 try {
-  const f = document.getElementById("footer");
-  if (f) f.textContent = (f.textContent ? f.textContent + " · " : "") + "ui " + UI_VERSION;
+  const badge = document.createElement("div");
+  badge.style.cssText =
+    "position:fixed;bottom:8px;right:10px;z-index:9999;" +
+    "font:10px Menlo,monospace;color:#999;opacity:.75;pointer-events:none";
+  badge.textContent = "ui " + UI_VERSION;
+  document.body.appendChild(badge);
 } catch { /* ignore */ }
 const apiPost = (p, body) => fetch(p, {
   method: "POST", headers: { ...H, "content-type": "application/json" },
