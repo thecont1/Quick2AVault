@@ -654,11 +654,12 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       //
       // Three verbs behind the detail footer's "Reprocess", "Remove from
       // active" and "Delete permanently". Each is deliberately conservative:
-      //   reprocess         re-enqueues the analyse phase; the JobWorker drains
-      //                     it and idempotency (transaction_documents unique on
-      //                     document_id+evidence_role) guarantees no second
-      //                     economic event. If markdown was never produced it
-      //                     re-runs convert first. Reactivates a removed doc.
+      //   reprocess         re-runs the FULL chain — conversion from the
+      //                     original bytes, then analysis (the convert job
+      //                     enqueues the analyse job on completion). Idempotency
+      //                     (transaction_documents unique on document_id +
+      //                     evidence_role) guarantees no second economic event.
+      //                     Reactivates a removed doc.
       //   remove-from-active soft state only: the original file and every claim
       //                     stay on disk; the doc is hidden from Review and its
       //                     search index entry is dropped. Fully reversible.
@@ -670,13 +671,15 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         if (rm && req.method === "POST") {
           const documentId = decodeURIComponent(rm[1]);
           const doc = db
-            .prepare("SELECT id, markdown_path, markdown_chars, lifecycle FROM documents WHERE id=?")
-            .get(documentId) as
-            | { id: string; markdown_path: string | null; markdown_chars: number | null; lifecycle: string }
-            | undefined;
+            .prepare("SELECT id, lifecycle FROM documents WHERE id=?")
+            .get(documentId) as { id: string; lifecycle: string } | undefined;
           if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
           if (doc.lifecycle === "deleted") return send(res, 409, { error: "document_deleted", document_id: documentId });
-          const phase = doc.markdown_path && doc.markdown_chars ? "analyse" : "convert";
+          // Always restart from the original bytes: a botched conversion needs
+          // this rescan, and a clean one just pays a cheap idempotent
+          // re-convert. The convert job enqueues analyse on completion, so a
+          // single "convert" enqueue drains the entire chain.
+          const phase = "convert";
           // Reprocess is a new canonical pipeline epoch. Preserve the append-only
           // event history, but reset the current-state pointer and replay the
           // legal prefix up to the phase the worker will enter. Weakening the
@@ -687,9 +690,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               db.prepare("UPDATE documents SET lifecycle='active' WHERE id=?").run(documentId);
             }
             db.prepare("DELETE FROM document_pipeline WHERE document_id=?").run(documentId);
-            const prefix = phase === "analyse"
-              ? ["received", "stable", "hashed", "triaged", "converting"] as const
-              : ["received", "stable", "hashed", "triaged"] as const;
+            const prefix = ["received", "stable", "hashed", "triaged"] as const;
             for (const toState of prefix) {
               transitionPipeline(db, {
                 documentId,

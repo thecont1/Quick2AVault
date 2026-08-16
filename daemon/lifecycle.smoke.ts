@@ -3,7 +3,7 @@
  *   npx tsx daemon/lifecycle.smoke.ts
  *
  * Pins the three verbs behind the Glaze detail footer end-to-end over HTTP:
- *   POST   /v1/documents/:id/reprocess          re-enqueues analysis, reactivates
+ *   POST   /v1/documents/:id/reprocess          re-converts then re-analyses, reactivates
  *   POST   /v1/documents/:id/remove-from-active  soft-hide, file + claims kept
  *   DELETE /v1/documents/:id                     permanent, bytes unlinked, tombstoned
  *
@@ -45,15 +45,15 @@ function testPorts(vault: string): Ports {
     logger,
     clock: systemClock,
     paths: createPaths(vault),
-    // A converter that always yields a little markdown, so a convert-phase
-    // reprocess of a document without markdown still succeeds deterministically.
+    // A converter that always yields a little markdown, so the reprocess
+    // chain's convert leg succeeds deterministically.
     converter: { async toMarkdown() { return { markdown: "# Reprocessed\n\nTotal: 100.00", converter: "plaintext", converterVersion: "test" }; } },
     bus: createEventBus(logger),
   };
 }
 
-// A deterministic AI that produces one simple invoice extraction, so an
-// analyse-phase reprocess exercises the real job path without a network call.
+// A deterministic AI that produces one simple invoice extraction, so the
+// analyse leg of a reprocess exercises the real job path without a network call.
 const fakeAi: MutableAiProvider = {
   available: true,
   model: "test",
@@ -151,18 +151,19 @@ const reproRes = await req("POST", "/v1/documents/doc_remove_B/reprocess");
 await check("reprocess of a removed doc returns 200 and reactivates it", async () => {
   assert.equal(reproRes.status, 200);
   assert.equal(reproRes.json?.reprocessing, true);
+  assert.equal(reproRes.json?.phase, "convert");
   const row = db.prepare("SELECT lifecycle FROM documents WHERE id=?").get("doc_remove_B") as { lifecycle: string };
   assert.equal(row.lifecycle, "active");
 });
-await check("reprocess enqueues an analyse job for the reactivated document", async () => {
+await check("reprocess enqueues a convert job, never analyse-only", async () => {
   const job = db
     .prepare("SELECT phase, state FROM jobs WHERE document_id=? ORDER BY id DESC LIMIT 1")
     .get("doc_remove_B") as { phase: string; state: string } | undefined;
   assert.ok(job, "a job row must exist after reprocess");
-  assert.equal(job!.phase, "analyse", "a document with markdown reprocesses at the analyse phase");
+  assert.equal(job!.phase, "convert", "reprocess must start from the original bytes");
   assert.equal(job!.state, "pending");
 });
-await check("reprocess drains through the real worker to done", async () => {
+await check("reprocess drains the full convert→analyse chain to done", async () => {
   const worker = new JobWorker(db, ports, nullAiProvider);
   for (let i = 0; i < 6; i++) {
     const job = db
@@ -171,10 +172,17 @@ await check("reprocess drains through the real worker to done", async () => {
     if (job?.state === "done") break;
     await worker.tick();
   }
-  const job = db
-    .prepare("SELECT state FROM jobs WHERE document_id=? ORDER BY id DESC LIMIT 1")
-    .get("doc_remove_B") as { state: string } | undefined;
-  assert.equal(job?.state, "done");
+  const jobs = db
+    .prepare("SELECT phase, state FROM jobs WHERE document_id=? ORDER BY id DESC")
+    .all("doc_remove_B") as { phase: string; state: string }[];
+  assert.ok(jobs.length >= 2, "convert and analyse jobs must both exist");
+  assert.equal(jobs[0]!.phase, "analyse", "analysis must be the last leg of the chain");
+  assert.ok(jobs.every((j) => j.state === "done"), jobs.map((j) => `${j.phase}:${j.state}`).join(","));
+});
+await check("reprocess re-converts the markdown from the original bytes", () => {
+  const row = db.prepare("SELECT markdown_path FROM documents WHERE id=?").get("doc_remove_B") as { markdown_path: string };
+  assert.ok(row.markdown_path, "markdown_path must exist after re-conversion");
+  assert.ok(fs.readFileSync(row.markdown_path, "utf-8").includes("Reprocessed"), "the converter must have re-run");
 });
 await check("a reactivated document is listed again", async () => {
   const ids = await listIds();
