@@ -73,11 +73,16 @@
      SETTINGS TAB
 ════════════════════════════════════════════════════════════════════════ -->
 <div class="tab" id="tab-settings">
+  <!-- Suggestion banners (shown only when jurisdiction suggestions exist and slot is unset) -->
+  <div id="suggestionBanners"></div>
+
   <div class="settings-cols">
       <div class="panel">
-        <h3>Inference provider — primary</h3>
+        <h3>Primary inference</h3>
+        <div class="hint" style="margin-bottom:10px">Used for fast text tasks like categorization, normalization, and short explanations.</div>
         <div class="field">
           <label>Provider</label>
+          <input type="text" id="aiProviderSearch" placeholder="Search providers…" style="margin-bottom:6px">
           <select id="aiProvider"></select>
         </div>
         <div class="field" id="aiCustomUrlRow" style="display:none">
@@ -90,23 +95,28 @@
         </div>
         <div class="field">
           <label>API key</label>
-          <input type="password" id="aiApiKey" placeholder="paste your API key">
-          <div class="hint" id="aiKeySrc"></div>
+          <div id="aiKeyContainer">
+            <input type="password" id="aiApiKey" placeholder="paste your API key">
+            <div class="hint" id="aiKeySrc"></div>
+          </div>
         </div>
         <div class="field">
           <label>Model</label>
           <select id="aiModel"><option value="">select a provider first</option></select>
+          <div class="hint" id="aiModelNote"></div>
         </div>
         <div class="save-row">
-          <button class="act" id="aiTest">Test</button>
+          <button class="act" id="aiTest">Test connection</button>
           <span class="msg" id="aiMsg"></span>
         </div>
       </div>
 
       <div class="panel">
-        <h3>Inference provider — secondary (vision / fallback)</h3>
+        <h3>Secondary inference</h3>
+        <div class="hint" style="margin-bottom:10px">Used for image and document tasks like receipts, screenshots, and scanned statements.</div>
         <div class="field">
           <label>Provider</label>
+          <input type="text" id="ai2ProviderSearch" placeholder="Search providers…" style="margin-bottom:6px">
           <select id="ai2Provider"></select>
         </div>
         <div class="field" id="ai2CustomUrlRow" style="display:none">
@@ -119,18 +129,55 @@
         </div>
         <div class="field">
           <label>API key</label>
-          <input type="password" id="ai2ApiKey" placeholder="paste your API key">
-          <div class="hint" id="ai2KeySrc"></div>
+          <div id="ai2KeyContainer">
+            <input type="password" id="ai2ApiKey" placeholder="paste your API key">
+            <div class="hint" id="ai2KeySrc"></div>
+          </div>
         </div>
         <div class="field" id="ai2ModelRow">
           <label>Model</label>
           <select id="ai2Model"><option value="">select a provider first</option></select>
+          <div class="hint" id="ai2ModelNote"></div>
         </div>
         <div class="save-row">
-          <button class="act" id="ai2Test">Test</button>
+          <button class="act" id="ai2Test">Test connection</button>
           <span class="msg" id="ai2Msg"></span>
         </div>
       </div>
+  </div>
+
+  <!-- Custom provider (always last, clearly labeled as manual/unsupported) -->
+  <div class="panel" style="margin-top:7px" id="customProviderPanel">
+    <h3>Custom provider</h3>
+    <div class="hint" style="margin-bottom:10px;color:var(--warn)">No compatibility checks are performed for custom providers. Use this only if your provider isn't in the catalog above.</div>
+    <div class="settings-cols">
+      <div class="field">
+        <label>Display name</label>
+        <input type="text" id="customName" placeholder="My Provider">
+      </div>
+      <div class="field">
+        <label>Base URL</label>
+        <input type="text" id="customBaseUrl" placeholder="https://your-provider.com/v1">
+      </div>
+      <div class="field">
+        <label>API style</label>
+        <select id="customApiStyle">
+          <option value="openai">OpenAI-compatible</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="gemini">Gemini</option>
+          <option value="ollama">Ollama</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Model ID</label>
+        <input type="text" id="customModelId" placeholder="model-id">
+      </div>
+    </div>
+    <div class="save-row">
+      <button class="act" id="customSavePrimary">Use as Primary</button>
+      <button class="act" id="customSaveSecondary">Use as Secondary</button>
+      <span class="msg" id="customMsg"></span>
+    </div>
   </div>
 
   <div class="settings-cols" style="margin-top:7px">

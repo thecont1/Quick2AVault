@@ -1,77 +1,124 @@
 // ════════════════════════════════════════════════════════════════════════
-// SETTINGS TAB
+// SETTINGS TAB — curated provider catalog + eligibility-based model picker
 // ════════════════════════════════════════════════════════════════════════
 
-// Known LLM providers. The user picks one from a dropdown; the base URL is
-// set automatically. "Custom" lets them type their own.
-// Alphabetical by name (Custom forced to last).
-const PROVIDERS = [
-  { id: "alibaba",    name: "Alibaba Cloud",       baseUrl: "https://dashscope-intl.aliyuncs.com/api/v1" },
-  { id: "anthropic",  name: "Anthropic",           baseUrl: "https://api.anthropic.com/v1" },
-  { id: "groq",       name: "Groq",                baseUrl: "https://api.groq.com/openai/v1" },
-  { id: "kimi",       name: "Kimi (Moonshot AI)",  baseUrl: "https://api.moonshot.ai/v1" },
-  { id: "minimax",    name: "MiniMax",             baseUrl: "https://api.minimax.io/v1" },
-  { id: "mimo",       name: "MiMo (Xiaomi)",       baseUrl: "https://api.xiaomimimo.com/v1" },
-  { id: "openai",     name: "OpenAI",              baseUrl: "https://api.openai.com/v1" },
-  { id: "openrouter", name: "OpenRouter",          baseUrl: "https://openrouter.ai/api/v1" },
-  { id: "perplexity", name: "Perplexity",          baseUrl: "https://api.perplexity.ai/v1" },
-  { id: "poolside",   name: "Poolside",            baseUrl: "https://inference.poolside.ai/v1" },
-  // Sarvam AI: document intelligence provider for the India jurisdiction.
-  // Uses a different API protocol (async job + multipart, not chat completions),
-  // but is presented in the same dropdown so the user configures it as the
-  // secondary provider. Auto-selected when India jurisdiction is active.
-  { id: "sarvam",     name: "Sarvam AI (Doc Intelligence)", baseUrl: "https://api.sarvam.ai/doc-ai/v1" },
-  { id: "together",   name: "Together AI",         baseUrl: "https://api.together.ai/v1" },
-  { id: "custom",     name: "Custom",              baseUrl: "" },
-];
+// Catalog state — loaded from /v1/settings/catalog
+let CATALOG = [];
+let CREDENTIALS = {};
+let SUGGESTIONS = {};
+let ACTIVE_JURISDICTION = "IN";
 
-function providerIdForBaseUrl(baseUrl) {
-  const p = PROVIDERS.find((p) => p.baseUrl && p.baseUrl === baseUrl);
-  return p ? p.id : (baseUrl ? "custom" : "");
-}
-
-function fillProviderDropdown(selectId, currentBaseUrl) {
-  const sel = document.getElementById(selectId);
-  const currentId = providerIdForBaseUrl(currentBaseUrl);
-  sel.innerHTML = PROVIDERS.map((p) =>
-    "<option value='" + esc(p.id) + "'" + (p.id === currentId ? " selected" : "") + ">"
-    + esc(p.name) + "</option>").join("");
-}
-
-// The masked key shown in the text box (first4*******last4). Stored at load
-// time so saveAi can detect when the user hasn't touched the field.
-let primaryKeyMask = "";
-let secondaryKeyMask = "";
-// Per-provider key inventory from the backend: { openai: { set: true, mask: "..." }, ... }
-let providerKeys = {};
-let secondaryProviderKeys = {};
-// Track the current provider IDs so we can save keys per-provider on switch.
+// Track current provider IDs for each slot
 let currentPrimaryProviderId = "";
 let currentSecondaryProviderId = "";
 
+// ── Trust badge rendering ────────────────────────────────────────────────
+function trustBadge(trust) {
+  if (trust === "verified") return " <span style='color:var(--ok)'>●</span>";
+  if (trust === "community") return " <span style='color:var(--faint)'>●</span>";
+  return " <span style='color:var(--warn)'>●</span>";
+}
+
+// ── Provider grouping ────────────────────────────────────────────────────
+const TIER_LABELS = {
+  core: "CORE",
+  regional: "REGIONAL",
+  aggregator: "AGGREGATORS",
+  local: "LOCAL",
+};
+const TIER_ORDER = ["core", "regional", "aggregator", "local"];
+
+/**
+ * Build the provider dropdown with tier grouping.
+ * Aggregators are collapsed behind an <optgroup> (browsers show them
+ * when the user scrolls, but they're visually separated).
+ */
+function buildProviderDropdown(selectId, currentProviderId) {
+  const sel = document.getElementById(selectId);
+  const grouped = {};
+  for (const p of CATALOG) {
+    if (!grouped[p.tier]) grouped[p.tier] = [];
+    grouped[p.tier].push(p);
+  }
+
+  let html = "";
+  for (const tier of TIER_ORDER) {
+    const providers = grouped[tier] || [];
+    if (providers.length === 0) continue;
+    html += `<optgroup label="${TIER_LABELS[tier]}">`;
+    for (const p of providers) {
+      html += `<option value="${esc(p.id)}"${p.id === currentProviderId ? " selected" : ""}>${esc(p.name)}</option>`;
+    }
+    html += "</optgroup>";
+  }
+  // Custom is always last, outside all groups
+  html += `<optgroup label="CUSTOM"><option value="custom"${currentProviderId === "custom" ? " selected" : ""}>Custom provider…</option></optgroup>`;
+  sel.innerHTML = html;
+}
+
+/**
+ * Filter the provider dropdown by search query.
+ * Uses provider aliases for fuzzy matching (e.g. "gemini" → Google).
+ */
+function filterProviderDropdown(selectId, query) {
+  const sel = document.getElementById(selectId);
+  const q = query.toLowerCase().trim();
+  if (!q) {
+    // Restore full list — rebuild without filter
+    const currentId = sel.value;
+    const which = selectId === "aiProvider" ? "primary" : "secondary";
+    buildProviderDropdown(selectId, currentId);
+    return;
+  }
+  // Hide options that don't match
+  for (const opt of sel.querySelectorAll("option")) {
+    const pid = opt.value;
+    if (pid === "custom") { opt.hidden = false; continue; }
+    const provider = CATALOG.find((p) => p.id === pid);
+    if (!provider) { opt.hidden = true; continue; }
+    const name = provider.name.toLowerCase();
+    const matches = name.includes(q) || pid.toLowerCase().includes(q);
+    opt.hidden = !matches;
+  }
+}
+
+// ── Load settings ────────────────────────────────────────────────────────
 async function loadSettings() {
+  // Load the catalog first (needed for provider dropdowns)
+  try {
+    const cat = await api("/v1/settings/catalog");
+    CATALOG = cat.providers || [];
+    CREDENTIALS = cat.credentials || {};
+    SUGGESTIONS = cat.suggestions || {};
+    ACTIVE_JURISDICTION = cat.jurisdiction || "IN";
+  } catch {
+    // Catalog endpoint not available — fall back to old settings load
+    CATALOG = [];
+  }
+
+  // Load the inference slot config
+  let inference = null;
+  try {
+    inference = await api("/v1/settings/inference");
+  } catch {
+    // Fall back to old settings
+  }
+
+  // Also load old settings for jurisdiction, vault, gmail
   const s = await api("/v1/settings");
   const ai = s.ai || {};
 
-  // Store per-provider key inventory for swapping keys on provider change.
-  providerKeys = ai.provider_keys || {};
-  secondaryProviderKeys = ai.provider_keys || {};
+  // ── Primary inference ──────────────────────────────────────────────────
+  const primProviderId = inference?.primary?.providerId || ai.base_url ? providerIdFromCatalog(ai.base_url) : "";
+  const primModelId = inference?.primary?.modelId || ai.model || "";
 
-  // Primary provider
-  fillProviderDropdown("aiProvider", ai.base_url || "");
+  buildProviderDropdown("aiProvider", primProviderId);
   currentPrimaryProviderId = document.getElementById("aiProvider").value;
   document.getElementById("aiBaseUrl").value = ai.base_url || "";
-  onProviderChange("primary", ai.model || "");
-  document.getElementById("aiKeySrc").innerHTML = ai.api_key_set
-    ? "<span class='ok'>key set via " + esc(ai.api_key_source) + "</span>"
-    : "<span class='warn'>no key configured</span>";
-  primaryKeyMask = ai.api_key_mask || "";
-  const aiKeyInput = document.getElementById("aiApiKey");
-  aiKeyInput.value = primaryKeyMask;
-  aiKeyInput.placeholder = ai.api_key_set ? "type a new key to replace" : "paste your API key";
+  onProviderChange("primary", primModelId);
+  updateKeyUI("primary", currentPrimaryProviderId);
 
-  // Jurisdiction — loaded BEFORE the secondary provider so we can auto-select
-  // Sarvam AI when the India jurisdiction pack is active.
+  // ── Jurisdiction (loaded before secondary for auto-select) ─────────────
   const jur = s.jurisdiction || {};
   const sel = document.getElementById("jurSelect");
   sel.innerHTML = (jur.available || []).map((p) =>
@@ -80,95 +127,86 @@ async function loadSettings() {
   document.getElementById("jurInfo").innerHTML =
     "Currency <b>" + esc(jur.currency) + "</b> · FY " + esc(jur.fy_label)
     + " · dates " + esc(jur.date_format) + " · grouping " + esc(jur.grouping);
+  ACTIVE_JURISDICTION = jur.id || "IN";
 
-  // Secondary provider
-  // When the India jurisdiction is active and the user hasn't explicitly
-  // configured a secondary, auto-select Sarvam AI (document intelligence).
-  // The user is free to change this — the auto-select only fires when no
-  // secondary base_url is saved.
+  // ── Secondary inference ────────────────────────────────────────────────
   const sec = ai.secondary || {};
-  const sarvamBaseUrl = "https://api.sarvam.ai/doc-ai/v1";
-  const isIndia = jur.id === "IN";
-  const noSecondaryConfigured = !sec.base_url && !sec.model;
-  const effectiveSecBaseUrl = (isIndia && noSecondaryConfigured) ? sarvamBaseUrl : (sec.base_url || "");
-  fillProviderDropdown("ai2Provider", effectiveSecBaseUrl);
-  currentSecondaryProviderId = document.getElementById("ai2Provider").value;
-  document.getElementById("ai2BaseUrl").value = effectiveSecBaseUrl;
-  const secModelForLoad = currentSecondaryProviderId === "sarvam" ? "Sarvam Parse" : (sec.model || "");
-  onProviderChange("secondary", secModelForLoad);
-  secondaryKeyMask = sec.api_key_mask || "";
-  document.getElementById("ai2KeySrc").innerHTML = sec.api_key_set
-    ? "<span class='ok'>key set via " + esc(sec.api_key_source || "keychain") + "</span>"
-    : "<span class='warn'>no key configured</span>";
-  const ai2KeyInput = document.getElementById("ai2ApiKey");
-  ai2KeyInput.value = secondaryKeyMask;
-  ai2KeyInput.placeholder = sec.api_key_set ? "type a new key to replace" : "paste your API key";
+  const secProviderId = inference?.secondary?.providerId || (sec.base_url ? providerIdFromCatalog(sec.base_url) : "");
+  const secModelId = inference?.secondary?.modelId || sec.model || "";
 
-  // Vault
+  buildProviderDropdown("ai2Provider", secProviderId);
+  currentSecondaryProviderId = document.getElementById("ai2Provider").value;
+  document.getElementById("ai2BaseUrl").value = sec.base_url || "";
+  onProviderChange("secondary", secModelId);
+  updateKeyUI("secondary", currentSecondaryProviderId);
+
+  // ── Suggestion banners ─────────────────────────────────────────────────
+  renderSuggestions(inference);
+
+  // ── Vault summary ──────────────────────────────────────────────────────
   const v = s.vault || {};
   document.getElementById("vRoot").textContent = v.root || "—";
   document.getElementById("vDrop").textContent = v.drop || "—";
   document.getElementById("vDb").textContent = v.db || "—";
-  // Initial state — testAi will update these with the real result.
-  document.getElementById("vAi").innerHTML = ai.active_model
-    ? "<span style='color:var(--faint)'>testing " + esc(ai.active_model) + "…</span>"
-    : "<span style='color:var(--bad)'>no primary model</span>";
-  document.getElementById("vAi2").innerHTML = sec.model
-    ? "<span style='color:var(--faint)'>testing " + esc(sec.model) + "…</span>"
-    : "<span style='color:var(--faint)'>no secondary model</span>";
+  updateVaultSummary(inference);
 
-  // Gmail
+  // ── Gmail ──────────────────────────────────────────────────────────────
   const g = s.gmail || {};
   document.getElementById("gAddr").textContent = g.address || "not configured";
   document.getElementById("gStatus").textContent = g.status || "—";
-  // Default the date picker to today if the user hasn't set it yet.
   const gDate = document.getElementById("gAfterDate");
   if (!gDate.value) gDate.value = new Date().toISOString().slice(0, 10);
 
-  // Auto-test both inference providers so the user sees a green/red status
-  // the moment they open Settings — no need to click Test manually.
+  // Auto-test both inference providers
   testAi("primary");
   testAi("secondary");
 }
 
-function providerBaseUrl(which) {
-  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
-  const p = PROVIDERS.find((p) => p.id === sel.value);
-  if (!p) return "";
-  if (p.id === "custom") {
-    const input = document.getElementById(which === "primary" ? "aiBaseUrl" : "ai2BaseUrl");
-    return input.value.trim();
-  }
-  return p.baseUrl;
+/**
+ * Map a base URL to a provider ID from the catalog.
+ */
+function providerIdFromCatalog(baseUrl) {
+  if (!baseUrl) return "";
+  const normalized = baseUrl.replace(/\/$/, "");
+  const provider = CATALOG.find((p) => p.baseUrl.replace(/\/$/, "") === normalized);
+  return provider ? provider.id : "custom";
 }
 
 /**
- * Called when the provider dropdown changes (or on initial load).
- * Shows the base URL (read-only for known providers, editable for Custom),
- * and fetches the model list to populate the model dropdown.
- *
- * @param which "primary" | "secondary"
- * @param savedModel  the model currently saved in the backend (to pre-select)
+ * Get the base URL for the currently selected provider in a slot.
+ */
+function providerBaseUrl(which) {
+  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
+  const pid = sel.value;
+  if (pid === "custom") {
+    const input = document.getElementById(which === "primary" ? "aiBaseUrl" : "ai2BaseUrl");
+    return input.value.trim();
+  }
+  const provider = CATALOG.find((p) => p.id === pid);
+  return provider ? provider.baseUrl : "";
+}
+
+/**
+ * Called when the provider dropdown changes.
+ * Shows the base URL (read-only for catalog providers, editable for Custom),
+ * and populates the model dropdown using eligibleModels() for that slot.
  */
 function onProviderChange(which, savedModel) {
   const isPrimary = which === "primary";
   const sel = document.getElementById(isPrimary ? "aiProvider" : "ai2Provider");
   const pid = sel.value;
-  const provider = PROVIDERS.find((p) => p.id === pid);
+  const provider = CATALOG.find((p) => p.id === pid);
   const baseUrl = provider ? provider.baseUrl : "";
 
-  // Base URL: show read-only for known providers, editable for Custom
+  // Base URL: read-only for catalog providers, editable for Custom
   const customUrlRow = document.getElementById(isPrimary ? "aiCustomUrlRow" : "ai2CustomUrlRow");
   const urlRow = document.getElementById(isPrimary ? "aiUrlRow" : "ai2UrlRow");
-  const baseUrlInput = document.getElementById(isPrimary ? "aiBaseUrl" : "ai2BaseUrl");
   const baseUrlRoInput = document.getElementById(isPrimary ? "aiBaseUrlRo" : "ai2BaseUrlRo");
 
   if (pid === "custom") {
-    // Custom: show the editable field, hide the read-only field
     if (customUrlRow) customUrlRow.style.display = "";
     if (urlRow) urlRow.style.display = "none";
   } else {
-    // Known provider: show read-only with the provider's base URL
     if (customUrlRow) customUrlRow.style.display = "none";
     if (urlRow) urlRow.style.display = "";
     if (baseUrlRoInput) baseUrlRoInput.value = baseUrl;
@@ -176,220 +214,447 @@ function onProviderChange(which, savedModel) {
 
   // Model dropdown
   const modelSelect = document.getElementById(isPrimary ? "aiModel" : "ai2Model");
+  const modelNote = document.getElementById(isPrimary ? "aiModelNote" : "ai2ModelNote");
 
-  // Sarvam: fixed model, disable the dropdown
-  if (pid === "sarvam") {
-    modelSelect.innerHTML = "<option value='Sarvam Parse'>Sarvam Parse</option>";
-    modelSelect.value = "Sarvam Parse";
-    modelSelect.disabled = true;
-    modelSelect.style.opacity = "0.6";
+  // Custom provider: free-text model ID (use a text input)
+  if (pid === "custom") {
+    modelSelect.style.display = "none";
+    // Create or show a text input for custom model ID
+    let modelInput = document.getElementById(isPrimary ? "aiModelText" : "ai2ModelText");
+    if (!modelInput) {
+      modelInput = document.createElement("input");
+      modelInput.type = "text";
+      modelInput.id = isPrimary ? "aiModelText" : "ai2ModelText";
+      modelInput.placeholder = "model-id";
+      modelInput.style.width = "100%";
+      modelSelect.parentNode.appendChild(modelInput);
+      modelInput.oninput = () => autoSave(which);
+    }
+    modelInput.style.display = "";
+    modelInput.value = savedModel || "";
+    if (modelNote) modelNote.textContent = "";
     return;
   }
 
-  // Other providers: enable the dropdown and fetch models
+  // Catalog provider: use the select dropdown
+  modelSelect.style.display = "";
+  const modelInput = document.getElementById(isPrimary ? "aiModelText" : "ai2ModelText");
+  if (modelInput) modelInput.style.display = "none";
+
+  if (!provider) {
+    modelSelect.innerHTML = "<option value=''>select a provider first</option>";
+    modelSelect.disabled = true;
+    return;
+  }
+
+  // Get eligible models for this provider + slot + jurisdiction
+  const slot = isPrimary ? "primary" : "secondary";
+  const result = eligibleModelsForProvider(provider, slot, ACTIVE_JURISDICTION);
+
+  if (result.models.length === 0) {
+    modelSelect.innerHTML = "<option value=''>No eligible models for this provider in this role</option>";
+    modelSelect.disabled = true;
+    modelSelect.style.opacity = "0.6";
+    if (modelNote) modelNote.textContent = "";
+    return;
+  }
+
   modelSelect.disabled = false;
   modelSelect.style.opacity = "";
-  // Show a placeholder while fetching
-  modelSelect.innerHTML = "<option value=''>fetching models…</option>";
-  if (savedModel) {
-    // Temporarily add the saved model so it's visible immediately,
-    // even before the fetch completes. autoFetchModels will replace
-    // the list and re-select it.
-    modelSelect.innerHTML = "<option value='" + esc(savedModel) + "'>" + esc(savedModel) + "</option>";
-    modelSelect.value = savedModel;
+
+  // Build options with trust badges
+  let html = "";
+  if (savedModel && !result.models.find((m) => m.id === savedModel)) {
+    // Saved model not in eligible list — add it at top as "(saved)"
+    html += `<option value="${esc(savedModel)}">${esc(savedModel)} (saved)</option>`;
   }
-  autoFetchModels(which, savedModel);
+  for (const m of result.models) {
+    const selected = m.id === savedModel ? " selected" : "";
+    const badge = trustBadge(m.trust);
+    const notes = m.notes ? ` — ${esc(m.notes.slice(0, 60))}` : "";
+    html += `<option value="${esc(m.id)}"${selected}>${esc(m.displayName)}${badge}${notes}</option>`;
+  }
+  // "Other model ID (advanced)" — always at the bottom
+  html += `<option value="__other__">Other model ID (advanced)…</option>`;
+  modelSelect.innerHTML = html;
+  if (savedModel) modelSelect.value = savedModel;
+
+  // Show jurisdiction fallback note
+  if (modelNote) {
+    modelNote.textContent = result.jurisdictionFallback ? result.note : "";
+  }
 }
 
-async function autoFetchModels(which, savedModel) {
-  const baseUrl = providerBaseUrl(which);
-  if (!baseUrl) return;
+/**
+ * Filter a provider's models by eligibility for a slot.
+ */
+function eligibleModelsForProvider(provider, slot, jurisdiction) {
+  // Client-side eligibility filter (mirrors daemon/lib/eligibility.ts)
+  // Primary: chat && json. Secondary: vision && json (chat optional —
+  // doc-intelligence models like Sarvam Parse have vision+json but not chat).
+  const baseFiltered = provider.models
+    .filter((m) => !m.deprecated)
+    .filter((m) => m.capabilities.json)
+    .filter((m) => {
+      if (slot === "primary") return m.capabilities.chat;
+      return m.capabilities.vision;
+    });
+
+  const jurisdictionMatched = baseFiltered.filter(
+    (m) => !m.jurisdictionTags || m.jurisdictionTags.includes(jurisdiction),
+  );
+
+  const trustSort = (a, b) => {
+    if (a.trust !== b.trust) return a.trust === "verified" ? -1 : 1;
+    return a.displayName.localeCompare(b.displayName);
+  };
+
+  if (jurisdictionMatched.length > 0) {
+    return {
+      models: [...jurisdictionMatched].sort(trustSort),
+      jurisdictionFallback: false,
+      note: null,
+    };
+  }
+
+  return {
+    models: [...baseFiltered].sort(trustSort),
+    jurisdictionFallback: true,
+    note: `No jurisdiction-tagged model found for ${jurisdiction}; showing all eligible models.`,
+  };
+}
+
+/**
+ * Update the API key UI for a slot based on whether the provider has a saved key.
+ * If a key exists: show "Using saved key for {provider} · Rotate key"
+ * If not: show the inline input, required before Test enables.
+ */
+function updateKeyUI(which, providerId) {
   const isPrimary = which === "primary";
-  const modelSelect = document.getElementById(isPrimary ? "aiModel" : "ai2Model");
+  const container = document.getElementById(isPrimary ? "aiKeyContainer" : "ai2KeyContainer");
   const keyInput = document.getElementById(isPrimary ? "aiApiKey" : "ai2ApiKey");
-  const key = keyInput.value;
-  const mask = isPrimary ? primaryKeyMask : secondaryKeyMask;
-  // If the user hasn't changed the mask, send empty string — the backend will
-  // use the stored key from the secret store.
-  const apiKey = key && key !== mask ? key : "";
-  try {
-    const r = await apiPost("/v1/settings/models", { base_url: baseUrl, api_key: apiKey });
-    if (r.error) {
-      // Fetch failed — keep the saved model if we have one, otherwise show error
-      if (savedModel) {
-        modelSelect.innerHTML = "<option value='" + esc(savedModel) + "'>" + esc(savedModel) + "</option>";
-        modelSelect.value = savedModel;
-      } else {
-        modelSelect.innerHTML = "<option value=''>could not fetch models</option>";
-      }
-      return;
-    }
-    const models = r.models || [];
-    if (models.length === 0) {
-      if (savedModel) {
-        modelSelect.innerHTML = "<option value='" + esc(savedModel) + "'>" + esc(savedModel) + "</option>";
-        modelSelect.value = savedModel;
-      } else {
-        modelSelect.innerHTML = "<option value=''>no models available</option>";
-      }
-      return;
-    }
-    // Build the dropdown, pre-selecting the saved model if it's in the list
-    const hasSaved = savedModel && models.includes(savedModel);
-    modelSelect.innerHTML = models.map((m) =>
-      "<option value='" + esc(m) + "'" + (hasSaved && m === savedModel ? " selected" : "") + ">"
-      + esc(m) + "</option>").join("");
-    if (hasSaved) {
-      modelSelect.value = savedModel;
-    } else if (savedModel) {
-      // Saved model not in the fetched list — add it at the top
-      modelSelect.innerHTML = "<option value='" + esc(savedModel) + "'>" + esc(savedModel) + " (saved)</option>"
-        + modelSelect.innerHTML;
-      modelSelect.value = savedModel;
-    }
-  } catch { /* silent — the saved model (if any) is already shown */ }
+  const keySrc = document.getElementById(isPrimary ? "aiKeySrc" : "ai2KeySrc");
+
+  const cred = CREDENTIALS[providerId];
+  const hasKey = cred?.hasKey;
+
+  if (hasKey) {
+    // Show collapsed "using saved key" with rotate option
+    const provider = CATALOG.find((p) => p.id === providerId);
+    const providerName = provider ? provider.name : providerId;
+    keyInput.style.display = "none";
+    keySrc.innerHTML = `<span class='ok'>Using saved key for ${esc(providerName)}</span> · <a href="#" onclick="rotateKey('${which}');return false" style="color:var(--dim)">Rotate key</a>`;
+    keyInput.value = "";
+  } else {
+    // Show inline input
+    keyInput.style.display = "";
+    keyInput.value = "";
+    keyInput.placeholder = "paste your API key";
+    keySrc.innerHTML = "<span class='warn'>no key configured</span>";
+  }
 }
 
+/**
+ * Expand the key input for rotation.
+ */
+function rotateKey(which) {
+  const isPrimary = which === "primary";
+  const keyInput = document.getElementById(isPrimary ? "aiApiKey" : "ai2ApiKey");
+  const keySrc = document.getElementById(isPrimary ? "aiKeySrc" : "ai2KeySrc");
+  keyInput.style.display = "";
+  keyInput.value = "";
+  keyInput.placeholder = "type a new key to replace";
+  keyInput.focus();
+  keySrc.innerHTML = "<span class='warn'>entering new key…</span>";
+}
+
+/**
+ * Render jurisdiction-aware suggestion banners.
+ * Only shown when suggestions exist AND the slot is unconfigured.
+ */
+function renderSuggestions(inference) {
+  const container = document.getElementById("suggestionBanners");
+  if (!container) return;
+  let html = "";
+
+  if (SUGGESTIONS.primary && (!inference?.primary)) {
+    const s = SUGGESTIONS.primary;
+    html += `<div class="panel" style="margin-bottom:7px;padding:10px 14px;border-left:3px solid var(--accent)">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="flex:1">
+          <b>Suggested for ${esc(ACTIVE_JURISDICTION)}:</b> ${esc(s.providerId)}/${esc(s.modelId)} (primary)
+          <div class="hint">${esc(s.reason)}</div>
+        </div>
+        <button class="act" onclick="applySuggestion('primary','${esc(s.providerId)}','${esc(s.modelId)}')">Use this</button>
+        <button class="ghost" onclick="dismissSuggestion('primary')">Dismiss</button>
+      </div>
+    </div>`;
+  }
+  if (SUGGESTIONS.secondary && (!inference?.secondary)) {
+    const s = SUGGESTIONS.secondary;
+    html += `<div class="panel" style="margin-bottom:7px;padding:10px 14px;border-left:3px solid var(--accent)">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="flex:1">
+          <b>Suggested for ${esc(ACTIVE_JURISDICTION)}:</b> ${esc(s.providerId)}/${esc(s.modelId)} (secondary)
+          <div class="hint">${esc(s.reason)}</div>
+        </div>
+        <button class="act" onclick="applySuggestion('secondary','${esc(s.providerId)}','${esc(s.modelId)}')">Use this</button>
+        <button class="ghost" onclick="dismissSuggestion('secondary')">Dismiss</button>
+      </div>
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+/**
+ * Apply a suggestion — fills the provider/model as if the user picked it.
+ * Does NOT bypass the key-entry step.
+ */
+async function applySuggestion(slot, providerId, modelId) {
+  const sel = document.getElementById(slot === "primary" ? "aiProvider" : "ai2Provider");
+  sel.value = providerId;
+  sel.dispatchEvent(new Event("change"));
+  // Wait for model dropdown to populate, then select the suggested model
+  setTimeout(() => {
+    const modelSel = document.getElementById(slot === "primary" ? "aiModel" : "ai2Model");
+    modelSel.value = modelId;
+    modelSel.dispatchEvent(new Event("change"));
+  }, 200);
+  // Dismiss the banner
+  dismissSuggestion(slot);
+}
+
+function dismissSuggestion(slot) {
+  const banners = document.getElementById("suggestionBanners");
+  if (!banners) return;
+  // Remove the banner for this slot
+  const banner = banners.querySelector(`div:has(button[onclick*="'${slot}'"])`);
+  if (banner) banner.remove();
+}
+
+/**
+ * Update the Vault Summary AI MODELS section.
+ */
+function updateVaultSummary(inference) {
+  const vAi = document.getElementById("vAi");
+  const vAi2 = document.getElementById("vAi2");
+
+  if (inference?.primary) {
+    const cred = CREDENTIALS[inference.primary.providerId];
+    const keyStatus = cred?.hasKey ? "key configured" : "<span style='color:var(--bad)'>no key</span>";
+    vAi.innerHTML = `${esc(inference.primary.providerId)}/${esc(inference.primary.modelId)} · ${keyStatus}`;
+  } else {
+    vAi.innerHTML = "<span style='color:var(--bad)'>no primary model</span>";
+  }
+
+  if (inference?.secondary) {
+    const cred = CREDENTIALS[inference.secondary.providerId];
+    const keyStatus = cred?.hasKey ? "key configured" : "<span style='color:var(--bad)'>no key</span>";
+    vAi2.innerHTML = `${esc(inference.secondary.providerId)}/${esc(inference.secondary.modelId)} · ${keyStatus}`;
+  } else {
+    vAi2.innerHTML = "<span style='color:var(--faint)'>no secondary model</span>";
+  }
+}
+
+// ── Save inference config ────────────────────────────────────────────────
 async function saveAi(which) {
   const msg = document.getElementById(which === "primary" ? "aiMsg" : "ai2Msg");
-  const baseUrl = providerBaseUrl(which);
-  const model = document.getElementById(which === "primary" ? "aiModel" : "ai2Model").value;
-  // Don't auto-save an incomplete Custom provider — the user is still typing
-  // the URL. Saving an empty base_url would clobber the previous config and
-  // cause spurious test errors.
-  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
-  if (sel.value === "custom" && !baseUrl) return;
-  const keyInput = document.getElementById(which === "primary" ? "aiApiKey" : "ai2ApiKey");
-  const key = keyInput.value;
-  const mask = which === "primary" ? primaryKeyMask : secondaryKeyMask;
-  const body = {};
-  // Use the tracked provider ID (not sel.value) so that when the user
-  // switches providers, the old provider's key is saved under the old ID
-  // before the new provider's key is loaded.
-  const pid = which === "primary" ? (currentPrimaryProviderId || sel.value) : (currentSecondaryProviderId || sel.value);
-  if (which === "primary") {
-    body.base_url = baseUrl;
-    body.model = model;
-    body.api_key_provider = pid;
-    if (key && key !== mask) body.api_key = key;
-    else if (!key) body.api_key = "";
-  } else {
-    body.secondary_base_url = baseUrl;
-    // Sarvam AI: the endpoint IS the model. Send a fixed sentinel so the
-    // backend knows a secondary is configured (empty model would be treated
-    // as "no secondary"). The SarvamProvider ignores this value.
-    body.secondary_model = sel.value === "sarvam" ? "Sarvam Parse" : model;
-    body.secondary_api_key_provider = pid;
-    if (key && key !== mask) body.secondary_api_key = key;
-    else if (!key) body.secondary_api_key = "";
+  const isPrimary = which === "primary";
+  const sel = document.getElementById(isPrimary ? "aiProvider" : "ai2Provider");
+  const pid = sel.value;
+
+  // Don't auto-save an incomplete Custom provider
+  if (pid === "custom") {
+    const baseUrl = document.getElementById(isPrimary ? "aiBaseUrl" : "ai2BaseUrl").value.trim();
+    if (!baseUrl) return;
   }
-  const r = await apiPost("/v1/settings", body);
-  if (r.error) { msg.className = "msg bad"; msg.textContent = "error: " + r.error; return; }
-  // Silent on success — auto-save doesn't need a "saved" flash. The Test
-  // button is the user's confirmation that the setting works.
-  // Do NOT call loadSettings() here — it would rebuild the dropdowns and
-  // clobber the user's in-progress edits (e.g. selecting Custom).
-  msg.className = "msg"; msg.textContent = "";
+
+  const modelSelect = document.getElementById(isPrimary ? "aiModel" : "ai2Model");
+  const modelTextInput = document.getElementById(isPrimary ? "aiModelText" : "ai2ModelText");
+  let modelId = "";
+  if (pid === "custom" && modelTextInput) {
+    modelId = modelTextInput.value.trim();
+  } else if (modelSelect.value === "__other__") {
+    // Prompt for custom model ID
+    modelId = prompt("Enter the model ID:") || "";
+    if (!modelId) return;
+    // Add it back as a regular option
+    modelSelect.innerHTML = modelSelect.innerHTML.replace(
+      "<option value='__other__'>Other model ID (advanced)…</option>",
+      `<option value="${esc(modelId)}">${esc(modelId)} (user-entered)</option><option value='__other__'>Other model ID (advanced)…</option>`,
+    );
+    modelSelect.value = modelId;
+  } else {
+    modelId = modelSelect.value;
+  }
+
+  if (!modelId) return;
+
+  const baseUrl = providerBaseUrl(which);
+  const keyInput = document.getElementById(isPrimary ? "aiApiKey" : "ai2ApiKey");
+  const key = keyInput.value;
+
+  const body = {
+    [isPrimary ? "primary" : "secondary"]: {
+      providerId: pid,
+      modelId,
+      ...(pid === "custom" && { baseUrlOverride: baseUrl }),
+    },
+  };
+
+  // Send API key if the user entered one
+  if (key) {
+    body.api_key = { providerId: pid, key };
+  }
+
+  const r = await apiPost("/v1/settings/inference", body);
+  if (r.error) {
+    msg.className = "msg bad";
+    msg.textContent = "error: " + r.error;
+    return;
+  }
+  msg.className = "msg";
+  msg.textContent = "";
+
+  // Update credential state
+  if (key) {
+    CREDENTIALS[pid] = { providerId: pid, hasKey: true };
+    updateKeyUI(which, pid);
+  }
+
+  // Update vault summary
+  const inference = await api("/v1/settings/inference").catch(() => null);
+  updateVaultSummary(inference);
 }
 
+// ── Test inference ───────────────────────────────────────────────────────
 async function testAi(which) {
   const msg = document.getElementById(which === "primary" ? "aiMsg" : "ai2Msg");
   const vEl = document.getElementById(which === "primary" ? "vAi" : "vAi2");
-  msg.className = "msg"; msg.textContent = "testing…";
-  const r = await apiPost("/v1/settings/provider-test", { which });
+  msg.className = "msg";
+  msg.textContent = "testing…";
+  const r = await apiPost("/v1/settings/inference/test", { slot: which });
   if (r.error) {
-    msg.className = "msg bad"; msg.textContent = "error: " + r.error;
-    vEl.innerHTML = "<span style='color:var(--bad)'>" + esc(r.model || "?") + " · " + esc(r.error) + "</span>";
+    msg.className = "msg bad";
+    msg.textContent = "error: " + r.error;
+    vEl.innerHTML = `<span style='color:var(--bad)'>${esc(r.error)}</span>`;
     return;
   }
-  const ok = r.reachable && r.authenticated && r.model_available;
+  const ok = r.success;
   msg.className = "msg " + (ok ? "ok" : "bad");
-  const parts = [];
-  parts.push(r.reachable ? "reachable" : "unreachable");
-  parts.push(r.authenticated ? "auth ok" : "auth failed");
-  parts.push(r.model_available ? "model ok" : "model unavailable");
-  if (r.latency_ms) parts.push(r.latency_ms + "ms");
-  if (r.vision) parts.push("vision");
-  if (r.structured_output) parts.push("structured");
-  msg.textContent = parts.join(" · ");
-  // Update the Vault summary with the real test result.
-  vEl.innerHTML = ok
-    ? "<span style='color:var(--ok)'>" + esc(r.model || "?") + " · available</span>"
-    : "<span style='color:var(--bad)'>" + esc(r.model || "?") + " · " + parts.slice(1).join(", ") + "</span>";
+  if (ok) {
+    const parts = ["Connection successful"];
+    if (r.latencyMs) parts.push(r.latencyMs + "ms");
+    msg.textContent = parts.join(" · ");
+  } else {
+    msg.textContent = r.errorExplanation || r.error || "failed";
+  }
+
+  // Update vault summary
+  const inference = await api("/v1/settings/inference").catch(() => null);
+  if (inference) updateVaultSummary(inference);
 }
 
+// ── Jurisdiction ─────────────────────────────────────────────────────────
 async function saveJur() {
   const msg = document.getElementById("jurMsg");
-  msg.className = "msg"; msg.textContent = "saving…";
+  msg.className = "msg";
+  msg.textContent = "saving…";
   const id = document.getElementById("jurSelect").value;
   const r = await apiPost("/v1/settings", { jurisdiction: id });
-  if (r.error) { msg.className = "msg bad"; msg.textContent = "error: " + r.error; return; }
+  if (r.error) {
+    msg.className = "msg bad";
+    msg.textContent = "error: " + r.error;
+    return;
+  }
   msg.className = "msg ok";
-  msg.textContent = "saved · restart the daemon for the jurisdiction change to take full effect";
+  msg.textContent = "saved · reload Settings to see updated suggestions";
   loadSettings();
 }
 
-// Auto-save: any change to provider, API key, model, or custom URL saves
-// immediately. A debounce on the model text input prevents saving on every
-// keystroke — only after the user stops typing for 600ms.
+// ── Auto-save ────────────────────────────────────────────────────────────
 let saveTimers = {};
 function autoSave(which) {
   clearTimeout(saveTimers[which]);
   saveTimers[which] = setTimeout(() => saveAi(which), 600);
 }
 
-// When the user switches providers, swap the API key field to show the new
-// provider's saved key (or empty if none). The old provider's key was already
-// saved by autoSave on the previous change.
-function swapProviderKey(which) {
-  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
-  const newPid = sel.value;
-  const keys = which === "primary" ? providerKeys : secondaryProviderKeys;
-  const keyField = document.getElementById(which === "primary" ? "aiApiKey" : "ai2ApiKey");
-  const keySrc = document.getElementById(which === "primary" ? "aiKeySrc" : "ai2KeySrc");
-  const lookupKey = which === "primary" ? newPid : `secondary:${newPid}`;
-  const entry = keys[lookupKey];
-  if (entry && entry.set) {
-    const mask = entry.mask || "********";
-    keyField.value = mask;
-    if (which === "primary") primaryKeyMask = mask;
-    else secondaryKeyMask = mask;
-    keySrc.innerHTML = "<span class='ok'>key set via keychain</span>";
-    keyField.placeholder = "type a new key to replace";
-  } else {
-    keyField.value = "";
-    if (which === "primary") primaryKeyMask = "";
-    else secondaryKeyMask = "";
-    keySrc.innerHTML = "<span class='warn'>no key configured</span>";
-    keyField.placeholder = "paste your API key";
-  }
-  if (which === "primary") currentPrimaryProviderId = newPid;
-  else currentSecondaryProviderId = newPid;
-}
-
+// ── Event handlers ───────────────────────────────────────────────────────
 document.getElementById("aiTest").onclick = () => testAi("primary");
 document.getElementById("aiProvider").onchange = () => {
-  // Save the old provider's key first, then swap to the new provider's key.
   saveAi("primary");
   onProviderChange("primary", "");
-  swapProviderKey("primary");
+  const pid = document.getElementById("aiProvider").value;
+  currentPrimaryProviderId = pid;
+  updateKeyUI("primary", pid);
   autoSave("primary");
 };
-document.getElementById("aiApiKey").onchange = () => { autoSave("primary"); autoFetchModels("primary", document.getElementById("aiModel").value); };
-document.getElementById("aiModel").onchange = () => autoSave("primary");
+document.getElementById("aiApiKey").onchange = () => autoSave("primary");
+document.getElementById("aiModel").onchange = () => {
+  if (document.getElementById("aiModel").value === "__other__") return;
+  autoSave("primary");
+};
 document.getElementById("aiBaseUrl").oninput = () => autoSave("primary");
+document.getElementById("aiProviderSearch").oninput = (e) =>
+  filterProviderDropdown("aiProvider", e.target.value);
+
 document.getElementById("ai2Test").onclick = () => testAi("secondary");
 document.getElementById("ai2Provider").onchange = () => {
   saveAi("secondary");
   onProviderChange("secondary", "");
-  swapProviderKey("secondary");
+  const pid = document.getElementById("ai2Provider").value;
+  currentSecondaryProviderId = pid;
+  updateKeyUI("secondary", pid);
   autoSave("secondary");
 };
-document.getElementById("ai2ApiKey").onchange = () => { autoSave("secondary"); autoFetchModels("secondary", document.getElementById("ai2Model").value); };
-document.getElementById("ai2Model").onchange = () => autoSave("secondary");
+document.getElementById("ai2ApiKey").onchange = () => autoSave("secondary");
+document.getElementById("ai2Model").onchange = () => {
+  if (document.getElementById("ai2Model").value === "__other__") return;
+  autoSave("secondary");
+};
 document.getElementById("ai2BaseUrl").oninput = () => autoSave("secondary");
+document.getElementById("ai2ProviderSearch").oninput = (e) =>
+  filterProviderDropdown("ai2Provider", e.target.value);
+
 document.getElementById("jurSave").onclick = saveJur;
 
+// ── Custom provider buttons ──────────────────────────────────────────────
+document.getElementById("customSavePrimary").onclick = async () => {
+  const name = document.getElementById("customName").value.trim();
+  const baseUrl = document.getElementById("customBaseUrl").value.trim();
+  const modelId = document.getElementById("customModelId").value.trim();
+  const msg = document.getElementById("customMsg");
+  if (!baseUrl || !modelId) {
+    msg.className = "msg bad";
+    msg.textContent = "Base URL and Model ID are required";
+    return;
+  }
+  // Select "custom" in the primary dropdown and fill the fields
+  document.getElementById("aiProvider").value = "custom";
+  document.getElementById("aiBaseUrl").value = baseUrl;
+  onProviderChange("primary", modelId);
+  const r = await saveAi("primary");
+  msg.className = "msg ok";
+  msg.textContent = "saved as primary";
+};
+document.getElementById("customSaveSecondary").onclick = async () => {
+  const baseUrl = document.getElementById("customBaseUrl").value.trim();
+  const modelId = document.getElementById("customModelId").value.trim();
+  const msg = document.getElementById("customMsg");
+  if (!baseUrl || !modelId) {
+    msg.className = "msg bad";
+    msg.textContent = "Base URL and Model ID are required";
+    return;
+  }
+  document.getElementById("ai2Provider").value = "custom";
+  document.getElementById("ai2BaseUrl").value = baseUrl;
+  onProviderChange("secondary", modelId);
+  await saveAi("secondary");
+  msg.className = "msg ok";
+  msg.textContent = "saved as secondary";
+};
+
+// ── Gmail ────────────────────────────────────────────────────────────────
 async function gmailAction(action) {
   const msg = document.getElementById("gMsg");
   msg.className = "msg"; msg.textContent = action + "…";
@@ -424,7 +689,7 @@ document.getElementById("gConnect").onclick = () => gmailAction("connect");
 document.getElementById("gSync").onclick = () => gmailAction("sync");
 document.getElementById("gDisconnect").onclick = () => gmailAction("disconnect");
 
-// ── danger zone: data flush / factory reset ────────────────────────
+// ── Danger zone: data flush / factory reset ──────────────────────────────
 let dangerMode = "";
 const dangerBtn = document.getElementById("flushBtn");
 const dangerConfirmRow = document.getElementById("dangerConfirmRow");
@@ -482,9 +747,4 @@ dangerGoBtn.onclick = async () => {
   dangerBtn.style.display = "";
   dangerBtn.disabled = true;
   dangerBtn.textContent = "Flush Data";
-  document.querySelectorAll("input[name='dangerMode']").forEach((r) => r.checked = false);
-  dangerMode = "";
-  loadSettings();
-  if (activeTab === "obs") refreshObs();
 };
-
