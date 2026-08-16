@@ -119,6 +119,15 @@ async function loadSettings() {
   const gDate = document.getElementById("gAfterDate");
   if (!gDate.value) gDate.value = new Date().toISOString().slice(0, 10);
 
+  // Sarvam AI document intelligence (India jurisdiction)
+  const sarvam = ai.sarvam || {};
+  const sarvamKeyInput = document.getElementById("sarvamApiKey");
+  sarvamKeyInput.value = sarvam.api_key_mask || "";
+  sarvamKeyInput.placeholder = sarvam.api_key_set ? "type a new key to replace" : "paste your Sarvam API subscription key";
+  document.getElementById("sarvamKeySrc").innerHTML = sarvam.api_key_set
+    ? "<span class='ok'>key set via " + esc(sarvam.api_key_source || "keychain") + "</span>"
+    : "<span class='warn'>no key configured</span>";
+
   // Auto-test both inference providers so the user sees a green/red status
   // the moment they open Settings — no need to click Test manually.
   testAi("primary");
@@ -298,6 +307,27 @@ document.getElementById("ai2ApiKey").onchange = () => autoSave("secondary");
 document.getElementById("ai2Model").oninput = () => autoSave("secondary");
 document.getElementById("ai2BaseUrl").oninput = () => autoSave("secondary");
 document.getElementById("jurSave").onclick = saveJur;
+
+// Sarvam AI document intelligence — save handler
+document.getElementById("sarvamSave").onclick = async () => {
+  const msg = document.getElementById("sarvamMsg");
+  msg.className = "msg"; msg.textContent = "saving…";
+  const keyInput = document.getElementById("sarvamApiKey");
+  const key = keyInput.value;
+  const body = {};
+  // Only send the key if the user typed something new (not the mask)
+  if (key && key !== (document.getElementById("sarvamKeySrc").textContent.includes("key set") ? "********" : "")) {
+    body.sarvam_api_key = key;
+  } else if (!key) {
+    body.sarvam_api_key = "";
+  }
+  const r = await apiPost("/v1/settings", body);
+  if (r.error) { msg.className = "msg bad"; msg.textContent = "error: " + r.error; return; }
+  msg.className = "msg ok";
+  msg.textContent = "saved · Sarvam document intelligence is " + (r.ai_available ? "active" : "ready");
+  // Reload to show the updated key status
+  loadSettings();
+};
 
 async function gmailAction(action) {
   const msg = document.getElementById("gMsg");

@@ -125,6 +125,27 @@
           <span class="msg" id="ai2Msg"></span>
         </div>
       </div>
+
+      <div class="panel">
+        <h3>Document intelligence — Sarvam AI (India)</h3>
+        <div class="hint" style="margin-bottom:8px">
+          When the India jurisdiction pack is active, Sarvam AI replaces the
+          generic secondary provider for document intelligence. Sarvam does
+          OCR + field extraction directly on the raw file (PDF/image), which
+          is far more accurate for Indian financial documents (GST invoices,
+          bank statements, etc.) than a generic vision model reading messy OCR
+          text.
+        </div>
+        <div class="field">
+          <label>API key</label>
+          <input type="password" id="sarvamApiKey" placeholder="paste your Sarvam API subscription key">
+          <div class="hint" id="sarvamKeySrc"></div>
+        </div>
+        <div class="save-row">
+          <button class="act" id="sarvamSave">Save</button>
+          <span class="msg" id="sarvamMsg"></span>
+        </div>
+      </div>
   </div>
 
   <div class="settings-cols" style="margin-top:7px">

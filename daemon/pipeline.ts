@@ -9,7 +9,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
 import type { AiProvider } from "./ai-provider.js";
-import { EXTRACTION_VERSION } from "./extraction-contract.js";
+import { EXTRACTION_VERSION, type ExtractionResult } from "./extraction-contract.js";
 import { recordTransaction, resolveEntity } from "./ledger.js";
 import { resolvePerson } from "./identity.js";
 import { findMatches, linkEvidence, AUTO_LINK, REVIEW_FLOOR } from "./matcher.js";
@@ -1454,9 +1454,9 @@ export async function runAnalyseJob(
   documentId: string,
 ): Promise<void> {
   const doc = db
-    .prepare("SELECT id, original_filename, markdown_path, markdown_chars FROM documents WHERE id=?")
+    .prepare("SELECT id, original_filename, raw_path, markdown_path, markdown_chars FROM documents WHERE id=?")
     .get(documentId) as
-    | { id: string; original_filename: string; markdown_path: string | null; markdown_chars: number | null }
+    | { id: string; original_filename: string; raw_path: string | null; markdown_path: string | null; markdown_chars: number | null }
     | undefined;
   if (!doc) throw new Error(`document ${documentId} not found`);
 
@@ -1480,7 +1480,23 @@ export async function runAnalyseJob(
     });
     return;
   }
-  const x = await ai.extract(markdown, doc.original_filename);
+
+  // Document intelligence path: when the provider supports extractDocument
+  // (Sarvam AI for India jurisdiction), use the RAW file directly instead of
+  // feeding markdown text to a generic LLM. Sarvam does OCR + field extraction
+  // server-side, which is far more accurate for scanned/image documents.
+  let x: ExtractionResult | null = null;
+  if (ai.extractDocument && doc.raw_path) {
+    ports.logger.info("analyse: using document intelligence provider", {
+      document_id: documentId,
+      raw_path: doc.raw_path,
+    });
+    x = await ai.extractDocument(doc.raw_path, doc.original_filename);
+  }
+  // Fall back to the generic text extraction path (markdown → LLM)
+  if (!x) {
+    x = await ai.extract(markdown, doc.original_filename);
+  }
   const now = ports.clock.isoNow();
 
   if (!x) {

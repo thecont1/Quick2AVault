@@ -17,11 +17,18 @@ import {
   EXTRACTION_VERSION,
   type ExtractionResult,
 } from "./extraction-contract.js";
+import { createSarvamProvider, type SarvamProvider } from "./sarvam.js";
 
 export interface AiProvider {
   readonly available: boolean;
   readonly model: string;
   extract(markdown: string, filename: string): Promise<ExtractionResult | null>;
+  /**
+   * Document intelligence extraction: takes the RAW file path (PDF/image)
+   * instead of markdown. Implemented by providers like Sarvam AI that do
+   * OCR + field extraction server-side. Returns null if not supported.
+   */
+  extractDocument?(rawPath: string, filename: string): Promise<ExtractionResult | null>;
 }
 
 export interface AiConfig {
@@ -38,6 +45,12 @@ export interface AiConfig {
    *  from baseUrl: anthropic.com → Anthropic, everything else → OpenAI-compatible.
    */
   providerType?: "anthropic" | "openai";
+  /** Sarvam AI document intelligence (India jurisdiction). When set, Sarvam
+   *  replaces the generic secondary provider for raw-file extraction. */
+  sarvamApiKey?: string;
+  /** Active jurisdiction pack ID (e.g. "IN"). When "IN", Sarvam is preferred
+   *  over the generic secondary for document intelligence. */
+  jurisdictionId?: string;
 }
 
 /** No-op provider so P0/P1 keep working with no AI configured (plan §8). */
@@ -72,6 +85,12 @@ export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiP
   // Work order 07 §D1: secondary (vision/fallback) provider. Blank secondary
   // is valid — the user may configure only a primary model.
   let secondary = createSecondaryProvider(cfg, logger);
+  // Sarvam AI document intelligence — used when the India jurisdiction pack
+  // is active. Replaces the generic secondary for raw-file extraction.
+  let sarvam: SarvamProvider | null = cfg.sarvamApiKey
+    ? createSarvamProvider({ apiKey: cfg.sarvamApiKey }, logger)
+    : null;
+  let jurisdictionId = cfg.jurisdictionId ?? "IN";
   let routingMode = cfg.routingMode ?? "auto";
   return {
     get available() {
@@ -87,15 +106,35 @@ export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiP
       // (runAnalyseJob), not here — this method is called for text extraction.
       return inner.extract(markdown, filename);
     },
+    /** Document intelligence: prefer Sarvam when India jurisdiction is active
+     *  and a Sarvam key is configured. Fall back to the generic secondary
+     *  provider's extractDocument if it has one (it usually doesn't). */
+    async extractDocument(rawPath: string, filename: string): Promise<ExtractionResult | null> {
+      if (sarvam && sarvam.available && jurisdictionId === "IN") {
+        logger.info("ai provider: using Sarvam document intelligence", { filename });
+        return sarvam.extractDocument(rawPath, filename);
+      }
+      // Fall back to secondary if it supports document intelligence
+      if (secondary.extractDocument) {
+        return secondary.extractDocument(rawPath, filename);
+      }
+      return null;
+    },
     reconfigure(next: AiConfig) {
       inner = createProvider(next, logger);
       secondary = createSecondaryProvider(next, logger);
+      sarvam = next.sarvamApiKey
+        ? createSarvamProvider({ apiKey: next.sarvamApiKey }, logger)
+        : null;
+      jurisdictionId = next.jurisdictionId ?? "IN";
       routingMode = next.routingMode ?? "auto";
       logger.info("ai provider reconfigured", {
         available: inner.available,
         model: inner.model,
         secondary_available: secondary.available,
         secondary_model: secondary.model,
+        sarvam_available: sarvam?.available ?? false,
+        jurisdiction: jurisdictionId,
         routing_mode: routingMode,
       });
       return inner.available;

@@ -1424,6 +1424,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const secondaryBaseUrl = kv["ai.secondary.base_url"] ?? "";
         const secondaryModel = kv["ai.secondary.model"] ?? "";
         const routingMode = kv["ai.routing_mode"] ?? "auto";
+        // Sarvam AI document intelligence (India jurisdiction).
+        const sarvamKey = secrets ? (await secrets.get("ai.sarvam.api_key")) ?? "" : "";
+        const jurisdictionId = kv["jurisdiction.id"] ?? "IN";
         // Ask the token store, not a flag — the tokens are the truth.
         const gmailConnected = gmail ? !!(await gmail.oauth.getTokens()) : false;
         const maskKey = (k: string) => k.length <= 8
@@ -1472,6 +1475,16 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               configured: !!(secondaryModel && secondaryKey),
             },
             routing_mode: routingMode,
+            // Sarvam AI document intelligence — replaces the generic secondary
+            // when the India jurisdiction pack is active.
+            sarvam: {
+              api_key_set: !!sarvamKey,
+              api_key_hint: sarvamKey ? `…${sarvamKey.slice(-4)}` : "",
+              api_key_mask: sarvamKey ? maskKey(sarvamKey) : "",
+              api_key_source: sarvamKey ? "keychain" : "none",
+              available: !!sarvamKey && jurisdictionId === "IN",
+            },
+            jurisdiction_id: jurisdictionId,
           },
           vault: {
             root: ports.paths.vaultRoot(),
@@ -1559,6 +1572,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         for (const [field, activeKey, pid] of [
           ["api_key", "ai.api_key", primPid],
           ["secondary_api_key", "ai.secondary.api_key", secPid],
+          ["sarvam_api_key", "ai.sarvam.api_key", ""],
         ] as const) {
           const v = b[field];
           if (typeof v !== "string") continue;
@@ -1588,8 +1602,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         );
         const nowApiKey = secrets ? (await secrets.get("ai.api_key")) ?? "" : "";
         const nowSecKey = secrets ? (await secrets.get("ai.secondary.api_key")) ?? "" : "";
+        const nowSarvamKey = secrets ? (await secrets.get("ai.sarvam.api_key")) ?? "" : "";
         const aiTouched = [...saved, ...cleared].some((f) =>
-          ["api_key", "base_url", "model", "secondary_api_key", "secondary_base_url", "secondary_model", "routing_mode"].includes(f),
+          ["api_key", "base_url", "model", "secondary_api_key", "secondary_base_url", "secondary_model", "routing_mode", "sarvam_api_key", "jurisdiction"].includes(f),
         );
         if (aiTouched) {
           ai.reconfigure({
@@ -1602,6 +1617,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             secondaryBaseUrl: now["ai.secondary.base_url"] ?? "",
             secondaryModel: now["ai.secondary.model"] ?? "",
             routingMode: (now["ai.routing_mode"] as "auto" | "primary_only" | "vision_fallback") ?? "auto",
+            // Sarvam document intelligence (India jurisdiction).
+            sarvamApiKey: nowSarvamKey || process.env.SARVAM_API_KEY || "",
+            jurisdictionId: now["jurisdiction.id"] ?? "IN",
           });
         }
 
