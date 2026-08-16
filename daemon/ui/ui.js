@@ -12,6 +12,29 @@ const api = (p) => fetch(p, { headers: H }).then(checkAuth).then((r) => r.json()
 // The folder watcher is the Drop folder — display it as such.
 const sourceLabel = (s) => (s === "folder" ? "DROP" : s);
 
+// ── error surfacing ──────────────────────────────────────────────
+// Any uncaught error or rejected promise paints a red banner instead of a
+// silent blank tab. This turns a user's browser into a diagnostic surface.
+function showErrBanner(msg, src) {
+  let b = document.getElementById("errBanner");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "errBanner";
+    b.style.cssText =
+      "position:fixed;bottom:10px;left:10px;right:10px;z-index:99999;" +
+      "background:#7f1d1d;color:#fff;font:11px/1.5 Menlo,monospace;" +
+      "padding:10px 14px;border-radius:8px;white-space:pre-wrap;max-height:40vh;overflow:auto";
+    document.body.appendChild(b);
+  }
+  b.textContent = "[" + src + "]\n" + msg;
+}
+window.addEventListener("error", (e) => {
+  showErrBanner((e.error && e.error.stack) || e.message || "Unknown error", "uncaught error");
+});
+window.addEventListener("unhandledrejection", (e) => {
+  showErrBanner((e.reason && e.reason.stack) || String(e.reason), "unhandled rejection");
+});
+
 // The daemon serves UI files live from disk. If they change under an open
 // page (deploy, edit while browsing), reload once — the versioned asset
 // URLs guarantee the whole set comes back fresh together. This closes the
@@ -26,6 +49,12 @@ setInterval(async () => {
     // daemon restarting — the next tick will sort it out
   }
 }, 15000);
+
+// Stamp the UI build into the footer — confirms which code a browser runs.
+try {
+  const f = document.getElementById("footer");
+  if (f) f.textContent = (f.textContent ? f.textContent + " · " : "") + "ui " + UI_VERSION;
+} catch { /* ignore */ }
 const apiPost = (p, body) => fetch(p, {
   method: "POST", headers: { ...H, "content-type": "application/json" },
   body: JSON.stringify(body || {}),
