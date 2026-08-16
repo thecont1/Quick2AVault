@@ -4,8 +4,14 @@ const H = { Authorization: "Bearer " + TOKEN };
 
 // If the daemon restarts, the token changes and API calls return 401.
 // Auto-reload the page to pick up the new token embedded in the HTML.
+// With persisted sessions this should be rare; the guard prevents a
+// reload storm if it ever fires repeatedly.
+let authReloading = false;
 function checkAuth(r) {
-  if (r.status === 401) location.reload();
+  if (r.status === 401 && !authReloading) {
+    authReloading = true;
+    setTimeout(() => location.reload(), 150);
+  }
   return r;
 }
 const api = (p) => fetch(p, { headers: H }).then(checkAuth).then((r) => r.json());

@@ -192,6 +192,20 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   // token that the Flutter app and scripts use.
   const UI_SESSION_TTL_MS = 15 * 60 * 1000;
   const uiSessions = new Map<string, number>();
+  // Sessions survive daemon restarts: an in-memory-only store meant every
+  // restart orphaned the open page's token, so its next API call 401'd,
+  // checkAuth reloaded the page, and a restart-heavy session turned into a
+  // reload loop — content flashing then vanishing. The vault DB keeps the
+  // TTL semantics without the restart fragility.
+  try {
+    db.exec("CREATE TABLE IF NOT EXISTS ui_sessions (token TEXT PRIMARY KEY, expires INTEGER NOT NULL)");
+    for (const r of db.prepare("SELECT token, expires FROM ui_sessions").all() as { token: string; expires: number }[]) {
+      if (r.expires > Date.now()) uiSessions.set(r.token, r.expires);
+      else db.prepare("DELETE FROM ui_sessions WHERE token=?").run(r.token);
+    }
+  } catch (e) {
+    ports.logger.warn("ui session persistence unavailable — sessions are in-memory only", e);
+  }
 
   // ── UI diagnostics state (daemon-lifetime, NOT per request) ──────
   // The page reports its browser state here, fire-and-forget. GET reads
@@ -204,6 +218,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
     for (const [t, exp] of uiSessions) if (exp <= now) uiSessions.delete(t);
     const token = randomBytes(32).toString("base64url");
     uiSessions.set(token, now + UI_SESSION_TTL_MS);
+    try {
+      db.prepare("INSERT OR REPLACE INTO ui_sessions (token, expires) VALUES (?, ?)").run(token, now + UI_SESSION_TTL_MS);
+    } catch { /* non-fatal */ }
     return token;
   };
 
@@ -212,6 +229,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
     if (exp === undefined) return false;
     if (exp <= Date.now()) {
       uiSessions.delete(token);
+      try { db.prepare("DELETE FROM ui_sessions WHERE token=?").run(token); } catch { /* non-fatal */ }
       return false;
     }
     return true;
