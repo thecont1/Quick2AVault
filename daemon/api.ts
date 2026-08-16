@@ -471,7 +471,14 @@ if (p === "/v1/diagnostics") {
   }
 }
 if (p === "/v1/health") {
-        const jobs = db.prepare("SELECT state, COUNT(*) n FROM jobs GROUP BY state").all() as {
+  // A query-string credential cannot authenticate here: the query-token
+  // exception exists ONLY for the SSE event stream (/v1/events). Reject
+  // credential-bearing health URLs explicitly so they are never treated
+  // as authenticated, while token-less health probes stay open.
+  if (url.searchParams.has("token")) {
+    return send(res, 401, { error: "unauthorized" });
+  }
+  const jobs = db.prepare("SELECT state, COUNT(*) n FROM jobs GROUP BY state").all() as {
           state: string;
           n: number;
         }[];

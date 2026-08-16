@@ -565,14 +565,21 @@ export function recordTransaction(
   }
 
   // ── evidence ──────────────────────────────────────────────────────────────
-  // INSERT OR IGNORE: on a first analysis this creates the link; on a
-  // re-analysis the link already exists (same transaction_id) and this is a
-  // no-op. The unique index on (document_id, evidence_role) is the backstop
-  // that prevents a second transaction from ever being created.
+  // First analysis creates the link; re-analysis refreshes the machine link
+  // metadata (linked_at, match_score, role) so evidence timestamps stay
+  // truthful after a reprocess. User-controlled links (linked_by='user')
+  // are preserved — a user's manual claim outranks the AI re-link.
   db.prepare(
-    `INSERT OR IGNORE INTO transaction_documents
+    `INSERT INTO transaction_documents
       (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
-     VALUES (?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?)
+     ON CONFLICT(document_id, evidence_role) DO UPDATE SET
+       transaction_id = excluded.transaction_id,
+       match_score = excluded.match_score,
+       linked_at = excluded.linked_at,
+       linked_by = CASE WHEN transaction_documents.linked_by = 'user'
+                        THEN transaction_documents.linked_by
+                        ELSE excluded.linked_by END`,
   ).run(id, documentId, evidenceRole(x), 1.0, "ai", now);
 
   // ── provenance ────────────────────────────────────────────────────────────
