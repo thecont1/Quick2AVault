@@ -22,6 +22,7 @@ import { loadPack } from "./jurisdiction.js";
 import { triage, dispositionToIntakeKind, type TriageResult } from "./triage.js";
 import {
   extractTypedDocument,
+  FrankfurterFx,
   generateLearningQuestions,
   impactFor,
   transitionPipeline,
@@ -1518,6 +1519,77 @@ function typedToExtractionResult(typed: TypedExtraction): ExtractionResult {
   };
 }
 
+/**
+ * Home currency from the jurisdiction pack (INR for the India pack).
+ */
+function homeCurrencyFor(db: DatabaseSync): string {
+  const jur = (db.prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'").get() as
+    | { value?: string }
+    | undefined)?.value;
+  try {
+    return loadPack(jur || "IN").currency.code;
+  } catch {
+    return "INR";
+  }
+}
+
+/**
+ * Fetch the home-currency rate as on the TRANSACTION date (frankfurter.dev)
+ * and stamp home_amount_minor/fx_rate/fx_date/fx_source on the transaction.
+ * This is the companion to work order 05 §A.2: foreign-currency transactions
+ * are recorded in their source currency and must be converted before they can
+ * count toward the rupee totals — otherwise the snapshot correctly excludes
+ * them and reports them under `unconverted`.
+ */
+async function convertToHomeCurrency(
+  db: DatabaseSync,
+  ports: Ports,
+  transactionId: string,
+  x: ExtractionResult,
+): Promise<void> {
+  if (!x.currency || !x.amount_minor || !x.occurred_at) return;
+  const home = homeCurrencyFor(db);
+  if (x.currency === home) return;
+  const row = db
+    .prepare("SELECT home_amount_minor FROM transactions WHERE id=?")
+    .get(transactionId) as { home_amount_minor: number | null } | undefined;
+  if (row?.home_amount_minor != null) return; // never clobber an existing conversion
+  try {
+    const conv = await new FrankfurterFx(db).convert({
+      amountMinor: x.amount_minor,
+      from: x.currency,
+      to: home,
+      date: x.occurred_at,
+    });
+    if (!conv) {
+      ports.logger.warn("fx: no rate available (offline and no cache)", {
+        transaction_id: transactionId,
+        from: x.currency,
+        to: home,
+        date: x.occurred_at,
+      });
+      return;
+    }
+    db.prepare(
+      "UPDATE transactions SET home_amount_minor=?, fx_rate=?, fx_date=?, fx_source=? WHERE id=?",
+    ).run(conv.convertedAmount, conv.rate, conv.rateDate, `frankfurter:${conv.freshness}`, transactionId);
+    ports.logger.info("fx converted", {
+      transaction_id: transactionId,
+      from: x.currency,
+      to: home,
+      rate: conv.rate,
+      rate_date: conv.rateDate,
+      freshness: conv.freshness,
+      home_amount_minor: conv.convertedAmount,
+    });
+  } catch (err) {
+    ports.logger.warn("fx conversion failed", {
+      transaction_id: transactionId,
+      err: (err as Error)?.message,
+    });
+  }
+}
+
 function typedLearningAmbiguities(db: DatabaseSync, documentId: string, extraction: TypedExtraction): LearningAmbiguity[] {
   const ambiguities: LearningAmbiguity[] = [];
   const entity = extraction.issuer?.name ?? extraction.client?.name ?? extraction.vendor?.name ?? extraction.broker?.name;
@@ -1593,7 +1665,8 @@ export async function runAnalyseJob(
     // review / a later AI pass instead of guessing a transaction.
     const result = typedToExtractionResult(typed);
     if (result.doc_type !== "unknown") {
-      recordTransaction(db, ports, documentId, result);
+      const rec = recordTransaction(db, ports, documentId, result);
+      if (rec) await convertToHomeCurrency(db, ports, rec.transaction_id, result);
     }
     return;
   }
@@ -1852,6 +1925,9 @@ export async function runAnalyseJob(
 
   const rec = recordTransaction(db, ports, documentId, x);
   if (rec) {
+    // FX conversion: stamp the home-currency value so foreign income/spending
+    // counts toward the rupee totals (see convertToHomeCurrency).
+    await convertToHomeCurrency(db, ports, rec.transaction_id, x);
     ports.logger.info("transaction recorded", {
       transaction_id: rec.transaction_id,
       direction: rec.direction,
