@@ -9,6 +9,8 @@ function checkAuth(r) {
   return r;
 }
 const api = (p) => fetch(p, { headers: H }).then(checkAuth).then((r) => r.json());
+// The folder watcher is the Drop folder — display it as such.
+const sourceLabel = (s) => (s === "folder" ? "DROP" : s);
 const apiPost = (p, body) => fetch(p, {
   method: "POST", headers: { ...H, "content-type": "application/json" },
   body: JSON.stringify(body || {}),

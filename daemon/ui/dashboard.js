@@ -306,8 +306,9 @@ async function renderScopeList() {
     return "<div class='drow' data-id='" + esc(x.id) + "'>"
       + "<div><div class='fn'>" + esc(x.original_filename) + "</div>"
       + "<div class='meta'>" + esc(x.merchant || "Unidentified") + " · " + esc(x.doc_type || "unknown")
+      + (x.lifecycle === "deleted" ? " · <span class='err'>deleted</span>" : "")
       + (x.pipeline_state ? " · " + esc(x.pipeline_state) : "") + "</div></div>"
-      + "<span class='kind'>" + esc(x.source || "") + "</span>"
+      + "<span class='kind'>" + esc(sourceLabel(x.source || "")) + "</span>"
       + "<span class='dt'>" + esc(dt) + "</span></div>";
   }).join("");
   box.querySelectorAll(".drow").forEach((el) =>

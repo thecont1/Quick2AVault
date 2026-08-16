@@ -68,7 +68,7 @@ async function loadReview() {
       + "<div><div class='fn'>" + esc(x.original_filename) + "</div>"
       + "<div class='meta'>" + esc(x.doc_type || "unknown") + " · " + esc(x.ext || "")
       + " · " + esc(x.markdown_chars || 0) + " chars · " + esc(x.lifecycle) + "</div></div>"
-      + "<span class='kind'>" + esc(x.source) + "</span>"
+      + "<span class='kind'>" + esc(sourceLabel(x.source)) + "</span>"
       + "<span class='dt'>" + esc(invDate) + "</span></div>";
   }
   if (lastMerchant !== null) html += "</div>";
@@ -204,6 +204,33 @@ function pinDoc(id) {
 
 async function showDoc(id, container) {
   const d = await api("/v1/documents/" + encodeURIComponent(id) + "/detail");
+  if (d && d.error) {
+    // Never leave the slot blank: deleted/removed documents explain
+    // themselves and offer the restore path (reprocess revives a deleted
+    // document when its original bytes still exist on disk).
+    const gone = d.error === "document_deleted" || d.error === "document_removed";
+    container.innerHTML = "<div class='empty doc-err'>" + esc(d.error)
+      + (gone ? " — this document was deleted. If the original bytes still exist, reprocessing restores it."
+        : " — could not open this document.")
+      + (gone ? "<br><button class='act' id='docRestoreBtn' style='margin-top:10px'>Reprocess to restore</button>" : "")
+      + "</div>";
+    const btn = container.querySelector("#docRestoreBtn");
+    if (btn) {
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = "reprocessing…";
+        try {
+          const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/reprocess", {});
+          if (r && r.error) { btn.textContent = "refused: " + r.error; return; }
+          btn.textContent = "restored — reprocessing…";
+          showDoc(id, container);
+        } catch {
+          btn.textContent = "failed — see daemon log";
+        }
+      };
+    }
+    return;
+  }
   const doc = d.document || {};
   const x = d.extraction || {};
   const parties = d.parties || [];

@@ -264,6 +264,25 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         // expires in 15 minutes and cannot be used to impersonate the app
         // afterwards.
         html = html.replace("%%TOKEN%%", mintUiSession());
+        // Cache-bust the dev UI assets. The HTML shell is never cached, but
+        // the JS/CSS files are — a stale or mixed browser cache (old ui.js
+        // with new documents.js) breaks the tab loaders with reference
+        // errors. Version every asset URL by the newest file mtime so any
+        // change forces the browser to refetch the whole set together.
+        let uiVersion = "";
+        try {
+          const uiDir = path.join(import.meta.dirname ?? __dirname, "ui");
+          let newest = 0;
+          for (const e of await fsp.readdir(uiDir)) {
+            if (!/\.(js|css)$/.test(e)) continue;
+            const st = await fsp.stat(path.join(uiDir, e));
+            if (st.mtimeMs > newest) newest = st.mtimeMs;
+          }
+          uiVersion = "?v=" + Math.round(newest);
+        } catch {
+          uiVersion = "";
+        }
+        html = html.replace(/(src="\/ui\/[^"]+\.js"|href="\/ui\/[^"]+\.css")/g, (m) => m.slice(0, -1) + uiVersion + "\"");
         res.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
