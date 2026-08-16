@@ -84,6 +84,10 @@
           <label>Base URL</label>
           <input type="text" id="aiBaseUrl" placeholder="https://your-provider.com/v1">
         </div>
+        <div class="field" id="aiUrlRow">
+          <label>Base URL</label>
+          <input type="text" id="aiBaseUrlRo" readonly style="opacity:0.6">
+        </div>
         <div class="field">
           <label>API key</label>
           <input type="password" id="aiApiKey" placeholder="paste your API key">
@@ -91,8 +95,7 @@
         </div>
         <div class="field">
           <label>Model</label>
-          <input type="text" id="aiModel" list="aiModelList" placeholder="auto-fetched on provider select, or type your own">
-          <datalist id="aiModelList"></datalist>
+          <select id="aiModel"><option value="">select a provider first</option></select>
         </div>
         <div class="save-row">
           <button class="act" id="aiTest">Test</button>
@@ -110,40 +113,22 @@
           <label>Base URL</label>
           <input type="text" id="ai2BaseUrl" placeholder="https://your-provider.com/v1">
         </div>
+        <div class="field" id="ai2UrlRow">
+          <label>Base URL</label>
+          <input type="text" id="ai2BaseUrlRo" readonly style="opacity:0.6">
+        </div>
         <div class="field">
           <label>API key</label>
           <input type="password" id="ai2ApiKey" placeholder="paste your API key">
           <div class="hint" id="ai2KeySrc"></div>
         </div>
-        <div class="field">
+        <div class="field" id="ai2ModelRow">
           <label>Model</label>
-          <input type="text" id="ai2Model" list="ai2ModelList" placeholder="auto-fetched on provider select, or type your own">
-          <datalist id="ai2ModelList"></datalist>
+          <select id="ai2Model"><option value="">select a provider first</option></select>
         </div>
         <div class="save-row">
           <button class="act" id="ai2Test">Test</button>
           <span class="msg" id="ai2Msg"></span>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h3>Document intelligence — Sarvam AI (India)</h3>
-        <div class="hint" style="margin-bottom:8px">
-          When the India jurisdiction pack is active, Sarvam AI replaces the
-          generic secondary provider for document intelligence. Sarvam does
-          OCR + field extraction directly on the raw file (PDF/image), which
-          is far more accurate for Indian financial documents (GST invoices,
-          bank statements, etc.) than a generic vision model reading messy OCR
-          text.
-        </div>
-        <div class="field">
-          <label>API key</label>
-          <input type="password" id="sarvamApiKey" placeholder="paste your Sarvam API subscription key">
-          <div class="hint" id="sarvamKeySrc"></div>
-        </div>
-        <div class="save-row">
-          <button class="act" id="sarvamSave">Save</button>
-          <span class="msg" id="sarvamMsg"></span>
         </div>
       </div>
   </div>

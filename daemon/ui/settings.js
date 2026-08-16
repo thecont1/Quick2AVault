@@ -16,6 +16,11 @@ const PROVIDERS = [
   { id: "openrouter", name: "OpenRouter",          baseUrl: "https://openrouter.ai/api/v1" },
   { id: "perplexity", name: "Perplexity",          baseUrl: "https://api.perplexity.ai/v1" },
   { id: "poolside",   name: "Poolside",            baseUrl: "https://inference.poolside.ai/v1" },
+  // Sarvam AI: document intelligence provider for the India jurisdiction.
+  // Uses a different API protocol (async job + multipart, not chat completions),
+  // but is presented in the same dropdown so the user configures it as the
+  // secondary provider. Auto-selected when India jurisdiction is active.
+  { id: "sarvam",     name: "Sarvam AI (Doc Intelligence)", baseUrl: "https://api.sarvam.ai/doc-ai/v1" },
   { id: "together",   name: "Together AI",         baseUrl: "https://api.together.ai/v1" },
   { id: "custom",     name: "Custom",              baseUrl: "" },
 ];
@@ -56,7 +61,7 @@ async function loadSettings() {
   fillProviderDropdown("aiProvider", ai.base_url || "");
   currentPrimaryProviderId = document.getElementById("aiProvider").value;
   document.getElementById("aiBaseUrl").value = ai.base_url || "";
-  toggleCustomUrl("primary");
+  onProviderChange("primary", ai.model || "");
   document.getElementById("aiKeySrc").innerHTML = ai.api_key_set
     ? "<span class='ok'>key set via " + esc(ai.api_key_source) + "</span>"
     : "<span class='warn'>no key configured</span>";
@@ -64,31 +69,9 @@ async function loadSettings() {
   const aiKeyInput = document.getElementById("aiApiKey");
   aiKeyInput.value = primaryKeyMask;
   aiKeyInput.placeholder = ai.api_key_set ? "type a new key to replace" : "paste your API key";
-  // Model is a text input with a datalist of fetched models. Show the saved
-  // model as the value; the datalist is populated by autoFetchModels.
-  document.getElementById("aiModel").value = ai.model || "";
 
-  // Secondary provider
-  const sec = ai.secondary || {};
-  fillProviderDropdown("ai2Provider", sec.base_url || "");
-  currentSecondaryProviderId = document.getElementById("ai2Provider").value;
-  document.getElementById("ai2BaseUrl").value = sec.base_url || "";
-  toggleCustomUrl("secondary");
-  secondaryKeyMask = sec.api_key_mask || "";
-  document.getElementById("ai2KeySrc").innerHTML = sec.api_key_set
-    ? "<span class='ok'>key set via " + esc(sec.api_key_source || "keychain") + "</span>"
-    : "<span class='warn'>no key configured</span>";
-  const ai2KeyInput = document.getElementById("ai2ApiKey");
-  ai2KeyInput.value = secondaryKeyMask;
-  ai2KeyInput.placeholder = sec.api_key_set ? "type a new key to replace" : "paste your API key";
-  document.getElementById("ai2Model").value = sec.model || "";
-
-  // Auto-fetch model lists for the selected providers (silent — the user can
-  // still type a model manually if the fetch fails).
-  autoFetchModels("primary");
-  autoFetchModels("secondary");
-
-  // Jurisdiction
+  // Jurisdiction — loaded BEFORE the secondary provider so we can auto-select
+  // Sarvam AI when the India jurisdiction pack is active.
   const jur = s.jurisdiction || {};
   const sel = document.getElementById("jurSelect");
   sel.innerHTML = (jur.available || []).map((p) =>
@@ -97,6 +80,29 @@ async function loadSettings() {
   document.getElementById("jurInfo").innerHTML =
     "Currency <b>" + esc(jur.currency) + "</b> · FY " + esc(jur.fy_label)
     + " · dates " + esc(jur.date_format) + " · grouping " + esc(jur.grouping);
+
+  // Secondary provider
+  // When the India jurisdiction is active and the user hasn't explicitly
+  // configured a secondary, auto-select Sarvam AI (document intelligence).
+  // The user is free to change this — the auto-select only fires when no
+  // secondary base_url is saved.
+  const sec = ai.secondary || {};
+  const sarvamBaseUrl = "https://api.sarvam.ai/doc-ai/v1";
+  const isIndia = jur.id === "IN";
+  const noSecondaryConfigured = !sec.base_url && !sec.model;
+  const effectiveSecBaseUrl = (isIndia && noSecondaryConfigured) ? sarvamBaseUrl : (sec.base_url || "");
+  fillProviderDropdown("ai2Provider", effectiveSecBaseUrl);
+  currentSecondaryProviderId = document.getElementById("ai2Provider").value;
+  document.getElementById("ai2BaseUrl").value = effectiveSecBaseUrl;
+  const secModelForLoad = currentSecondaryProviderId === "sarvam" ? "Sarvam Parse" : (sec.model || "");
+  onProviderChange("secondary", secModelForLoad);
+  secondaryKeyMask = sec.api_key_mask || "";
+  document.getElementById("ai2KeySrc").innerHTML = sec.api_key_set
+    ? "<span class='ok'>key set via " + esc(sec.api_key_source || "keychain") + "</span>"
+    : "<span class='warn'>no key configured</span>";
+  const ai2KeyInput = document.getElementById("ai2ApiKey");
+  ai2KeyInput.value = secondaryKeyMask;
+  ai2KeyInput.placeholder = sec.api_key_set ? "type a new key to replace" : "paste your API key";
 
   // Vault
   const v = s.vault || {};
@@ -119,15 +125,6 @@ async function loadSettings() {
   const gDate = document.getElementById("gAfterDate");
   if (!gDate.value) gDate.value = new Date().toISOString().slice(0, 10);
 
-  // Sarvam AI document intelligence (India jurisdiction)
-  const sarvam = ai.sarvam || {};
-  const sarvamKeyInput = document.getElementById("sarvamApiKey");
-  sarvamKeyInput.value = sarvam.api_key_mask || "";
-  sarvamKeyInput.placeholder = sarvam.api_key_set ? "type a new key to replace" : "paste your Sarvam API subscription key";
-  document.getElementById("sarvamKeySrc").innerHTML = sarvam.api_key_set
-    ? "<span class='ok'>key set via " + esc(sarvam.api_key_source || "keychain") + "</span>"
-    : "<span class='warn'>no key configured</span>";
-
   // Auto-test both inference providers so the user sees a green/red status
   // the moment they open Settings — no need to click Test manually.
   testAi("primary");
@@ -145,34 +142,118 @@ function providerBaseUrl(which) {
   return p.baseUrl;
 }
 
-function toggleCustomUrl(which) {
-  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
-  const row = document.getElementById(which === "primary" ? "aiCustomUrlRow" : "ai2CustomUrlRow");
-  row.style.display = sel.value === "custom" ? "" : "none";
+/**
+ * Called when the provider dropdown changes (or on initial load).
+ * Shows the base URL (read-only for known providers, editable for Custom),
+ * and fetches the model list to populate the model dropdown.
+ *
+ * @param which "primary" | "secondary"
+ * @param savedModel  the model currently saved in the backend (to pre-select)
+ */
+function onProviderChange(which, savedModel) {
+  const isPrimary = which === "primary";
+  const sel = document.getElementById(isPrimary ? "aiProvider" : "ai2Provider");
+  const pid = sel.value;
+  const provider = PROVIDERS.find((p) => p.id === pid);
+  const baseUrl = provider ? provider.baseUrl : "";
+
+  // Base URL: show read-only for known providers, editable for Custom
+  const customUrlRow = document.getElementById(isPrimary ? "aiCustomUrlRow" : "ai2CustomUrlRow");
+  const urlRow = document.getElementById(isPrimary ? "aiUrlRow" : "ai2UrlRow");
+  const baseUrlInput = document.getElementById(isPrimary ? "aiBaseUrl" : "ai2BaseUrl");
+  const baseUrlRoInput = document.getElementById(isPrimary ? "aiBaseUrlRo" : "ai2BaseUrlRo");
+
+  if (pid === "custom") {
+    // Custom: show the editable field, hide the read-only field
+    if (customUrlRow) customUrlRow.style.display = "";
+    if (urlRow) urlRow.style.display = "none";
+  } else {
+    // Known provider: show read-only with the provider's base URL
+    if (customUrlRow) customUrlRow.style.display = "none";
+    if (urlRow) urlRow.style.display = "";
+    if (baseUrlRoInput) baseUrlRoInput.value = baseUrl;
+  }
+
+  // Model dropdown
+  const modelSelect = document.getElementById(isPrimary ? "aiModel" : "ai2Model");
+
+  // Sarvam: fixed model, disable the dropdown
+  if (pid === "sarvam") {
+    modelSelect.innerHTML = "<option value='Sarvam Parse'>Sarvam Parse</option>";
+    modelSelect.value = "Sarvam Parse";
+    modelSelect.disabled = true;
+    modelSelect.style.opacity = "0.6";
+    return;
+  }
+
+  // Other providers: enable the dropdown and fetch models
+  modelSelect.disabled = false;
+  modelSelect.style.opacity = "";
+  // Show a placeholder while fetching
+  modelSelect.innerHTML = "<option value=''>fetching models…</option>";
+  if (savedModel) {
+    // Temporarily add the saved model so it's visible immediately,
+    // even before the fetch completes. autoFetchModels will replace
+    // the list and re-select it.
+    modelSelect.innerHTML = "<option value='" + esc(savedModel) + "'>" + esc(savedModel) + "</option>";
+    modelSelect.value = savedModel;
+  }
+  autoFetchModels(which, savedModel);
 }
 
-async function autoFetchModels(which) {
+async function autoFetchModels(which, savedModel) {
   const baseUrl = providerBaseUrl(which);
   if (!baseUrl) return;
-  const list = document.getElementById(which === "primary" ? "aiModelList" : "ai2ModelList");
-  const keyInput = document.getElementById(which === "primary" ? "aiApiKey" : "ai2ApiKey");
+  const isPrimary = which === "primary";
+  const modelSelect = document.getElementById(isPrimary ? "aiModel" : "ai2Model");
+  const keyInput = document.getElementById(isPrimary ? "aiApiKey" : "ai2ApiKey");
   const key = keyInput.value;
-  const mask = which === "primary" ? primaryKeyMask : secondaryKeyMask;
+  const mask = isPrimary ? primaryKeyMask : secondaryKeyMask;
   // If the user hasn't changed the mask, send empty string — the backend will
   // use the stored key from the secret store.
   const apiKey = key && key !== mask ? key : "";
   try {
     const r = await apiPost("/v1/settings/models", { base_url: baseUrl, api_key: apiKey });
-    if (r.error) return;
+    if (r.error) {
+      // Fetch failed — keep the saved model if we have one, otherwise show error
+      if (savedModel) {
+        modelSelect.innerHTML = "<option value='" + esc(savedModel) + "'>" + esc(savedModel) + "</option>";
+        modelSelect.value = savedModel;
+      } else {
+        modelSelect.innerHTML = "<option value=''>could not fetch models</option>";
+      }
+      return;
+    }
     const models = r.models || [];
-    list.innerHTML = models.map((m) => "<option value='" + esc(m) + "'>").join("");
-  } catch { /* silent — the user can still type a model manually */ }
+    if (models.length === 0) {
+      if (savedModel) {
+        modelSelect.innerHTML = "<option value='" + esc(savedModel) + "'>" + esc(savedModel) + "</option>";
+        modelSelect.value = savedModel;
+      } else {
+        modelSelect.innerHTML = "<option value=''>no models available</option>";
+      }
+      return;
+    }
+    // Build the dropdown, pre-selecting the saved model if it's in the list
+    const hasSaved = savedModel && models.includes(savedModel);
+    modelSelect.innerHTML = models.map((m) =>
+      "<option value='" + esc(m) + "'" + (hasSaved && m === savedModel ? " selected" : "") + ">"
+      + esc(m) + "</option>").join("");
+    if (hasSaved) {
+      modelSelect.value = savedModel;
+    } else if (savedModel) {
+      // Saved model not in the fetched list — add it at the top
+      modelSelect.innerHTML = "<option value='" + esc(savedModel) + "'>" + esc(savedModel) + " (saved)</option>"
+        + modelSelect.innerHTML;
+      modelSelect.value = savedModel;
+    }
+  } catch { /* silent — the saved model (if any) is already shown */ }
 }
 
 async function saveAi(which) {
   const msg = document.getElementById(which === "primary" ? "aiMsg" : "ai2Msg");
   const baseUrl = providerBaseUrl(which);
-  const model = document.getElementById(which === "primary" ? "aiModel" : "ai2Model").value.trim();
+  const model = document.getElementById(which === "primary" ? "aiModel" : "ai2Model").value;
   // Don't auto-save an incomplete Custom provider — the user is still typing
   // the URL. Saving an empty base_url would clobber the previous config and
   // cause spurious test errors.
@@ -194,7 +275,10 @@ async function saveAi(which) {
     else if (!key) body.api_key = "";
   } else {
     body.secondary_base_url = baseUrl;
-    body.secondary_model = model;
+    // Sarvam AI: the endpoint IS the model. Send a fixed sentinel so the
+    // backend knows a secondary is configured (empty model would be treated
+    // as "no secondary"). The SarvamProvider ignores this value.
+    body.secondary_model = sel.value === "sarvam" ? "Sarvam Parse" : model;
     body.secondary_api_key_provider = pid;
     if (key && key !== mask) body.secondary_api_key = key;
     else if (!key) body.secondary_api_key = "";
@@ -287,47 +371,24 @@ document.getElementById("aiTest").onclick = () => testAi("primary");
 document.getElementById("aiProvider").onchange = () => {
   // Save the old provider's key first, then swap to the new provider's key.
   saveAi("primary");
-  toggleCustomUrl("primary");
+  onProviderChange("primary", "");
   swapProviderKey("primary");
-  autoFetchModels("primary");
   autoSave("primary");
 };
-document.getElementById("aiApiKey").onchange = () => autoSave("primary");
-document.getElementById("aiModel").oninput = () => autoSave("primary");
+document.getElementById("aiApiKey").onchange = () => { autoSave("primary"); autoFetchModels("primary", document.getElementById("aiModel").value); };
+document.getElementById("aiModel").onchange = () => autoSave("primary");
 document.getElementById("aiBaseUrl").oninput = () => autoSave("primary");
 document.getElementById("ai2Test").onclick = () => testAi("secondary");
 document.getElementById("ai2Provider").onchange = () => {
   saveAi("secondary");
-  toggleCustomUrl("secondary");
+  onProviderChange("secondary", "");
   swapProviderKey("secondary");
-  autoFetchModels("secondary");
   autoSave("secondary");
 };
-document.getElementById("ai2ApiKey").onchange = () => autoSave("secondary");
-document.getElementById("ai2Model").oninput = () => autoSave("secondary");
+document.getElementById("ai2ApiKey").onchange = () => { autoSave("secondary"); autoFetchModels("secondary", document.getElementById("ai2Model").value); };
+document.getElementById("ai2Model").onchange = () => autoSave("secondary");
 document.getElementById("ai2BaseUrl").oninput = () => autoSave("secondary");
 document.getElementById("jurSave").onclick = saveJur;
-
-// Sarvam AI document intelligence — save handler
-document.getElementById("sarvamSave").onclick = async () => {
-  const msg = document.getElementById("sarvamMsg");
-  msg.className = "msg"; msg.textContent = "saving…";
-  const keyInput = document.getElementById("sarvamApiKey");
-  const key = keyInput.value;
-  const body = {};
-  // Only send the key if the user typed something new (not the mask)
-  if (key && key !== (document.getElementById("sarvamKeySrc").textContent.includes("key set") ? "********" : "")) {
-    body.sarvam_api_key = key;
-  } else if (!key) {
-    body.sarvam_api_key = "";
-  }
-  const r = await apiPost("/v1/settings", body);
-  if (r.error) { msg.className = "msg bad"; msg.textContent = "error: " + r.error; return; }
-  msg.className = "msg ok";
-  msg.textContent = "saved · Sarvam document intelligence is " + (r.ai_available ? "active" : "ready");
-  // Reload to show the updated key status
-  loadSettings();
-};
 
 async function gmailAction(action) {
   const msg = document.getElementById("gMsg");
