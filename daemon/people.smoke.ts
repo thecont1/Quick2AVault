@@ -393,6 +393,37 @@ await check("making one person owner demotes the previous owner — exactly one 
   assert.equal(m.is_owner, 0);
 });
 
+await check("PATCH is_member toggles membership without disturbing the owner", async () => {
+  // Seed a clean non-member candidate so the test does not depend on the
+  // owner test's final state. ent_v is owner at this point.
+  db.prepare(
+    `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, is_owner, created_at)
+     VALUES ('ent_q','person','Qasim Iyer','candidate',0.7,0,0,?)`,
+  ).run(now);
+
+  const on = await call("PATCH", "/v1/people/ent_q", { is_member: true });
+  assert.equal(on.status, 200);
+  assert.equal(on.json?.person?.is_member, 1, "promoted to member");
+  assert.equal(on.json?.person?.is_owner, 0, "member is not automatically owner");
+
+  const ownerStill = db.prepare("SELECT is_owner FROM entities WHERE id='ent_v'").get() as {
+    is_owner: number;
+  };
+  assert.equal(ownerStill.is_owner, 1, "owner unchanged by a member toggle on someone else");
+
+  const off = await call("PATCH", "/v1/people/ent_q", { is_member: false });
+  assert.equal(off.status, 200);
+  assert.equal(off.json?.person?.is_member, 0, "demoted from member");
+
+  // Demoting the OWNER's membership must also clear owner (owner ⇒ member).
+  const demoteOwner = await call("PATCH", "/v1/people/ent_v", { is_member: false });
+  assert.equal(demoteOwner.status, 200);
+  assert.equal(demoteOwner.json?.person?.is_member, 0);
+  assert.equal(demoteOwner.json?.person?.is_owner, 0, "demoting the owner's membership clears owner");
+  // Restore the owner for downstream tests.
+  await call("PATCH", "/v1/people/ent_v", { is_owner: true });
+});
+
 await check("renaming preserves the old name as a confirmed name_variant alias", async () => {
   const r = await call("PATCH", "/v1/people/ent_v", { display_name: "Nisha Deepak Patel" });
   assert.equal(r.status, 200);

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'state.dart';
 import 'view.dart';
 
 class SettingsPanel extends StatelessWidget {

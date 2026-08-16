@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
+import { createRequire } from "node:module";
 
 import { createPorts } from "./adapters.js";
 import { openDatabase } from "./schema.js";
@@ -21,8 +22,22 @@ import { createTokenStore } from "./gmail/token-store.js";
 import { syncGmail } from "./gmail/sync.js";
 import { createMutableProvider } from "./ai-provider.js";
 import { createEmbeddingProvider } from "./embeddings.js";
+import { createSecretStore } from "./secret-store.js";
+import { migrateInferenceSettings, readSlotConfig } from "./lib/migrateInferenceSettings.js";
+import { loadCatalog, findProvider, findModel } from "./lib/catalog.js";
+import { CredentialManager } from "./lib/credentials.js";
 
-const VERSION = "2.0.0-daemon";
+// Auto-derive the version from package.json so it stays in sync without
+// manual edits. Bump package.json's "version" field and the daemon follows.
+const require = createRequire(import.meta.url);
+const VERSION = (() => {
+  try {
+    const pkg = require("../../package.json");
+    return `${pkg.version}-daemon`;
+  } catch {
+    return "2.0.0-daemon";
+  }
+})();
 
 /**
  * Files a real user's Drop folder accumulates that are not documents.
@@ -111,19 +126,90 @@ async function main() {
 
   // Settings saved from the Setup page take precedence over environment vars,
   // so a user who pastes a key into the app doesn't have to touch a shell.
+  // Non-secret settings (base URL, model, routing mode) live in app_settings;
+  // API keys go through the SecretStore (Keychain on macOS, 0600 file elsewhere)
+  // so they are never stored as plaintext in the SQLite database.
   const stored = Object.fromEntries(
     (db.prepare("SELECT key, value FROM app_settings").all() as { key: string; value: string }[])
       .map((r) => [r.key, r.value]),
   );
+
+  const secrets = await createSecretStore(ports.paths.vaultRoot());
+  ports.logger.info("secret store", { backend: secrets.backend });
+
+  // One-time migration: if API keys were previously stored as plaintext in
+  // app_settings, move them to the SecretStore and scrub them from the DB.
+  // This runs every startup but is a no-op once the migration is done.
+  for (const [dbKey, secretKey] of [
+    ["ai.api_key", "ai.api_key"],
+    ["ai.secondary.api_key", "ai.secondary.api_key"],
+  ] as const) {
+    const plaintext = stored[dbKey];
+    if (plaintext && typeof plaintext === "string" && plaintext.length > 0) {
+      await secrets.set(secretKey, plaintext);
+      db.prepare("DELETE FROM app_settings WHERE key = ?").run(dbKey);
+      ports.logger.info("migrated API key to secret store", { key: dbKey });
+    }
+  }
+
+  // Migrate old inference settings (ai.base_url, ai.model, etc.) to the new
+  // SlotConfig shape (inference.primary.provider_id, etc.) with per-provider
+  // credential storage. Idempotent — no-op if already migrated.
+  const migrationResult = await migrateInferenceSettings(db, secrets, ports.logger);
+  if (migrationResult.migrated) {
+    ports.logger.info("migrated inference settings to new SlotConfig shape", {
+      primary: migrationResult.primary,
+      secondary: migrationResult.secondary,
+    });
+  }
+
+  // Read inference config from the new SlotConfig shape (post-migration).
+  // Falls back to old app_settings keys if migration hasn't happened yet.
+  const credMgr = new CredentialManager(secrets);
+  const catalog = loadCatalog();
+  const primSlot = readSlotConfig(db, "primary");
+  const secSlot = readSlotConfig(db, "secondary");
+
+  let aiApiKey: string;
+  let aiBaseUrl: string;
+  let aiModel: string;
+  if (primSlot) {
+    const provider = findProvider(catalog, primSlot.providerId);
+    aiApiKey = (await credMgr.getKey(primSlot.providerId)) ?? "";
+    aiBaseUrl = primSlot.baseUrlOverride ?? provider?.baseUrl ?? "";
+    aiModel = primSlot.modelId;
+  } else {
+    aiApiKey = (await secrets.get("ai.api_key")) ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
+    aiBaseUrl = stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "";
+    aiModel = stored["ai.model"] || process.env.Q2AV_MODEL || "";
+  }
+
+  let ai2ApiKey: string;
+  let ai2BaseUrl: string;
+  let ai2Model: string;
+  if (secSlot) {
+    const provider = findProvider(catalog, secSlot.providerId);
+    ai2ApiKey = (await credMgr.getKey(secSlot.providerId)) ?? "";
+    ai2BaseUrl = secSlot.baseUrlOverride ?? provider?.baseUrl ?? "";
+    ai2Model = secSlot.modelId;
+  } else {
+    ai2ApiKey = (await secrets.get("ai.secondary.api_key")) ?? "";
+    ai2BaseUrl = stored["ai.secondary.base_url"] || "";
+    ai2Model = stored["ai.secondary.model"] || "";
+  }
 
   // Mutable so Settings changes apply immediately. See createMutableProvider:
   // this used to be a fixed provider, and saving a key did nothing until the
   // daemon was restarted.
   const ai = createMutableProvider(
     {
-      apiKey: stored["ai.api_key"] || process.env.ANTHROPIC_API_KEY,
-      baseUrl: stored["ai.base_url"] || process.env.Q2AV_AI_BASE_URL,
-      model: stored["ai.model"] || process.env.Q2AV_MODEL,
+      apiKey: aiApiKey,
+      baseUrl: aiBaseUrl,
+      model: aiModel,
+      secondaryApiKey: ai2ApiKey,
+      secondaryBaseUrl: ai2BaseUrl,
+      secondaryModel: ai2Model,
+      routingMode: (stored["ai.routing_mode"] as "auto" | "primary_only" | "vision_fallback") ?? "auto",
     },
     ports.logger,
   );
@@ -152,11 +238,11 @@ async function main() {
   // before and the endpoints answer 501 with instructions, rather than the
   // feature silently pretending to work.
   const creds = loadGoogleCredentials(db, ports.paths.vaultRoot(), ports.logger);
-  let gmail: { oauth: GmailOAuth; sync: () => Promise<unknown> } | undefined;
+  let gmail: { oauth: GmailOAuth; sync: (opts?: { afterDate?: string; force?: boolean }) => Promise<unknown> } | undefined;
   if (creds) {
     const store = await createTokenStore(ports.paths.vaultRoot());
     const oauth = new GmailOAuth(creds.clientId, creds.clientSecret, "gmail", store, ports.logger);
-    gmail = { oauth, sync: () => syncGmail(db, ports, oauth) };
+    gmail = { oauth, sync: (opts?: { afterDate?: string; force?: boolean }) => syncGmail(db, ports, oauth, opts) };
     ports.logger.info("gmail dropbox ready", {
       credentials: creds.source,
       client_id: `${creds.clientId.slice(0, 12)}…`,
@@ -185,6 +271,8 @@ async function main() {
     // Browser dev UI is opt-in: it hands API access to any local process that
     // can read the page.
     devUi: process.env.Q2AV_DEV_UI === "1",
+    // Secret store for AI API keys (Keychain on macOS, 0600 file elsewhere).
+    secrets,
   });
   await api.listen();
   ports.logger.info(`Core API listening`, { url: `http://127.0.0.1:${PORT}` });
@@ -226,6 +314,28 @@ async function main() {
       }, 250),
     );
   });
+
+  // ── gmail scheduled sync ──────────────────────────────────────────────────
+  // Checks the Gmail dropbox at every 5th minute of the hour (:00, :05, :10…)
+  // so new messages are picked up without manual resync. The timer fires every
+  // minute but only triggers a sync when the current minute is divisible by 5.
+  if (gmail) {
+    const scheduledSync = async () => {
+      const now = new Date();
+      if (now.getMinutes() % 5 !== 0) return;
+      try {
+        ports.logger.info("gmail: scheduled sync starting");
+        await gmail.sync();
+        ports.logger.info("gmail: scheduled sync complete");
+      } catch (err) {
+        ports.logger.error("gmail: scheduled sync failed", { error: (err as Error)?.message });
+      }
+    };
+    setInterval(scheduledSync, 60_000); // check every minute
+    // Run an initial sync shortly after startup if we're already on a 5-min mark.
+    setTimeout(scheduledSync, 5_000);
+    ports.logger.info("gmail: scheduled sync every 5 minutes (:00, :05, :10…)");
+  }
 
   const shutdown = async () => {
     ports.logger.info("shutting down");

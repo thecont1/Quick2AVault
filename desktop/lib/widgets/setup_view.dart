@@ -196,20 +196,21 @@ class _SetupViewState extends State<SetupView> {
                     // ── AI provider ────────────────────────────────────────
                     const _SectionTitle('AI Provider'),
                     const _Hint(
-                      'Any Anthropic-compatible endpoint. Leave the base URL '
-                      'empty to use Anthropic directly. Extraction, entity '
-                      'resolution and reconciliation all run through this.',
+                      'Any OpenAI-compatible or Anthropic-compatible endpoint. '
+                      'Leave the base URL empty to use the default (Poolside '
+                      'Laguna S2.1). Extraction, entity resolution and '
+                      'reconciliation all run through this.',
                     ),
                     const SizedBox(height: 14),
                     _Field(
                       label: 'Base URL',
-                      hint: 'https://api.anthropic.com  (default)',
+                      hint: 'https://inference.poolside.ai/v1  (default)',
                       controller: _baseUrl,
                     ),
                     const SizedBox(height: 12),
                     _Field(
                       label: 'Model',
-                      hint: 'claude-sonnet-5',
+                      hint: 'poolside/laguna-s-2.1',
                       controller: _model,
                     ),
                     const SizedBox(height: 12),
@@ -217,7 +218,7 @@ class _SetupViewState extends State<SetupView> {
                       label: 'API Key',
                       hint: (ai['api_key_set'] == true)
                           ? 'stored ${ai['api_key_hint']} — type to replace'
-                          : 'sk-ant-…',
+                          : 'sk-…  (OpenAI-style key)',
                       controller: _apiKey,
                       obscure: _obscure,
                       trailing: IconButton(
@@ -265,8 +266,9 @@ class _SetupViewState extends State<SetupView> {
                     const _Hint(
                       'An optional second LLM for vision tasks or as a fallback '
                       'when the primary model is unavailable. Leave blank to use '
-                      'only the primary model. Shares the primary base URL if '
-                      'left empty.',
+                      'only the primary model. Any OpenAI-compatible or '
+                      'Anthropic-compatible endpoint. Shares the primary base '
+                      'URL if left empty.',
                     ),
                     const SizedBox(height: 14),
                     _Field(
@@ -277,7 +279,7 @@ class _SetupViewState extends State<SetupView> {
                     const SizedBox(height: 12),
                     _Field(
                       label: 'Model',
-                      hint: 'claude-haiku-4 or a vision model',
+                      hint: 'a smaller OpenAI-style model or vision model',
                       controller: _secModel,
                     ),
                     const SizedBox(height: 12),
@@ -285,7 +287,7 @@ class _SetupViewState extends State<SetupView> {
                       label: 'API Key',
                       hint: (sec['api_key_set'] == true)
                           ? 'stored ${sec['api_key_hint']} — type to replace'
-                          : 'sk-ant-…  (optional)',
+                          : 'sk-…  (optional)',
                       controller: _secApiKey,
                       obscure: _obscureSec,
                       trailing: IconButton(

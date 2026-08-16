@@ -102,22 +102,46 @@ export interface GmailSyncResult {
   historyId: string;
 }
 
+export interface SyncOptions {
+  /** ISO date string (YYYY-MM-DD). When force is on, only mail after this date is pulled. */
+  afterDate?: string;
+  /** Ignore the stored history checkpoint and do a fresh pull from afterDate. */
+  force?: boolean;
+}
+
 /**
  * Run one incremental sync. Safe to call repeatedly; does nothing when there
- * is no new mail.
+ * is no new mail. With force=true, ignores the checkpoint and does a fresh
+ * pull filtered to afterDate (default: today).
  */
 export async function syncGmail(
   db: DatabaseSync,
   ports: Ports,
   oauth: GmailOAuth,
+  opts?: SyncOptions,
 ): Promise<GmailSyncResult> {
   const transport = createTransport(oauth);
-  // Only mail that looks financial, and a bounded first pull so connecting a
-  // decade-old mailbox doesn't enqueue 40,000 jobs.
+  const force = !!opts?.force;
+  const afterDate = opts?.afterDate;
+
+  // Build the Gmail search query. The base query targets financial mail. When
+  // forcing a fresh pull from a date, add an after: filter and remove the
+  // initial limit so all matching mail is fetched.
+  let initialQuery =
+    "has:attachment (invoice OR receipt OR statement OR payment OR order OR bill OR contract)";
+  let initialLimit = 100;
+  if (force) {
+    if (afterDate) {
+      // Gmail's after: filter uses YYYY/YYYY-MM/YYYY-MM-DD format.
+      initialQuery += ` after:${afterDate}`;
+    }
+    // A forced pull should get everything matching — no artificial cap.
+    initialLimit = 10000;
+  }
+
   const source = createGmailSyncSource(transport, {
-    initialQuery:
-      "has:attachment (invoice OR receipt OR statement OR payment OR order OR bill OR contract)",
-    initialLimit: 100,
+    initialQuery,
+    initialLimit,
   });
 
   // Guard against a token that belongs to a different mailbox than the one
@@ -138,7 +162,16 @@ export async function syncGmail(
     }
   }
 
-  const checkpoint =
+  // When force is on, ignore the stored checkpoint — do a fresh initial pull.
+  // Also clear the Gmail source_events so previously-processed messages can be
+  // re-imported. Without this, the idempotency guard would skip every message
+  // that was already seen in a prior sync, defeating the purpose of a forced
+  // re-pull after the user has flushed their data.
+  if (force) {
+    db.prepare("DELETE FROM source_events WHERE source = ?").run(PROVIDER);
+    ports.logger.info("gmail: forced sync — cleared source_events for re-import");
+  }
+  const checkpoint = force ? null :
     (
       db.prepare("SELECT value FROM app_settings WHERE key='gmail.history_id'").get() as
         | { value?: string }

@@ -11,8 +11,10 @@ library;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'core/providers.dart';
 import 'api.dart';
 import 'menubar.dart';
 import 'window_store.dart';
@@ -24,8 +26,15 @@ import 'widgets/vault_tabs.dart';
 import 'widgets/ledger_tab.dart';
 import 'widgets/review_browser.dart';
 import 'features/adapters.dart';
+import 'features/connection/status_provider.dart';
+import 'features/dashboard/dashboard_providers.dart';
+import 'features/dashboard/period_provider.dart';
+import 'features/events/event_dispatcher.dart';
+import 'features/events/event_service.dart';
+import 'features/feature_providers.dart';
 import 'features/intake/view.dart' as wo_intake;
 import 'features/intake/state.dart' as wo_intake_state;
+import 'features/ledger/evidence_provider.dart';
 import 'features/learning/state.dart' as wo_learning;
 import 'features/learning/view.dart' as wo_learning_view;
 import 'features/people/view.dart' as wo_people;
@@ -35,6 +44,8 @@ import 'features/settings/state.dart' as wo_settings;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // QAV-FLT-07: route all uncaught errors through the privacy-safe logger.
+  installErrorHandlers();
   await windowManager.ensureInitialized();
   await windowManager.waitUntilReadyToShow(
     const WindowOptions(
@@ -43,7 +54,7 @@ Future<void> main() async {
       titleBarStyle: TitleBarStyle.hidden,
     ),
   );
-  runApp(const Quick2AVaultApp());
+  runApp(const ProviderScope(child: Quick2AVaultApp()));
 }
 
 class Quick2AVaultApp extends StatelessWidget {
@@ -58,32 +69,14 @@ class Quick2AVaultApp extends StatelessWidget {
   );
 }
 
-class VaultHome extends StatefulWidget {
+class VaultHome extends ConsumerStatefulWidget {
   const VaultHome({super.key});
   @override
-  State<VaultHome> createState() => _VaultHomeState();
+  ConsumerState<VaultHome> createState() => _VaultHomeState();
 }
 
-class _VaultHomeState extends State<VaultHome> {
-  late final VaultApi _api;
+class _VaultHomeState extends ConsumerState<VaultHome> {
   MenubarController? _menubar;
-
-  Snapshot _snap = Snapshot.empty;
-  TreemapData _treemap = TreemapData.empty;
-
-  /// Set when the daemon rejects our token. Non-null means the numbers on
-  /// screen are meaningless and must not be presented as the vault's state.
-  String? _authError;
-  Periods _periods = Periods.empty;
-
-  /// Defaults to the current month — the period a user checks most often.
-  PeriodSelection _period = PeriodSelection.thisMonth;
-  List<Txn> _txns = const [];
-  final List<VaultEvent> _feed = [];
-  EvidenceCard? _card;
-  String? _selectedId;
-  bool _connected = false;
-  bool _daemonUp = false;
 
   /// Popup (menubar panel) vs the full resizable window.
   bool _fullWindow = false;
@@ -95,62 +88,27 @@ class _VaultHomeState extends State<VaultHome> {
   /// and onSetup both set _setup, so Review opened Settings. An enum makes the
   /// invalid state unrepresentable.
   VaultTab _tab = VaultTab.ledger;
-  bool _learningOn = true;
-  int _reviewCount = 0;
-  List<wo_learning.LearningPrompt> _learningQuestions = const [];
-  List<wo_intake_state.IntakeItem> _intakeItems = const [];
-  List<wo_people_state.EntitySummary> _entities = const [];
-  wo_settings.AppSettings _appSettings = const wo_settings.AppSettings(
-    learningEnabled: true,
-    questionBudget: null,
-  );
-  wo_settings.JurisdictionPack _jurisdiction =
-      wo_settings.JurisdictionPack.india;
-  int _intakeArrivals = 0;
-  String? _selectedIntakeId;
+
   bool _learningDrawerOpen = false;
-
-  /// True when the last fetch failed, so the figures on screen describe an
-  /// older request than the period the user has selected. Surfaced in the UI —
-  /// silently stale numbers are worse than an error.
-  bool _stale = false;
-
-  /// Guards against overlapping reconnect loops.
-  bool _reconnecting = false;
-
-  /// Which hero figure the receipts list is explaining.
-  ///
-  /// Defaults to spending: it is the figure people actually interrogate, and
-  /// an unfiltered "everything" list answers no question in particular.
-  String _bucket = 'spending';
 
   @override
   void initState() {
     super.initState();
-    // Wired via --dart-define so the same binary points at any daemon.
-    // NOTE: no default token. A build without --dart-define=Q2AV_TOKEN gets an
-    // empty string and fails auth loudly, rather than shipping a guessable
-    // shared secret that would let any local process read the ledger.
-    // 4477 is the daemon's default port (daemon/main.ts). These two defaults
-    // MUST agree: a release build bakes this in, so a mismatch produces an app
-    // that connects to nothing and looks like an empty vault rather than a
-    // configuration error.
-    const base = String.fromEnvironment(
-      'Q2AV_URL',
-      defaultValue: 'http://127.0.0.1:4477',
-    );
-    const token = String.fromEnvironment('Q2AV_TOKEN');
-    _api = VaultApi(baseUrl: base, token: token);
-    // Errors MUST be surfaced. This was fire-and-forget, so any throw inside
-    // _initMenubar (a missing plugin registration, a platform channel that is
-    // not ready) vanished silently: the tray never installed, the QA start
-    // flags never fired, and the app just sat at its startup geometry looking
-    // like a layout bug rather than a crashed initialiser.
     _initMenubar().catchError((Object e, StackTrace st) {
-      // ignore: avoid_print
-      print('MENUBAR INIT FAILED: $e\n$st');
+      appLogger.e('Menubar init failed', error: e, stackTrace: st);
     });
-    _boot();
+    // Start the connection check. The SSE subscription is started by
+    // watching eventDispatcherProvider in build(), which keeps it alive
+    // for the widget's lifetime.
+    Future.microtask(() {
+      ref.read(connectionStatusProvider.notifier).start();
+    });
+  }
+
+  @override
+  void dispose() {
+    _menubar?.dispose();
+    super.dispose();
   }
 
   Future<void> _initMenubar() async {
@@ -197,78 +155,6 @@ class _VaultHomeState extends State<VaultHome> {
     }
   }
 
-  Future<void> _boot() async {
-    final up = await _api.health();
-    if (!mounted) return;
-    setState(() => _daemonUp = up);
-    if (up) {
-      await _refresh();
-      _listen();
-    } else {
-      // Poll until the daemon appears, so launch order doesn't matter.
-      Future.delayed(const Duration(seconds: 2), _boot);
-    }
-  }
-
-  Future<void> _refresh() async {
-    try {
-      final results = await Future.wait([
-        _api.snapshot(
-          period: _period.quick,
-          month: _period.month,
-          fy: _period.fy,
-        ),
-        _api.transactions(
-          period: _period.quick,
-          month: _period.month,
-          fy: _period.fy,
-          // The receipts list explains ONE hero figure at a time.
-          bucket: _bucket,
-        ),
-        _api.periods(),
-        // Same period as the snapshot — the treemap must always total to the
-        // spending figure shown above it, never to a different window.
-        _api.treemap(
-          period: _period.quick,
-          month: _period.month,
-          fy: _period.fy,
-        ),
-      ]);
-      if (!mounted) return;
-      setState(() {
-        _snap = results[0] as Snapshot;
-        _txns = results[1] as List<Txn>;
-        _periods = results[2] as Periods;
-        _treemap = results[3] as TreemapData;
-        // A successful fetch is the only proof the daemon is reachable.
-        _daemonUp = true;
-        _stale = false;
-      });
-      await _refreshFeatureData();
-    } on VaultAuthException catch (e) {
-      // NEVER fall through to zeros here. Rendering Rs 0 for an auth failure
-      // reads as "your vault is empty" — indistinguishable from real data loss,
-      // and alarming when the ledger is in fact intact. Say what is wrong.
-      if (mounted) setState(() => _authError = e.toString());
-    } catch (_) {
-      // A failed refresh USED to be swallowed here with "the SSE stream will
-      // trigger another". It will not: when the daemon is down the stream is
-      // down too. The visible symptom was the period selector appearing to do
-      // nothing — the button highlighted because _period had changed, the
-      // fetch failed, and the figures silently kept their old values.
-      //
-      // So: mark the data stale, mark the daemon unreachable, and start
-      // polling for its return. The UI can then say the numbers are frozen
-      // instead of quietly lying about which period they describe.
-      if (!mounted) return;
-      setState(() {
-        _stale = true;
-        _daemonUp = false;
-      });
-      _scheduleReconnect();
-    }
-  }
-
   /// WO11 Track A: run one People-desk mutation (owner / merge /
   /// keep-separate), then refetch so the desk reflects the daemon's truth.
   /// Failures surface as a snackbar rather than a silent no-op.
@@ -277,7 +163,8 @@ class _VaultHomeState extends State<VaultHome> {
       await action();
       // Strict: a failed entity refetch after a successful mutation must
       // surface here — otherwise the desk silently shows pre-mutation state.
-      await _refreshFeatureData(strictEntities: true);
+      ref.invalidate(entitiesProvider);
+      await ref.read(entitiesProvider.future);
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.maybeOf(
@@ -287,107 +174,13 @@ class _VaultHomeState extends State<VaultHome> {
     }
   }
 
-  Future<void> _refreshFeatureData({bool strictEntities = false}) async {
-    try {
-      final learning = await _api.learning();
-      if (mounted) {
-        setState(() {
-          _learningOn = learning.enabled;
-          _reviewCount = learning.questions.length;
-          _learningQuestions = learning.questions
-              .map(
-                (q) => wo_learning.LearningPrompt(
-                  id: '${q['id'] ?? ''}',
-                  prompt: '${q['question'] ?? ''}',
-                  why: q['context']?.toString() ?? '${q['trigger'] ?? ''}',
-                  trigger: '${q['trigger'] ?? ''}',
-                  novelty: (q['novelty_score'] as num?)?.toDouble() ?? 1,
-                ),
-              )
-              .toList();
-        });
-      }
-    } catch (_) {
-      // Feature failures must not hide a successfully loaded ledger.
-    }
-
-    try {
-      final intake = await _api.featureIntakeStatus();
-      if (mounted) {
-        setState(() {
-          _intakeItems = intake;
-          _intakeArrivals = intake
-              .where(
-                (item) => item.state != wo_intake_state.PipelineState.complete,
-              )
-              .length;
-        });
-      }
-    } catch (_) {}
-
-    try {
-      final entities = await _api.featureEntities();
-      if (mounted) setState(() => _entities = entities);
-    } catch (_) {
-      // Background refreshes absorb a failed entity fetch; the People-desk
-      // mutation path asks for strictness so its failure is not silent.
-      if (strictEntities) rethrow;
-    }
-
-    try {
-      final bundle = await _api.featureSettingsBundle();
-      if (mounted) {
-        setState(() {
-          _appSettings = bundle.settings;
-          _jurisdiction = bundle.jurisdiction;
-          _learningOn = bundle.settings.learningEnabled;
-        });
-      }
-    } catch (_) {}
-  }
-
-  /// Poll for the daemon after a failed fetch.
-  ///
-  /// Guarded by _reconnecting so a burst of failures (four parallel requests)
-  /// cannot start four overlapping loops.
-  void _scheduleReconnect() {
-    if (_reconnecting) return;
-    _reconnecting = true;
-    Future.delayed(const Duration(seconds: 2), () async {
-      if (!mounted) {
-        _reconnecting = false;
-        return;
-      }
-      _reconnecting = false;
-      final up = await _api.health();
-      if (up) {
-        await _refresh();
-      } else {
-        _scheduleReconnect();
-      }
-    });
-  }
-
   Future<void> _toggleLearning() async {
-    final next = !_learningOn;
-    final previous = _appSettings;
-    setState(() {
-      _learningOn = next;
-      _appSettings = _appSettings.copyWith(learningEnabled: next);
-    });
-    try {
-      await _api.toggleLearning(next);
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _learningOn = !next;
-          _appSettings = previous;
-        });
-      }
-    }
+    final api = ref.read(vaultApiProvider);
+    await ref.read(learningProvider.notifier).toggle(api);
   }
 
   Future<void> _handleLearningAction(String action) async {
+    final api = ref.read(vaultApiProvider);
     final split = action.indexOf(':');
     if (split < 0) return;
     final verb = action.substring(0, split);
@@ -396,26 +189,20 @@ class _VaultHomeState extends State<VaultHome> {
     // WO12 phase 2: reconciliation-ambiguity questions use link/dismiss/later
     // verbs. The daemon routes these through answerLearningQuestion which
     // handles the evidence link, standing rule, or backoff respectively.
-    if (verb == 'confirm' || verb == 'link') {
-      await _api.answerLearning(id, 'yes');
-    } else if (verb == 'dismiss') {
-      await _api.answerLearning(id, 'no');
-    } else if (verb == 'later') {
-      await _api.answerLearning(id, 'later');
-    } else {
+    final answer = switch (verb) {
+      'confirm' || 'link' => 'yes',
+      'dismiss' => 'no',
+      'later' => 'later',
+      _ => null,
+    };
+    if (answer == null) {
       setState(() {
         _tab = VaultTab.review;
         _learningDrawerOpen = false;
       });
       return;
     }
-    if (!mounted) return;
-    setState(() {
-      _learningQuestions = _learningQuestions
-          .where((question) => question.id != '$id')
-          .toList();
-      _reviewCount = _learningQuestions.length;
-    });
+    await ref.read(learningProvider.notifier).answerQuestion(api, id, answer);
   }
 
   /// Open the full window on a given tab.
@@ -430,8 +217,7 @@ class _VaultHomeState extends State<VaultHome> {
   }
 
   void _setPeriod(PeriodSelection p) {
-    setState(() => _period = p);
-    _refresh();
+    ref.read(periodSelectionProvider.notifier).select(p);
   }
 
   /// Switch which hero figure the receipts list explains.
@@ -440,113 +226,23 @@ class _VaultHomeState extends State<VaultHome> {
   /// be in the new list, and leaving it open shows proof for a row the user
   /// can no longer see.
   void _setBucket(String bucket) {
-    if (_bucket == bucket) return;
-    setState(() {
-      _bucket = bucket;
-      _selectedId = null;
-      _card = null;
-    });
-    _refresh();
-  }
-
-  void _listen() {
-    _api.events().listen(
-      (e) {
-        if (!mounted) return;
-        setState(() {
-          _connected = true;
-          if (e.type != 'Ready') _feed.insert(0, e);
-          if (_feed.length > 60) _feed.removeLast();
-          if (e.type == 'learning.question') {
-            final id = '${e.data['question_id'] ?? ''}';
-            if (!_learningQuestions.any((question) => question.id == id)) {
-              _learningQuestions = [
-                wo_learning.LearningPrompt(
-                  id: id,
-                  prompt: '${e.data['prompt'] ?? ''}',
-                  why: '${e.data['why'] ?? ''}',
-                  trigger: '${(e.data['trigger'] as Map?)?['kind'] ?? ''}',
-                  novelty:
-                      ((e.data['trigger'] as Map?)?['noveltyScore'] as num?)
-                          ?.toDouble() ??
-                      1,
-                ),
-                ..._learningQuestions,
-              ];
-              _reviewCount = _learningQuestions.length;
-            }
-          } else if (e.type == 'learning.answer') {
-            final id = '${e.data['question_id'] ?? ''}';
-            _learningQuestions = _learningQuestions
-                .where((question) => question.id != id)
-                .toList();
-            _reviewCount = _learningQuestions.length;
-          } else if (e.type == 'PipelineStateChanged' &&
-              e.data['to_state'] == 'received') {
-            _intakeArrivals += 1;
-            _selectedIntakeId = '${e.data['document_id'] ?? ''}';
-          }
-        });
-        // Verified against the daemon's actual emissions (probe: drop a
-        // fixture, read the SSE stream). The daemon emits nine types; these
-        // are the ones that change what the ledger shows.
-        //
-        // 'BatchFinished' is easy to forget and matters most: a bulk Gmail
-        // sync ends with it, and the per-document events during a large import
-        // can be coalesced, so without it the totals sit stale after an import.
-        //
-        // Deliberately NOT here: 'JobStateChanged' (fires ~6x per document —
-        // pure churn) and 'MarkdownReady' (conversion finished, but no ledger
-        // figure has changed yet; 'AnalysisComplete' follows and covers it).
-        const refreshOn = {
-          'TransactionRecorded', 'MatchProposed', 'AnalysisComplete',
-          'DocumentReceived', 'DocumentDuplicate', 'BatchFinished',
-          // Work order 06 — intake events that change what the Irrelevant view
-          // and intake feed show. IntakeRestored must refresh because a restore
-          // promotes an irrelevant item into the ledger.
-          'IntakeAccepted', 'IntakeIrrelevant', 'IntakeDuplicate',
-          'IntakeFailed', 'IntakeRestored',
-          'PipelineStateChanged', 'learning.question', 'learning.answer',
-          'learning.rule.applied',
-        };
-        // 'Ready' is the daemon's hello — it arrives on every (re)connect.
-        // Refreshing on it is how the app recovers after the daemon restarts:
-        // without this the stream reconnected, the dot went green, and the
-        // figures stayed frozen at whatever they were before the outage.
-        if (e.type == 'Ready' || refreshOn.contains(e.type)) _refresh();
-      },
-      onError: (_) {
-        if (mounted) setState(() => _connected = false);
-        Future.delayed(const Duration(seconds: 2), _listen);
-      },
-      onDone: () {
-        if (mounted) setState(() => _connected = false);
-        Future.delayed(const Duration(seconds: 2), _listen);
-      },
-    );
+    final current = ref.read(bucketProvider);
+    if (current == bucket) return;
+    ref.read(bucketProvider.notifier).select(bucket);
+    ref.read(selectedTransactionIdProvider.notifier).state = null;
   }
 
   Future<void> _select(Txn t) async {
+    final selectedId = ref.read(selectedTransactionIdProvider);
     // Clicking the open row closes it — with an inline panel the row is now
     // its own toggle, and there is no other way to dismiss it.
-    if (_selectedId == t.id) {
-      setState(() {
-        _selectedId = null;
-        _card = null;
-      });
+    if (selectedId == t.id) {
+      ref.read(selectedTransactionIdProvider.notifier).state = null;
       return;
     }
     // Clear the old card FIRST: otherwise the previous transaction's evidence
     // renders under the newly-clicked row until the fetch returns.
-    setState(() {
-      _selectedId = t.id;
-      _card = null;
-    });
-    try {
-      final card = await _api.evidenceCard(t.id);
-      // Guard against a slow response for a row the user has since moved off.
-      if (mounted && _selectedId == t.id) setState(() => _card = card);
-    } catch (_) {}
+    ref.read(selectedTransactionIdProvider.notifier).state = t.id;
   }
 
   /// Open a search result.
@@ -565,7 +261,11 @@ class _VaultHomeState extends State<VaultHome> {
       );
       return;
     }
-    final existing = _txns.where((t) => t.id == txnId).firstOrNull;
+    final txns = ref.read(transactionsProvider);
+    final existing = txns.maybeWhen(
+      data: (data) => data.where((t) => t.id == txnId).firstOrNull,
+      orElse: () => null,
+    );
     if (existing != null) {
       await _select(existing);
       return;
@@ -573,24 +273,88 @@ class _VaultHomeState extends State<VaultHome> {
     // The transaction is outside the selected period. Fetching the evidence
     // card directly still shows the proof rather than making the user hunt
     // for the right month.
-    setState(() {
-      _selectedId = txnId;
-      _card = null;
-    });
-    try {
-      final card = await _api.evidenceCard(txnId);
-      if (mounted && _selectedId == txnId) setState(() => _card = card);
-    } catch (_) {}
+    ref.read(selectedTransactionIdProvider.notifier).state = txnId;
   }
 
   Future<void> _onDrop(List<String> paths) async {
+    final api = ref.read(vaultApiProvider);
     for (final p in paths) {
-      await _api.ingest(p);
+      await api.ingest(p);
     }
+  }
+
+  Future<void> _refresh() async {
+    ref.invalidate(snapshotProvider);
+    ref.invalidate(treemapProvider);
+    ref.invalidate(transactionsProvider);
+    ref.invalidate(periodsProvider);
+    ref.invalidate(learningProvider);
+    ref.invalidate(intakeStatusProvider);
+    ref.invalidate(entitiesProvider);
+    ref.invalidate(settingsBundleProvider);
   }
 
   @override
   Widget build(BuildContext context) {
+    // Watch the connection status and SSE connection to drive the UI.
+    final connection = ref.watch(connectionStatusProvider);
+    final sseStateAsync = ref.watch(sseConnectionStateProvider);
+    final sseState =
+        sseStateAsync.valueOrNull ?? SseConnectionState.disconnected;
+    final daemonUp = connection.isConnected;
+
+    // Watch the SSE event stream — keeps the subscription alive.
+    ref.watch(eventDispatcherProvider);
+
+    // Watch dashboard data.
+    final snapAsync = ref.watch(snapshotProvider);
+    final treemapAsync = ref.watch(treemapProvider);
+    final txnsAsync = ref.watch(transactionsProvider);
+    final periodsAsync = ref.watch(periodsProvider);
+    final period = ref.watch(periodSelectionProvider);
+    final bucket = ref.watch(bucketProvider);
+    final feed = ref.watch(eventFeedProvider);
+    final selectedId = ref.watch(selectedTransactionIdProvider);
+
+    // Watch feature data.
+    final learningAsync = ref.watch(learningProvider);
+    final intakeAsync = ref.watch(intakeStatusProvider);
+    final entitiesAsync = ref.watch(entitiesProvider);
+    final settingsAsync = ref.watch(settingsBundleProvider);
+    final intakeArrivals = ref.watch(intakeArrivalsProvider);
+    final selectedIntakeId = ref.watch(selectedIntakeIdProvider);
+
+    // Extract values with fallbacks for the popup (which must render even
+    // while data is loading).
+    final snap = snapAsync.valueOrNull ?? Snapshot.empty;
+    final treemap = treemapAsync.valueOrNull ?? TreemapData.empty;
+    final txns = txnsAsync.valueOrNull ?? const <Txn>[];
+    final periods = periodsAsync.valueOrNull ?? Periods.empty;
+    final learningData =
+        learningAsync.valueOrNull ??
+        (enabled: true, questions: const <wo_learning.LearningPrompt>[]);
+    final intakeItems =
+        intakeAsync.valueOrNull ?? const <wo_intake_state.IntakeItem>[];
+    final entities =
+        entitiesAsync.valueOrNull ?? const <wo_people_state.EntitySummary>[];
+    final settingsBundle =
+        settingsAsync.valueOrNull ??
+        (
+          settings: const wo_settings.AppSettings(
+            learningEnabled: true,
+            questionBudget: null,
+          ),
+          jurisdiction: wo_settings.JurisdictionPack.india,
+        );
+
+    final learningOn = learningData.enabled;
+    final reviewCount = learningData.questions.length;
+    final appSettings = settingsBundle.settings;
+    final jurisdiction = settingsBundle.jurisdiction;
+
+    // SSE connected state.
+    final connected = sseState == SseConnectionState.connected;
+
     // Menubar panel — the glanceable surface. Compact, dismissed on click-away.
     // The full window is opened deliberately and holds EVERYTHING the user can
     // do, as tabs.
@@ -607,27 +371,27 @@ class _VaultHomeState extends State<VaultHome> {
         body: VaultDropTarget(
           onDrop: _onDrop,
           child: PopupView(
-            snapshot: _snap,
+            snapshot: snap,
             // Non-null means the daemon rejected our token, so every figure
             // below is a placeholder rather than a reading of the vault.
             // Staleness rides the same banner: in both cases the numbers on
             // screen do not describe the period the user asked for.
-            authError: _authError != null
+            authError: connection.isAuthError
                 ? 'Cannot read the vault — the daemon rejected this app\'s '
                       'token. Your data is intact; the totals below are not real.'
-                : (_stale
+                : (connection.isDegraded
                       ? 'Daemon unreachable — showing the last figures fetched, '
-                            'not ${_period.month ?? _period.fy ?? _period.quick ?? "the selected period"}.'
+                            'not ${period.month ?? period.fy ?? period.quick ?? "the selected period"}.'
                       : null),
             // The popup renders the same treemap data as the viewer, as a
             // compact band. Without this the data was fetched and discarded.
-            treemap: _treemap,
-            periods: _periods,
-            selection: _period,
+            treemap: treemap,
+            periods: periods,
+            selection: period,
             onPeriodChanged: _setPeriod,
-            txns: _txns,
-            feed: _feed,
-            connected: _connected && _daemonUp,
+            txns: txns,
+            feed: feed,
+            connected: connected && daemonUp,
             onOpenFull: () => _menubar?.openFullWindow(),
             onQuit: () => exit(0),
             // Settings and Review are no longer popup-local takeovers: they are
@@ -637,9 +401,9 @@ class _VaultHomeState extends State<VaultHome> {
             onReview: () => _openTab(VaultTab.review),
             onRefresh: _refresh,
             onToggleLearning: _toggleLearning,
-            learningOn: _learningOn,
-            reviewCount: _reviewCount,
-            bucket: _bucket,
+            learningOn: learningOn,
+            reviewCount: reviewCount,
+            bucket: bucket,
             onBucketChanged: _setBucket,
           ),
         ),
@@ -654,22 +418,23 @@ class _VaultHomeState extends State<VaultHome> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             _TitleBar(
-              connected: _connected,
-              daemonUp: _daemonUp,
-              learningOn: _learningOn,
-              learningPending: _reviewCount,
-              intakeArrivals: _intakeArrivals,
-              onLearning: _learningOn
+              connected: connected,
+              daemonUp: daemonUp,
+              learningOn: learningOn,
+              learningPending: reviewCount,
+              intakeArrivals: intakeArrivals,
+              onLearning: learningOn
                   ? () => setState(
                       () => _learningDrawerOpen = !_learningDrawerOpen,
                     )
                   : null,
-              onIntake: _intakeArrivals == 0
+              onIntake: intakeArrivals == 0
                   ? null
                   : () => setState(() {
                       _tab = VaultTab.intake;
-                      _selectedIntakeId = _intakeItems.firstOrNull?.id;
-                      _intakeArrivals = 0;
+                      ref.read(selectedIntakeIdProvider.notifier).state =
+                          intakeItems.firstOrNull?.id;
+                      ref.read(intakeArrivalsProvider.notifier).state = 0;
                     }),
             ),
             VaultTabBar(
@@ -677,19 +442,32 @@ class _VaultHomeState extends State<VaultHome> {
               onChanged: (t) => setState(() {
                 _tab = t;
               }),
-              reviewCount: _reviewCount,
+              reviewCount: reviewCount,
               // Charts is declared but unbuilt. Shown disabled rather than
               // hidden: a greyed tab is an honest promise about what is coming,
               // a missing one is a surprise later.
               disabled: const {VaultTab.charts},
             ),
-            if (!_daemonUp)
+            if (!daemonUp)
               const Expanded(child: _WaitingForDaemon())
             else
               Expanded(
                 child: Stack(
                   children: [
-                    Positioned.fill(child: _tabBody()),
+                    Positioned.fill(
+                      child: _tabBody(
+                        snap,
+                        treemap,
+                        txns,
+                        selectedId,
+                        selectedIntakeId,
+                        entities,
+                        intakeItems,
+                        appSettings,
+                        jurisdiction,
+                        learningData.questions,
+                      ),
+                    ),
                     if (_learningDrawerOpen)
                       Positioned(
                         top: 0,
@@ -699,8 +477,8 @@ class _VaultHomeState extends State<VaultHome> {
                         child: Material(
                           elevation: 12,
                           child: wo_learning_view.LearningPanel(
-                            enabled: _learningOn,
-                            questions: _learningQuestions,
+                            enabled: learningOn,
+                            questions: learningData.questions,
                             onAction: _handleLearningAction,
                             onOpenReview: () => setState(() {
                               _tab = VaultTab.review;
@@ -724,84 +502,94 @@ class _VaultHomeState extends State<VaultHome> {
   /// tabs never refetches and never loses the selected transaction. Pipeline
   /// events remain subscribed for Intake and Learning, but Ledger deliberately
   /// has no live-intake rail.
-  Widget _tabBody() => switch (_tab) {
-    VaultTab.ledger => LedgerTab(
-      snapshot: _snap,
-      treemap: _treemap,
-      txns: _txns,
-      selectedId: _selectedId,
-      card: _card,
-      onSelect: _select,
-      api: _api,
-      onSearchHit: _openSearchHit,
-      onEdited: _refresh,
-    ),
-    VaultTab.review => ReviewBrowser(
-      api: _api,
-      initialDocumentId: _selectedIntakeId,
-    ),
-    // WO11 Track A: the desk's owner / merge / keep-separate actions go
-    // through the real gateway; every mutation refetches the entity list.
-    VaultTab.people => wo_people.EntityDesk(
-      entities: _entities,
-      onSetOwner: (entity, owner) => _entityAction(
-        () => VaultEntityGateway(_api).setOwner(entity.id, owner: owner),
+  Widget _tabBody(
+    Snapshot snap,
+    TreemapData treemap,
+    List<Txn> txns,
+    String? selectedId,
+    String? selectedIntakeId,
+    List<wo_people_state.EntitySummary> entities,
+    List<wo_intake_state.IntakeItem> intakeItems,
+    wo_settings.AppSettings appSettings,
+    wo_settings.JurisdictionPack jurisdiction,
+    List<wo_learning.LearningPrompt> learningQuestions,
+  ) {
+    final api = ref.read(vaultApiProvider);
+    // Watch the evidence card for the selected transaction.
+    final cardAsync = selectedId != null
+        ? ref.watch(evidenceCardProvider(selectedId))
+        : const AsyncValue<EvidenceCard>.loading();
+    final card = cardAsync.valueOrNull;
+
+    return switch (_tab) {
+      VaultTab.ledger => LedgerTab(
+        snapshot: snap,
+        treemap: treemap,
+        txns: txns,
+        selectedId: selectedId,
+        card: card,
+        onSelect: _select,
+        api: api,
+        onSearchHit: _openSearchHit,
+        onEdited: _refresh,
       ),
-      onMerge: (source, target) => _entityAction(
-        () => VaultEntityGateway(
-          _api,
-        ).merge(sourceId: source.id, targetId: target.id),
+      VaultTab.review => ReviewBrowser(
+        api: api,
+        initialDocumentId: selectedIntakeId,
       ),
-      onKeepSeparate: (entity, conflict) => _entityAction(
-        () => VaultEntityGateway(_api).keepSeparate(
-          identifier: conflict.identifier,
-          entityId: entity.id,
-          otherId: conflict.otherId,
+      // WO11 Track A: the desk's owner / merge / keep-separate actions go
+      // through the real gateway; every mutation refetches the entity list.
+      VaultTab.people => wo_people.EntityDesk(
+        entities: entities,
+        onSetOwner: (entity, owner) => _entityAction(
+          () => VaultEntityGateway(api).setOwner(entity.id, owner: owner),
+        ),
+        onMerge: (source, target) => _entityAction(
+          () => VaultEntityGateway(
+            api,
+          ).merge(sourceId: source.id, targetId: target.id),
+        ),
+        onKeepSeparate: (entity, conflict) => _entityAction(
+          () => VaultEntityGateway(api).keepSeparate(
+            identifier: conflict.identifier,
+            entityId: entity.id,
+            otherId: conflict.otherId,
+          ),
         ),
       ),
-    ),
-    // Work order 07 §G — Intake tab: the unified intake queue.
-    // Shows every incoming file with its state. Encrypted PDFs show an
-    // inline password field. Irrelevant items show Restore. Nothing is
-    // held up by a password-needed item — the rest of the queue keeps
-    // processing.
-    VaultTab.intake => wo_intake.IntakeView(
-      key: ValueKey('intake-${_selectedIntakeId ?? "none"}'),
-      items: _intakeItems,
-      onOpenDocument: (item) => setState(() {
-        _selectedIntakeId = item.documentId ?? item.id;
-        _tab = VaultTab.review;
-      }),
-    ),
-    VaultTab.settings => SettingsPanel(
-      settings: _appSettings,
-      pack: _jurisdiction,
-      onSettingsChanged: (next) async {
-        final previous = _appSettings;
-        setState(() {
-          _appSettings = next;
-          _learningOn = next.learningEnabled;
-        });
-        try {
-          await _api.saveFeatureSettings(previous, next);
-        } catch (_) {
-          if (mounted) {
-            setState(() {
-              _appSettings = previous;
-              _learningOn = previous.learningEnabled;
-            });
-          }
-        }
-      },
-    ),
-    VaultTab.charts => const ComingSoon(
-      title: 'Charts',
-      detail:
-          'Spending over time, category trends and counterparty '
-          'concentration. The data is already in the vault — this tab is '
-          'the view that has not been built yet.',
-    ),
-  };
+      // Work order 07 §G — Intake tab: the unified intake queue.
+      // Shows every incoming file with its state. Encrypted PDFs show an
+      // inline password field. Irrelevant items show Restore. Nothing is
+      // held up by a password-needed item — the rest of the queue keeps
+      // processing.
+      VaultTab.intake => wo_intake.IntakeView(
+        key: ValueKey('intake-${selectedIntakeId ?? "none"}'),
+        items: intakeItems,
+        onOpenDocument: (item) => setState(() {
+          ref.read(selectedIntakeIdProvider.notifier).state =
+              item.documentId ?? item.id;
+          _tab = VaultTab.review;
+        }),
+      ),
+      VaultTab.settings => SettingsPanel(
+        settings: appSettings,
+        pack: jurisdiction,
+        onSettingsChanged: (next) async {
+          final api = ref.read(vaultApiProvider);
+          await ref
+              .read(settingsBundleProvider.notifier)
+              .saveSettings(api, appSettings, next);
+        },
+      ),
+      VaultTab.charts => const ComingSoon(
+        title: 'Charts',
+        detail:
+            'Spending over time, category trends and counterparty '
+            'concentration. The data is already in the vault — this tab is '
+            'the view that has not been built yet.',
+      ),
+    };
+  }
 }
 
 class _TitleBar extends StatelessWidget {

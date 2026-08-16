@@ -532,7 +532,7 @@ export function detectDocumentType(text: string): {type:DocumentType;confidence:
   if (/contract\s+note/i.test(text) && (/\bINE[A-Z0-9]{9}\b/.test(text) || /trade\s+date/i.test(text))) {
     return { type: "contract_note", confidence: 1 };
   }
-  if (/tax\s+invoice/i.test(text) && (/gstin/i.test(text) || /hsn\s*\/\s*sac/i.test(text))) {
+  if (/tax\s+invoice/i.test(text) && (/gstin/i.test(text) || /\bgst\b/i.test(text) || /hsn\s*\/\s*sac/i.test(text))) {
     return { type: "tax_invoice", confidence: 1 };
   }
   let best:DocumentType="unknown", score=0;
@@ -546,6 +546,7 @@ export interface TypedExtraction {
   vendor?: { name: string; kind: "organisation"; address?: string; contact?: string; email?: string };
   broker?: { name: string; kind: "organisation"; pan?: string; gstin?: string };
   client?: { name: string; kind: "person"; ucc?: string; pan?: string; mobile?: string };
+  person?: { name: string; kind: "person" };
   documentNumber?: string;
   documentDate?: string;
   dueDate?: string;
@@ -614,8 +615,12 @@ export function extractTypedDocument(text: string): TypedExtraction {
   };
   const capture = (pattern: RegExp): string | undefined => clean(pattern.exec(structuredText)?.[1]);
   const amount = (label: RegExp): number | undefined => {
-    const raw = capture(new RegExp(`${label.source}[^\\d]{0,30}([\\d,]+\\.\\d{2})`, "i"));
-    return raw ? minor(raw) : undefined;
+    // Match amounts with optional decimal places: "1,445.00" or "1445" or "1,42,356.28"
+    const raw = capture(new RegExp(`${label.source}[^\\d]{0,30}([\\d,]+(?:\\.\\d{1,2})?)`, "i"));
+    if (!raw) return undefined;
+    // If no decimal places, append ".00" so minor() works correctly.
+    const normalized = raw.includes(".") ? raw : raw + ".00";
+    return minor(normalized);
   };
   const personName = capture(/(?:issuer|invoice\s+for|receipt\s+for|person)\s*:?\s*(.+?)(?=\.\s+total\b|<|\n|$)/i);
   const organisationName = capture(/organisation\s*:?\s*(.+?)(?=\s*<|\.\s+total\b|\n|$)/i)
@@ -624,13 +629,16 @@ export function extractTypedDocument(text: string): TypedExtraction {
 
   if (detected.type === "tax_invoice") {
     out.documentNumber = capture(/invoice\s+number\s*[:#-]?\s*([^\n*]+)/i)
-      ?? capture(/^\s*invoice\s+no\.?\s*[:#-]?\s*([^\n*]+)/im);
-    out.documentDate = dateISO(capture(/invoice\s*date\s*[:#-]?\s*([^\n*]+)/i) ?? "");
+      ?? capture(/^\s*invoice\s+no\.?\s*[:#-]?\s*([^\n*]+)/im)
+      ?? capture(/(?:sr|s\.?no|receipt|bill)\s*(?:no|number)\s*[:#-]?\s*([A-Z0-9-]+)/i);
+    out.documentDate = dateISO(capture(/invoice\s*date\s*[:#-]?\s*([^\n*]+)/i) ?? "")
+      ?? dateISO(capture(/^\s*date\s*[:#|]?\s*([^\n*]+)/im) ?? "");
     out.dueDate = dateISO(capture(/due\s*date\s*[:#-]?\s*([^\n*]+)/i) ?? "");
     out.financialYear = financialYear(out.documentDate);
     out.currency = capture(/currency\s*[:#-]?\s*\**\s*([A-Z]{3})/i)?.toUpperCase();
     out.placeOfSupply = capture(/place\s+of\s+supply\s*[:#-]?\s*\**\s*([A-Za-z ]+)/i);
-    out.amountMinor = amount(/(?:grand\s+)?total/i) ?? [...structuredText.matchAll(/[$₹€£]\s*([\d,]+\.\d{2})/g)].map((m) => minor(m[1])).at(-1);
+    out.amountMinor = amount(/(?:grand\s+)?total/i)
+      ?? [...structuredText.matchAll(/[$₹€£]\s*([\d,]+(?:\.\d{1,2})?)/g)].map((m) => minor(m[1].includes(".") ? m[1] : m[1] + ".00")).at(-1);
     out.subtotalMinor = amount(/subtotal/i) ?? out.amountMinor;
     out.taxMinor = amount(/\btax\b/i) ?? 0;
     if (out.currency && out.currency !== "INR" && out.amountMinor && out.documentDate) {
@@ -645,8 +653,18 @@ export function extractTypedDocument(text: string): TypedExtraction {
     }
 
     const heading = structuredText.split(/\r?\n/).map(clean).find((line) => line && !/tax invoice/i.test(line));
-    const headingPrefix = clean(structuredText.split(/tax\s+invoice/i)[0]);
-    const issuerName = headingPrefix || clean(/^\s*(?:#{1,4}\s*)?([^\n]+)$/m.exec(structuredText)?.[1]) || heading;
+    // The merchant name is the LAST line before the title, not the whole block
+    // above it — a multi-line prefix (logo caption, address, GSTIN, date)
+    // would otherwise become the entity name.
+    const headingPrefix = structuredText
+      .split(/tax\s+invoice/i)[0]
+      .split(/\r?\n/)
+      .map(clean)
+      .filter(Boolean)
+      .at(-1);
+    // The issuer is the merchant name — the line AFTER "TAX INVOICE", or
+    // the text before it if present. NEVER use the "TAX INVOICE" title itself.
+    const issuerName = headingPrefix || heading;
     if (issuerName) {
       const issuerGstin = capture(/gstin\s*:\s*([A-Z0-9]{15})/i);
       const address = [
@@ -674,6 +692,39 @@ export function extractTypedDocument(text: string): TypedExtraction {
         contact: capture(/contact\s+person\s*:\s*([^\n*]+?)(?=email|gst|$)/i),
         email: [...structuredText.matchAll(/[\w.+-]+@[\w.-]+/g)].map((m) => m[0]).find((email) => email !== out.issuer?.email),
       };
+    }
+    // Person detection for tax invoices: look for "Mr./Ms./Mrs./Dr." prefix
+    // or "Name:" label. OCR often splits the honorific, the "Name" label, and
+    // the actual name across multiple lines ("Mr.\nName\nGST : ...\nMahesh").
+    // Skip "Name", "GST", "Address", "Tel" etc. — they are labels, not names.
+    const SKIP_WORDS = new Set(["name", "gst", "gstin", "address", "tel", "phone", "mobile", "email", "pan", "aadhaar", "sr", "no", "date", "bill", "to", "contact"]);
+    const findNameAfterHonorific = (text: string): string | undefined => {
+      // Inline form first: "Mr. Mahesh Kumar" on a single line.
+      const inline = /\b(?:Mr|Ms|Mrs|Dr|Shri|Smt)\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/.exec(text);
+      if (inline) return inline[1].trim();
+      const m = /(?:Mr|Ms|Mrs|Dr|Shri|Smt)\.?\s*\n/i.exec(text);
+      if (!m) return undefined;
+      const after = text.slice(m.index + m[0].length);
+      for (const line of after.split(/\r?\n/)) {
+        const w = clean(line);
+        if (!w) continue;
+        // Skip labels and GST numbers
+        if (SKIP_WORDS.has(w.toLowerCase())) continue;
+        if (/^(?:gst|gstin|pan|sr|no|date|bill|address|tel|phone|mobile|email|contact)\s*[:#-]/i.test(w)) continue;
+        if (/^[A-Z0-9]{10,}$/.test(w)) continue; // GSTIN etc.
+        // A person name: one to four capitalised words and nothing else.
+        // Fully anchored so "Total 1445", "Invoice for services", or "Delhi"
+        // no longer qualify.
+        const candidate = w.replace(/[,]+$/, "").replace(/,s$/, "").trim();
+        if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}$/.test(candidate)) {
+          return candidate;
+        }
+      }
+      return undefined;
+    };
+    const detectedPerson = findNameAfterHonorific(structuredText);
+    if (detectedPerson) {
+      out.person = { name: detectedPerson, kind: "person" };
     }
     const bankText = capture(/bank\s+details\s*:(.+?)(?=notes|terms|supply meant|$)/is);
     if (bankText) {

