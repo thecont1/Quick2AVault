@@ -35,8 +35,16 @@ import {
   type DocumentPartyRole,
   type ResolvedTransaction,
 } from "./claims.js";
+import { resolveEntity } from "./ledger.js";
 import { rebuildSearchIndex, searchDocuments, removeFromIndex } from "./search.js";
 import { activeDocumentSql, activeTransactionSql, isActive, listableDocumentSql } from "./lifecycle.js";
+import { loadCatalog, findProvider, findModel, modelBelongsToOtherProvider } from "./lib/catalog.js";
+import { eligibleModels } from "./lib/eligibility.js";
+import { CredentialManager } from "./lib/credentials.js";
+import { suggestDefaults, hasSuggestions } from "./lib/suggestDefaults.js";
+import { readSlotConfig, writeSlotConfig, migrateInferenceSettings, validateSlotConfig } from "./lib/migrateInferenceSettings.js";
+import { testInference } from "./lib/testInference.js";
+import { PROVIDER_ALIASES, searchProviderIds } from "./data/providerAliases.js";
 import {
   backfillEmbeddings,
   hybridSearch,
@@ -57,7 +65,8 @@ import {
   mergePeople,
   normaliseIdentifier,
   recordMergeCandidate,
-  UNIDENTIFIED_PERSON_ID,
+  unidentifiedEntity,
+  unidentifiedPerson,
 } from "./identity.js";
 import {
   DOC_TYPES,
@@ -263,6 +272,37 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return res.end(html);
       }
 
+      // ── static assets for the dev UI (CSS + JS modules) ──────────────────
+      // Serves files from daemon/ui/ with safe content types. Only enabled
+      // when devUi is on, same as the HTML shell. No token substitution —
+      // the JS files use the TOKEN constant set by ui.html's inline script.
+      if (p.startsWith("/ui/") && opts.devUi) {
+        const rel = p.slice("/ui/".length);
+        // Confine to the ui/ directory — no path traversal.
+        if (rel.includes("..") || rel.includes("\0")) {
+          return send(res, 400, { error: "bad path" });
+        }
+        const ext = rel.slice(rel.lastIndexOf(".") + 1).toLowerCase();
+        const types: Record<string, string> = {
+          css: "text/css; charset=utf-8",
+          js: "application/javascript; charset=utf-8",
+          map: "application/json; charset=utf-8",
+        };
+        if (!types[ext]) return send(res, 404, { error: "not_found" });
+        const file = path.join(import.meta.dirname ?? __dirname, "ui", rel);
+        try {
+          const body = await fsp.readFile(file);
+          res.writeHead(200, {
+            "content-type": types[ext],
+            "cache-control": "no-store",
+            "x-content-type-options": "nosniff",
+          });
+          return res.end(body);
+        } catch {
+          return send(res, 404, { error: "not_found", expected: file });
+        }
+      }
+
       // ── unauthenticated: health ──────────────────────────────────────────
       if (p === "/v1/health") {
         const jobs = db.prepare("SELECT state, COUNT(*) n FROM jobs GROUP BY state").all() as {
@@ -371,18 +411,67 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           if (!intake.document_id) {
             return send(res, 409, { error: "intake has no document — password not applicable" });
           }
-          // Store the password on the document.
-          db.prepare("UPDATE documents SET password=? WHERE id=?")
-            .run(password, intake.document_id);
-          // Update the intake state back to queued so the UI shows progress.
+          // The reset exists only because password_needed is terminal with no
+          // outgoing edges. Re-enqueuing conversion for a document that is
+          // already converting, analysing, or complete would rewind the
+          // canonical pipeline and start a second conversion pass.
+          if (intake.processing_state !== "password_needed") {
+            return send(res, 409, {
+              error: "password_not_applicable",
+              intake_id: id,
+              document_id: intake.document_id,
+              state: intake.processing_state,
+            });
+          }
           const now = ports.clock.isoNow();
-          db.prepare(
-            `UPDATE intake_events
-                SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
-              WHERE id=?`,
-          ).run(now, now, now, id);
-          // Re-enqueue the convert job.
-          enqueue(db, ports, intake.document_id, "convert");
+          let prevState: string | null = null;
+          // All five writes (document password, intake state, pipeline state,
+          // pipeline event, convert job) are one unit — a partial write would
+          // leave an intake marked 'queued' with no convert job.
+          db.exec("BEGIN");
+          try {
+            // Store the password on the document.
+            db.prepare("UPDATE documents SET password=? WHERE id=?")
+              .run(password, intake.document_id);
+            // Update the intake state back to queued so the UI shows progress.
+            db.prepare(
+              `UPDATE intake_events
+                  SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
+                WHERE id=?`,
+            ).run(now, now, now, id);
+            // Reset the canonical pipeline state. The state machine has
+            // password_needed as terminal with no outgoing edges, and
+            // null → triaged is also illegal, so we insert the row directly
+            // at 'triaged' and publish the event manually after commit.
+            prevState = (db
+              .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+              .get(intake.document_id) as { state: string } | undefined)?.state ?? null;
+            db.prepare(
+              `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+               ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+            ).run(intake.document_id, "triaged", now);
+            db.prepare(
+              `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+               VALUES (?,?,?,?,?,?,?)`,
+            ).run(intake.document_id, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+            // Re-enqueue the convert job.
+            enqueue(db, ports, intake.document_id, "convert");
+            db.exec("COMMIT");
+          } catch (err) {
+            db.exec("ROLLBACK");
+            throw err;
+          }
+          // Publish only after commit so a rollback cannot emit a stale
+          // PipelineStateChanged over SSE.
+          ports.bus.publish({
+            type: "PipelineStateChanged",
+            document_id: intake.document_id,
+            from_state: prevState,
+            to_state: "triaged",
+            source: "password-submit",
+            reason: "password submitted, re-enqueuing conversion",
+            at: now,
+          });
           ports.logger.info("password submitted, re-enqueuing conversion", {
             intake_id: id,
             document_id: intake.document_id,
@@ -391,6 +480,96 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             ok: true,
             intake_id: id,
             document_id: intake.document_id,
+            state: "queued",
+          });
+        }
+      }
+
+      // Document-level password submission — same as the intake-level
+      // endpoint above but keyed by document_id, which is what the web UI's
+      // document viewer has on hand. Looks up the intake row, then delegates
+      // to the same store-and-re-enqueue flow.
+      //
+      // The pipeline state machine has password_needed as a terminal state
+      // with no outgoing edges, so we must reset document_pipeline back to
+      // 'triaged' before re-enqueuing — otherwise the worker's transition
+      // from password_needed → converting throws and crashes the daemon.
+      {
+        const m = /^\/v1\/documents\/([^/]+)\/password$/.exec(p);
+        if (m && req.method === "POST") {
+          const docId = decodeURIComponent(m[1]);
+          const body = await readJson(req);
+          const password = body?.password;
+          if (typeof password !== "string") {
+            return send(res, 400, { error: "password required" });
+          }
+          const intake = db
+            .prepare("SELECT id, document_id, processing_state FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+            .get(docId) as { id: number; document_id: string | null; processing_state: string } | undefined;
+          if (!intake) {
+            return send(res, 404, { error: "intake not found for document", document_id: docId });
+          }
+          // Same guard as the intake-level endpoint: only a document waiting
+          // on a password may be reset. Rewinding a converting/analysing/
+          // complete document would start a second conversion pass.
+          if (intake.processing_state !== "password_needed") {
+            return send(res, 409, {
+              error: "password_not_applicable",
+              document_id: docId,
+              state: intake.processing_state,
+            });
+          }
+          const now = ports.clock.isoNow();
+          let prevState: string | null = null;
+          // All five writes are one unit — see the intake-level endpoint.
+          db.exec("BEGIN");
+          try {
+            db.prepare("UPDATE documents SET password=? WHERE id=?").run(password, docId);
+            db.prepare(
+              `UPDATE intake_events
+                  SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
+                WHERE id=?`,
+            ).run(now, now, now, intake.id);
+            // Reset the canonical pipeline state. Same approach as the
+            // intake-level endpoint — insert directly at 'triaged' and
+            // publish manually after commit, since the state machine has no
+            // legal path from password_needed to triaged.
+            prevState = (db
+              .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+              .get(docId) as { state: string } | undefined)?.state ?? null;
+            db.prepare(
+              `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+               ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+            ).run(docId, "triaged", now);
+            db.prepare(
+              `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+               VALUES (?,?,?,?,?,?,?)`,
+            ).run(docId, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+            enqueue(db, ports, docId, "convert");
+            db.exec("COMMIT");
+          } catch (err) {
+            db.exec("ROLLBACK");
+            throw err;
+          }
+          // Publish only after commit so a rollback cannot emit a stale
+          // PipelineStateChanged over SSE.
+          ports.bus.publish({
+            type: "PipelineStateChanged",
+            document_id: docId,
+            from_state: prevState,
+            to_state: "triaged",
+            source: "password-submit",
+            reason: "password submitted, re-enqueuing conversion",
+            at: now,
+          });
+          ports.logger.info("password submitted (by document), re-enqueuing conversion", {
+            intake_id: intake.id,
+            document_id: docId,
+          });
+          return send(res, 200, {
+            ok: true,
+            intake_id: intake.id,
+            document_id: docId,
             state: "queued",
           });
         }
@@ -705,6 +884,35 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 newValue: value,
                 source: "user",
               });
+            }
+
+            // A corrected ISSUER or VENDOR/COUNTERPARTY relinks the
+            // document_party row so the resolved entity matches the user's
+            // correction. Without this, the party link still points to the
+            // wrongly-detected entity (e.g. "TAX INVOICE" as issuer).
+            if (subject === "document" && (field === "issuer" || field === "vendor" || field === "counterparty") && value) {
+              const partyRole = field === "issuer" ? "issuer" : "counterparty";
+              try {
+                const entityId = resolveEntity(db, ports, value, "organisation", { subtype: "merchant" });
+                // Set the new link FIRST: setDocumentParty validates the role and
+                // throws ClaimRefused before mutating anything, so a refusal can
+                // no longer drop the old link. Only after it succeeds do we drop
+                // the superseded link for this role (leaving the new entity's row).
+                setDocumentParty(db, ports, {
+                  documentId: subjectId,
+                  entityId,
+                  role: partyRole,
+                  confidence: 1,
+                  provenance: "user-confirmed",
+                });
+                db.prepare(
+                  "DELETE FROM document_parties WHERE document_id=? AND role=? AND entity_id<>?",
+                ).run(subjectId, partyRole, entityId);
+              } catch (err) {
+                ports.logger.warn("could not relink party after edit", {
+                  document_id: subjectId, field, value, err: (err as Error)?.message,
+                });
+              }
             }
 
             return send(res, 200, {
@@ -1054,6 +1262,112 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         return send(res, 200, { confirmed: Number(info.changes ?? 0) > 0 });
       }
 
+      // Edit an entity's display_name, subtype, or status. Kind is immutable.
+      // Mirrors PATCH /v1/people/:id for non-person entities.
+      if (p.startsWith("/v1/entities/") && req.method === "PATCH") {
+        const id = p.split("/")[3];
+        if (!id) return send(res, 400, { error: "entity id required" });
+        const b = await readJson(req);
+        const cur = db.prepare("SELECT id, kind, display_name, subtype, status FROM entities WHERE id=?").get(id) as
+          | { id: string; kind: string; display_name: string; subtype: string | null; status: string }
+          | undefined;
+        if (!cur) return send(res, 404, { error: "entity not found" });
+
+        const updates: string[] = [];
+        const params: (string | number | null)[] = [];
+        if (typeof b.display_name === "string" && b.display_name.trim() && b.display_name !== cur.display_name) {
+          // Save old name as an alias so search still finds it.
+          db.prepare(
+            "INSERT OR IGNORE INTO entity_aliases (entity_id, kind, alias, normalised, alias_type, source, status, created_at) VALUES (?,?,?,?,'name_variant','user-edit','confirmed',?)",
+          ).run(id, cur.kind, cur.display_name, normaliseName(cur.display_name), ports.clock.isoNow());
+          updates.push("display_name=?");
+          params.push(b.display_name.trim());
+        }
+        if (typeof b.subtype === "string") {
+          updates.push("subtype=?");
+          params.push(b.subtype.trim() || null);
+        }
+        if (typeof b.status === "string" && ["candidate", "confirmed"].includes(b.status)) {
+          updates.push("status=?");
+          params.push(b.status);
+        }
+        if (!updates.length) return send(res, 200, { updated: false });
+        params.push(id);
+        db.prepare(`UPDATE entities SET ${updates.join(", ")} WHERE id=?`).run(...params);
+        ports.logger.info("entity edited", { id, fields: updates });
+        return send(res, 200, { updated: true });
+      }
+
+      // Delete a non-person entity. Same force semantics as person delete:
+      // refuses while documents reference it, unless ?force=1 reassigns
+      // document_parties to the Unidentified placeholder.
+      if (p.startsWith("/v1/entities/") && req.method === "DELETE") {
+        const id = decodeURIComponent(p.slice("/v1/entities/".length));
+        const row = db
+          .prepare("SELECT id, display_name, kind FROM entities WHERE id=? AND kind<>'person'")
+          .get(id) as { id: string; display_name: string; kind: string } | undefined;
+        if (!row) return send(res, 404, { error: "no such entity" });
+
+        let refs = 0;
+        try {
+          refs = (
+            db
+              .prepare("SELECT COUNT(*) n FROM document_parties WHERE entity_id=?")
+              .get(id) as { n: number }
+          ).n;
+        } catch {
+          /* table optional */
+        }
+        const force = new URL(req.url ?? "", "http://x").searchParams.get("force") === "1";
+        if (refs > 0 && !force) {
+          return send(res, 409, {
+            error: "entity_in_use",
+            message: `${row.display_name} is named on ${refs} document(s). Re-run with ?force=1 to unlink and delete.`,
+            documents: refs,
+          });
+        }
+        // Reassign, clean up, and delete in one transaction — a failure partway
+        // must not leave parties reassigned to the placeholder while the entity
+        // row survives.
+        db.exec("BEGIN");
+        try {
+          if (refs > 0) {
+            // The placeholder must share the deleted entity's kind, otherwise the
+            // document listing renders a *person* named "Unidentified" as the
+            // merchant/issuer of what was an organisation (or an organisation as
+            // the owner of what was a person).
+            const UNIDENTIFIED_ID = unidentifiedEntity(db, ports, row.kind);
+            const rows = db
+              .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
+              .all(id) as { document_id: string; role: string }[];
+            for (const r of rows) {
+              db.prepare(
+                "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+              ).run(r.document_id, UNIDENTIFIED_ID, r.role);
+            }
+            db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
+          }
+          try {
+            db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
+          } catch {
+            /* optional */
+          }
+          // Clean up transaction references that point to this entity.
+          try {
+            db.prepare("UPDATE transactions SET counterparty_entity_id=NULL WHERE counterparty_entity_id=?").run(id);
+          } catch {
+            /* column may not exist */
+          }
+          db.prepare("DELETE FROM entities WHERE id=?").run(id);
+          db.exec("COMMIT");
+        } catch (err) {
+          db.exec("ROLLBACK");
+          throw err;
+        }
+        ports.logger.warn("entity deleted", { id, name: row.display_name, kind: row.kind, reassigned: refs });
+        return send(res, 200, { deleted: id, reassigned_documents: refs });
+      }
+
       // mergeEntities — WITHIN ONE KIND ONLY. This is the anti-pollution
       // invariant (plan §3.1) enforced at the API boundary, not just in the
       // resolver: a merchant can never absorb a wallet, a person, or an equity.
@@ -1160,6 +1474,211 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       // 0600 file elsewhere) so they are never stored as plaintext in the
       // SQLite database. The API key is NEVER returned — only whether one is
       // set, and its last 4 characters for recognition.
+      // ── Inference catalog ─────────────────────────────────────────────
+      // Returns the full provider catalog (merged with overrides) plus
+      // eligibility-filtered model lists for each slot.
+      if (p === "/v1/settings/catalog" && req.method === "GET") {
+        const catalog = loadCatalog();
+        const jurId = (db
+          .prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'")
+          .get() as { value?: string } | undefined)?.value ?? "IN";
+
+        const credMgr = secrets ? new CredentialManager(secrets) : null;
+        // Only the configured slots warrant a keychain read here. Reading every
+        // catalog provider spawns one `security` process per provider on macOS
+        // on each settings page load (the models.dev catalog has dozens). The
+        // UI looks up other providers' keys on demand once they are selected.
+        const primarySlot = readSlotConfig(db, "primary");
+        const secondarySlot = readSlotConfig(db, "secondary");
+        const providerIds = [
+          ...new Set([
+            ...(primarySlot ? [primarySlot.providerId] : []),
+            ...(secondarySlot ? [secondarySlot.providerId] : []),
+          ]),
+        ];
+        const credRecords = credMgr
+          ? await credMgr.getRecords(providerIds)
+          : {};
+
+        // Build provider name map for search
+        const providerNames: Record<string, string> = {};
+        for (const p of catalog) providerNames[p.id] = p.name;
+
+        return send(res, 200, {
+          providers: catalog,
+          credentials: credRecords,
+          jurisdiction: jurId,
+          suggestions: {
+            primary: suggestDefaults(jurId, "primary"),
+            secondary: suggestDefaults(jurId, "secondary"),
+            hasAny: hasSuggestions(jurId),
+          },
+          aliases: PROVIDER_ALIASES,
+        });
+      }
+
+      // ── Inference slot config ─────────────────────────────────────────
+      // GET: returns the current SlotConfig for both slots + credential state
+      if (p === "/v1/settings/inference" && req.method === "GET") {
+        const jurId = (db
+          .prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'")
+          .get() as { value?: string } | undefined)?.value ?? "IN";
+
+        const catalog = loadCatalog();
+        const primary = validateSlotConfig(readSlotConfig(db, "primary"), catalog);
+        const secondary = validateSlotConfig(readSlotConfig(db, "secondary"), catalog);
+
+        const credMgr = secrets ? new CredentialManager(secrets) : null;
+        const providerIds = [
+          ...(primary ? [primary.providerId] : []),
+          ...(secondary ? [secondary.providerId] : []),
+        ];
+        const credRecords = credMgr
+          ? await credMgr.getRecords(providerIds)
+          : {};
+
+        return send(res, 200, {
+          primary,
+          secondary,
+          credentials: credRecords,
+          jurisdiction: jurId,
+          suggestions: {
+            primary: suggestDefaults(jurId, "primary"),
+            secondary: suggestDefaults(jurId, "secondary"),
+            hasAny: hasSuggestions(jurId),
+          },
+        });
+      }
+
+      // POST: save inference slot config + optionally set API key
+      if (p === "/v1/settings/inference" && req.method === "POST") {
+        const b = await readJson(req);
+        const credMgr = secrets ? new CredentialManager(secrets) : null;
+        const saved: string[] = [];
+        const cleared: string[] = [];
+
+        if (b.primary) {
+          const p = b.primary as unknown as { providerId: string; modelId: string; baseUrlOverride?: string };
+          if (typeof p.providerId !== "string" || !p.providerId) {
+            return send(res, 400, { error: "invalid_slot", slot: "primary", reason: "providerId required" });
+          }
+          // A missing modelId would otherwise bind undefined and throw a 500.
+          // Unknown provider/model pairs are intentionally allowed — the user
+          // can enter a model ID not yet in the catalog, and validateSlotConfig
+          // / reconfigure handle the fallback.
+          if (typeof p.modelId !== "string" || !p.modelId.trim()) {
+            return send(res, 400, { error: "invalid_slot", slot: "primary", reason: "modelId required" });
+          }
+          // Reject a model that belongs to a DIFFERENT catalog provider
+          // (cross-provider leak, e.g. "gpt-4.1 under Poolside"). A model id
+          // absent from the catalog is a valid user-entered id.
+          if (p.providerId !== "custom" && modelBelongsToOtherProvider(loadCatalog(), p.providerId, p.modelId)) {
+            return send(res, 400, { error: "invalid_slot", slot: "primary", reason: `model "${p.modelId}" does not belong to provider "${p.providerId}"` });
+          }
+          writeSlotConfig(db, "primary", {
+            providerId: p.providerId,
+            modelId: p.modelId,
+            baseUrlOverride: p.baseUrlOverride,
+          });
+          saved.push("primary");
+        }
+        if (b.secondary) {
+          const s = b.secondary as unknown as { providerId: string; modelId: string; baseUrlOverride?: string };
+          if (typeof s.providerId !== "string" || !s.providerId) {
+            return send(res, 400, { error: "invalid_slot", slot: "secondary", reason: "providerId required" });
+          }
+          if (typeof s.modelId !== "string" || !s.modelId.trim()) {
+            return send(res, 400, { error: "invalid_slot", slot: "secondary", reason: "modelId required" });
+          }
+          if (s.providerId !== "custom" && modelBelongsToOtherProvider(loadCatalog(), s.providerId, s.modelId)) {
+            return send(res, 400, { error: "invalid_slot", slot: "secondary", reason: `model "${s.modelId}" does not belong to provider "${s.providerId}"` });
+          }
+          writeSlotConfig(db, "secondary", {
+            providerId: s.providerId,
+            modelId: s.modelId,
+            baseUrlOverride: s.baseUrlOverride,
+          });
+          saved.push("secondary");
+        }
+
+        // Handle API key set/clear per provider
+        if (b.api_key && typeof b.api_key === "object") {
+          const { providerId, key } = b.api_key as { providerId: string; key: string };
+          if (credMgr) {
+            if (key) {
+              await credMgr.setKey(providerId, key);
+              saved.push(`api_key:${providerId}`);
+            } else {
+              await credMgr.removeKey(providerId);
+              cleared.push(`api_key:${providerId}`);
+            }
+          }
+        }
+
+        // Reconfigure the AI provider if the primary or secondary changed
+        if (ai && (saved.includes("primary") || saved.includes("secondary") || saved.some(s => s.startsWith("api_key:")) || cleared.some(s => s.startsWith("api_key:")))) {
+          const newPrimary = readSlotConfig(db, "primary");
+          const newSecondary = readSlotConfig(db, "secondary");
+          const catalog = loadCatalog();
+          const primProvider = newPrimary ? findProvider(catalog, newPrimary.providerId) : undefined;
+          const primModel = newPrimary && primProvider ? findModel(catalog, primProvider.id, newPrimary.modelId) : undefined;
+          const secProvider = newSecondary ? findProvider(catalog, newSecondary.providerId) : undefined;
+          const secModel = newSecondary && secProvider ? findModel(catalog, secProvider.id, newSecondary.modelId) : undefined;
+
+          const primKey = newPrimary && credMgr ? await credMgr.getKey(newPrimary.providerId) : "";
+          const secKey = newSecondary && credMgr ? await credMgr.getKey(newSecondary.providerId) : "";
+
+          ai.reconfigure({
+            apiKey: primKey ?? "",
+            baseUrl: newPrimary?.baseUrlOverride ?? primProvider?.baseUrl ?? "",
+            model: primModel?.id ?? newPrimary?.modelId ?? "",
+            secondaryApiKey: secKey ?? "",
+            secondaryBaseUrl: newSecondary?.baseUrlOverride ?? secProvider?.baseUrl ?? "",
+            secondaryModel: secModel?.id ?? newSecondary?.modelId ?? "",
+            routingMode: "auto",
+          });
+        }
+
+        return send(res, 200, { saved, cleared, ai_available: ai.available });
+      }
+
+      // ── Inference test ────────────────────────────────────────────────
+      if (p === "/v1/settings/inference/test" && req.method === "POST") {
+        const b = await readJson(req);
+        const slot = (b.slot as "primary" | "secondary") ?? "primary";
+        const config = readSlotConfig(db, slot);
+        if (!config) {
+          return send(res, 200, {
+            success: false,
+            error: "not_configured",
+            errorExplanation: `No ${slot} inference slot configured.`,
+          });
+        }
+        const catalog = loadCatalog();
+        const provider = findProvider(catalog, config.providerId);
+        const model = provider ? findModel(catalog, provider.id, config.modelId) : undefined;
+        if (!provider || !model) {
+          return send(res, 200, {
+            success: false,
+            error: "not_in_catalog",
+            errorExplanation: `Provider/model not found in catalog: ${config.providerId}/${config.modelId}`,
+          });
+        }
+        const credMgr = secrets ? new CredentialManager(secrets) : null;
+        const apiKey = credMgr ? await credMgr.getKey(config.providerId) : "";
+        const result = await testInference(provider, model, apiKey ?? "", slot);
+        return send(res, 200, result);
+      }
+
+      // ── Migration ─────────────────────────────────────────────────────
+      if (p === "/v1/settings/migrate" && req.method === "POST") {
+        if (!secrets) {
+          return send(res, 200, { migrated: false, error: "no_secret_store" });
+        }
+        const result = await migrateInferenceSettings(db, secrets, ports.logger);
+        return send(res, 200, result);
+      }
+
       if (p === "/v1/settings" && req.method === "GET") {
         const rows = db.prepare("SELECT key, value FROM app_settings").all() as {
           key: string;
@@ -1184,7 +1703,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         // swap the mask when the user switches providers.
         const knownProviderIds = [
           "alibaba", "anthropic", "groq", "kimi", "minimax", "mimo",
-          "openai", "openrouter", "perplexity", "poolside", "together", "custom",
+          "openai", "openrouter", "perplexity", "poolside", "sarvam", "together", "custom",
         ];
         const providerKeys: Record<string, { set: boolean; mask: string }> = {};
         if (secrets) {
@@ -1339,7 +1858,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const nowApiKey = secrets ? (await secrets.get("ai.api_key")) ?? "" : "";
         const nowSecKey = secrets ? (await secrets.get("ai.secondary.api_key")) ?? "" : "";
         const aiTouched = [...saved, ...cleared].some((f) =>
-          ["api_key", "base_url", "model", "secondary_api_key", "secondary_base_url", "secondary_model", "routing_mode"].includes(f),
+          ["api_key", "base_url", "model", "secondary_api_key", "secondary_base_url", "secondary_model", "routing_mode", "jurisdiction"].includes(f),
         );
         if (aiTouched) {
           ai.reconfigure({
@@ -1347,7 +1866,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             apiKey: nowApiKey || process.env.Q2AV_AI_API_KEY || process.env.ANTHROPIC_API_KEY,
             baseUrl: now["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "",
             model: now["ai.model"] || process.env.Q2AV_MODEL || "",
-            // Work order 07 §D2: secondary config.
+            // Work order 07 §D2: secondary config. When the secondary base URL
+            // is Sarvam AI, the secondary provider is a SarvamProvider that
+            // does document intelligence (OCR + field extraction on the raw
+            // file) instead of text chat completions.
             secondaryApiKey: nowSecKey,
             secondaryBaseUrl: now["ai.secondary.base_url"] ?? "",
             secondaryModel: now["ai.secondary.model"] ?? "",
@@ -1779,6 +2301,23 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           changed.push("is_owner");
         }
 
+        // Membership ("shares this vault") is distinct from ownership ("this
+        // is me"). An owner is trivially a member; demoting a member who
+        // currently holds owner also clears owner — the invariant "owner ⇒
+        // member" must never be broken from this side.
+        if (typeof b.is_member === "boolean") {
+          if (b.is_member) {
+            db.prepare(
+              "UPDATE entities SET is_member=1, status='confirmed', updated_at=? WHERE id=?",
+            ).run(ports.clock.isoNow(), id);
+          } else {
+            db.prepare(
+              "UPDATE entities SET is_member=0, is_owner=0, updated_at=? WHERE id=?",
+            ).run(ports.clock.isoNow(), id);
+          }
+          changed.push("is_member");
+        }
+
         const after = db.prepare("SELECT * FROM entities WHERE id=?").get(id);
         ports.logger.info("person edited", { id, changed });
         return send(res, 200, { person: after, changed });
@@ -1811,41 +2350,42 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             documents: refs,
           });
         }
-        if (refs > 0) {
-          // Force-delete REASSIGNS document_parties to a well-known
-          // "Unidentified" placeholder person rather than deleting the rows.
-          // entity_id is NOT NULL and part of the primary key, so there is no
-          // FK-preserving way to null it out — and simply deleting the rows
-          // would silently detach evidence, which the work order forbids.
-          const UNIDENTIFIED_ID = UNIDENTIFIED_PERSON_ID;
-          const already = db.prepare("SELECT 1 FROM entities WHERE id=?").get(UNIDENTIFIED_ID);
-          if (!already) {
-            db.prepare(
-              `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
-               VALUES (?, 'person', 'Unidentified', 'confirmed', 1.0, 0, ?)`,
-            ).run(UNIDENTIFIED_ID, ports.clock.isoNow());
-          }
-          // A document may already have an Unidentified party in the same
-          // role (e.g. two deleted people both appeared as counterparty on
-          // the same document) — the composite primary key would collide, so
-          // reassign one at a time and let INSERT OR IGNORE absorb duplicates,
-          // then drop whatever the reassignment couldn't place.
-          const rows = db
-            .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
-            .all(id) as { document_id: string; role: string }[];
-          for (const r of rows) {
-            db.prepare(
-              "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
-            ).run(r.document_id, UNIDENTIFIED_ID, r.role);
-          }
-          db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
-        }
+        // Reassign and delete in one transaction — see the entity-delete route.
+        db.exec("BEGIN");
         try {
-          db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
-        } catch {
-          /* optional */
+          if (refs > 0) {
+            // Force-delete REASSIGNS document_parties to a well-known
+            // "Unidentified" placeholder person rather than deleting the rows.
+            // entity_id is NOT NULL and part of the primary key, so there is no
+            // FK-preserving way to null it out — and simply deleting the rows
+            // would silently detach evidence, which the work order forbids.
+            const UNIDENTIFIED_ID = unidentifiedPerson(db, ports);
+            // A document may already have an Unidentified party in the same
+            // role (e.g. two deleted people both appeared as counterparty on
+            // the same document) — the composite primary key would collide, so
+            // reassign one at a time and let INSERT OR IGNORE absorb duplicates,
+            // then drop whatever the reassignment couldn't place.
+            const rows = db
+              .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
+              .all(id) as { document_id: string; role: string }[];
+            for (const r of rows) {
+              db.prepare(
+                "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+              ).run(r.document_id, UNIDENTIFIED_ID, r.role);
+            }
+            db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
+          }
+          try {
+            db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
+          } catch {
+            /* optional */
+          }
+          db.prepare("DELETE FROM entities WHERE id=?").run(id);
+          db.exec("COMMIT");
+        } catch (err) {
+          db.exec("ROLLBACK");
+          throw err;
         }
-        db.prepare("DELETE FROM entities WHERE id=?").run(id);
         ports.logger.warn("person deleted", { id, name: row.display_name, reassigned: refs });
         return send(res, 200, {
           deleted: id,
@@ -2037,22 +2577,27 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const settingsRows = db.prepare("SELECT COUNT(*) as n FROM app_settings").get() as { n: number };
         deleted += settingsRows.n;
         db.prepare("DELETE FROM app_settings").run();
-        // Remove all AI API keys from the SecretStore.
+        // Remove all AI API keys from the SecretStore. "Forget everything" must
+        // mean everything: the flat legacy keys, the per-provider legacy keys
+        // (ai.api_key.<pid> / ai.secondary_api_key.<pid>), and the new
+        // CredentialManager keys (ai.provider_key.<pid>). Provider ids are
+        // derived from the catalog plus the legacy ids that predate it.
         if (secrets) {
-          for (const key of [
+          const catalogIds = loadCatalog().map((p) => p.id);
+          const legacyIds = [
+            "alibaba", "anthropic", "groq", "kimi", "minimax", "mimo",
+            "openai", "openrouter", "perplexity", "poolside", "sarvam",
+            "together", "custom",
+          ];
+          const ids = [...new Set([...catalogIds, ...legacyIds])];
+          const keysToRemove = [
             "ai.api_key",
             "ai.secondary.api_key",
-            "ai.api_key.alibaba", "ai.api_key.anthropic", "ai.api_key.groq",
-            "ai.api_key.kimi", "ai.api_key.minimax", "ai.api_key.mimo",
-            "ai.api_key.openai", "ai.api_key.openrouter", "ai.api_key.perplexity",
-            "ai.api_key.poolside", "ai.api_key.together", "ai.api_key.custom",
-            "ai.secondary_api_key.alibaba", "ai.secondary_api_key.anthropic",
-            "ai.secondary_api_key.groq", "ai.secondary_api_key.kimi",
-            "ai.secondary_api_key.minimax", "ai.secondary_api_key.mimo",
-            "ai.secondary_api_key.openai", "ai.secondary_api_key.openrouter",
-            "ai.secondary_api_key.perplexity", "ai.secondary_api_key.poolside",
-            "ai.secondary_api_key.together", "ai.secondary_api_key.custom",
-          ]) {
+            ...ids.map((pid) => `ai.api_key.${pid}`),
+            ...ids.map((pid) => `ai.secondary_api_key.${pid}`),
+            ...ids.map((pid) => `ai.provider_key.${pid}`),
+          ];
+          for (const key of keysToRemove) {
             try { await secrets.remove(key); } catch { /* already gone */ }
           }
         }
@@ -2326,17 +2871,85 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           // WO11 Track B: removed/deleted rows are hidden by default. The
           // ?include=removed escape hatch exists for the rare caller that
           // needs the soft-hidden set; deleted tombstones never list.
+          //
+          // The Documents Browser tab sorts by merchant then descending
+          // invoice date. The merchant is resolved with the same precedence
+          // as the detail endpoint's effective("counterparty"): a user/rule
+          // claim wins, then a linked counterparty party, then the issuer,
+          // then the extraction's counterparty_descriptor, then
+          // 'Unidentified'. The invoice date follows effective("document_date"):
+          // claim > extraction occurred_at > received_at (fallback so a
+          // document with no extracted date still appears in the right period).
+          //
+          // ?period= / ?month= / ?fy= filter on the invoice date (with the
+          // received_at fallback) using the same resolvePeriod helper as the
+          // Dashboard, so the two tabs share identical date boundaries.
+          //
+          // ?state= filters by the canonical document_pipeline.state. The UI
+          // pipeline board uses the legacy intake_events vocabulary where
+          // "queued" and "processing" mean the same thing as the canonical
+          // "converting" and "analysing"; map those so a click on either cell
+          // filters correctly.
           const includeRemoved = url.searchParams.get("include") === "removed";
+          const period = resolvePeriod(pack, url.searchParams);
+          const bounded = period.from !== null && period.to !== null;
+          const sort = url.searchParams.get("sort") === "received"
+            ? "received_at DESC"
+            : "merchant ASC, invoice_date DESC";
+          const where = includeRemoved ? listableDocumentSql("d") : activeDocumentSql("d");
+          const periodClause = bounded
+            ? ` AND (invoice_date >= ? AND invoice_date <= ?)`
+            : "";
+          const STATE_MAP: Record<string, string> = {
+            queued: "converting",
+            processing: "analysing",
+          };
+          const stateParam = url.searchParams.get("state");
+          const pipelineState = stateParam ? STATE_MAP[stateParam] ?? stateParam : null;
+          const stateClause = pipelineState
+            ? ` AND EXISTS (SELECT 1 FROM document_pipeline dp WHERE dp.document_id=d.id AND dp.state=?)`
+            : "";
+          const args: (string | number)[] = [];
+          if (pipelineState) args.push(pipelineState);
+          if (bounded) { args.push(period.from!, period.to!); }
+          args.push(Math.min(Number(url.searchParams.get("limit") ?? 500) || 500, 2000));
           return send(res, 200, {
+            period: { label: period.label, key: period.key, from: period.from, to: period.to },
+            state: stateParam,
             documents: db
               .prepare(
-                `SELECT id, original_filename, ext, byte_size, doc_type, source, sha256,
-                        markdown_chars, received_at, converted_at, analysed_at, lifecycle
-                 FROM documents
-                 WHERE ${includeRemoved ? listableDocumentSql("documents") : activeDocumentSql("documents")}
-                 ORDER BY received_at DESC LIMIT ?`,
+                `SELECT d.id, d.original_filename, d.ext, d.byte_size, d.doc_type, d.source,
+                        d.sha256, d.markdown_chars, d.received_at, d.converted_at, d.analysed_at,
+                        d.lifecycle,
+                        COALESCE(
+                          (SELECT fc.value FROM field_claims fc
+                            WHERE fc.subject_type='document' AND fc.subject_id=d.id
+                              AND fc.field='counterparty'
+                              AND fc.status NOT IN ('rejected','superseded')
+                            ORDER BY fc.id DESC LIMIT 1),
+                          (SELECT e.display_name FROM document_parties dp
+                            JOIN entities e ON e.id=dp.entity_id
+                           WHERE dp.document_id=d.id AND dp.role='counterparty' LIMIT 1),
+                          (SELECT e.display_name FROM document_parties dp
+                            JOIN entities e ON e.id=dp.entity_id
+                           WHERE dp.document_id=d.id AND dp.role='issuer' LIMIT 1),
+                          json_extract(d.extraction_json, '$.counterparty_descriptor'),
+                          'Unidentified'
+                        ) AS merchant,
+                        COALESCE(
+                          (SELECT fc.value FROM field_claims fc
+                            WHERE fc.subject_type='document' AND fc.subject_id=d.id
+                              AND fc.field='document_date'
+                              AND fc.status NOT IN ('rejected','superseded')
+                            ORDER BY fc.id DESC LIMIT 1),
+                          json_extract(d.extraction_json, '$.occurred_at'),
+                          d.received_at
+                        ) AS invoice_date
+                 FROM documents d
+                 WHERE ${where}${stateClause}${periodClause}
+                 ORDER BY ${sort} LIMIT ?`,
               )
-              .all(Number(url.searchParams.get("limit") ?? 100)),
+              .all(...args),
           });
         }
         case "/v1/transactions": {
@@ -2625,9 +3238,20 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               const c = claims[field];
               if (c && c.value !== null) return { value: c.value, source: c.source, status: c.status };
               const v = extractionKey ? x[extractionKey] : x[field];
-              return v === undefined || v === null
-                ? null
-                : { value: String(v), source: "ai" as const, status: "proposed" as const };
+              if (v === undefined || v === null) return null;
+              // issuer/vendor in the extraction are objects with a .name —
+              // flatten to the name so the UI shows a readable string. Only use
+              // the name when it is a real value; a null/undefined name (or an
+              // object with no name) must not render the literal "null"/
+              // "undefined"/"[object Object]".
+              const named = typeof v === "object" && v !== null
+                ? (v as { name?: unknown }).name
+                : undefined;
+              if (named !== undefined && named !== null) {
+                return { value: String(named), source: "ai" as const, status: "proposed" as const };
+              }
+              if (typeof v === "object") return null;
+              return { value: String(v), source: "ai" as const, status: "proposed" as const };
             };
             const parties = db
               .prepare(
@@ -2649,11 +3273,24 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               )
               .all(docId);
 
+            // Pipeline state + intake ID — needed by the UI to show a
+            // password prompt for encrypted documents. The canonical state
+            // lives in document_pipeline; the intake_events row carries the
+            // numeric ID the /v1/intake/<id>/password endpoint expects.
+            const pipeline = db
+              .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+              .get(docId) as { state: string } | undefined;
+            const intake = db
+              .prepare("SELECT id FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+              .get(docId) as { id: number } | undefined;
+
             return send(res, 200, {
               document: doc,
               extraction,
               claims: claimMap,
               editable_fields: [...allowedFields("document")],
+              pipeline_state: pipeline?.state ?? null,
+              intake_id: intake?.id ?? null,
               effective: {
                 doc_type: effective("doc_type"),
                 amount_minor: effective("amount_minor"),
@@ -2661,6 +3298,8 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                 document_date: effective("document_date", "occurred_at"),
                 posted_at: effective("posted_at"),
                 counterparty: effective("counterparty", "counterparty_descriptor"),
+                issuer: effective("issuer"),
+                vendor: effective("vendor"),
                 person: effective("person"),
                 reference_ids: (x.reference_ids as Record<string, string> | undefined) ?? {},
                 subtotal_minor: x.subtotal_minor ?? null,
@@ -3379,6 +4018,53 @@ async function testProvider(cfg: {
       error: "no_api_key",
       error_explanation: "No API key configured. Set one in Settings first.",
     };
+  }
+
+  // Sarvam AI: different API protocol (async job + multipart, not chat
+  // completions). Test by probing the status endpoint with a dummy job ID.
+  // A 401 means bad key; a 404 means the key is valid but the job doesn't
+  // exist (which is exactly what we expect for a made-up ID).
+  // Match the host, not a substring: a baseUrl like "sarvam.ai.example.com"
+  // must never receive the API key. Parsing the URL also lets a malformed or
+  // missing baseUrl fall through to the generic provider test below.
+  let sarvamHost = "";
+  try { sarvamHost = new URL(cfg.baseUrl).hostname; } catch { /* invalid baseUrl */ }
+  if (sarvamHost === "sarvam.ai" || sarvamHost.endsWith(".sarvam.ai")) {
+    const start = Date.now();
+    try {
+      const probeUrl = `${cfg.baseUrl.replace(/\/$/, "")}/job/test-probe/status`;
+      const res = await fetch(probeUrl, {
+        headers: { "api-subscription-key": cfg.apiKey },
+        signal: AbortSignal.timeout(15000),
+      });
+      const latency = Date.now() - start;
+      // 401/403 = bad key; 404 = key is valid, job not found (expected)
+      const authenticated = res.status !== 401 && res.status !== 403;
+      const reachable = res.status < 500;
+      return {
+        ...base,
+        reachable,
+        authenticated,
+        model_available: authenticated, // Sarvam has one model (the endpoint)
+        structured_output: true, // Sarvam always returns structured JSON
+        vision: true, // Sarvam does OCR on images/PDFs
+        latency_ms: latency,
+        error: authenticated ? null : "auth_failed",
+        error_explanation: authenticated ? null : "API key was rejected by Sarvam AI.",
+      };
+    } catch (err) {
+      return {
+        ...base,
+        reachable: false,
+        authenticated: false,
+        model_available: false,
+        structured_output: false,
+        vision: false,
+        latency_ms: Date.now() - start,
+        error: "unreachable",
+        error_explanation: `Could not reach Sarvam AI: ${(err as Error)?.message}`,
+      };
+    }
   }
 
   if (!cfg.model) {

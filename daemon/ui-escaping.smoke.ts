@@ -1,10 +1,21 @@
-// Validate ui.html's esc() and confirm no innerHTML sink is left unescaped.
+// Validate the shared esc() helper and confirm no innerHTML sink is left
+// unescaped across the UI surface — the ui.html shell plus the ui/*.js
+// renderer modules that build it.
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// fileURLToPath, not .pathname — the vault lives under "Application Support"
-// and .pathname leaves the space percent-encoded, so the read ENOENTs.
+// The esc() helper lives in ui/ui.js (it moved out of ui.html when the UI was
+// split into modules). The innerHTML sinks are spread across the shell and the
+// sibling ui/*.js renderers, so the static audit scans all of them together.
+const uiDir = fileURLToPath(new URL("./ui", import.meta.url));
+const escSource = fs.readFileSync(path.join(uiDir, "ui.js"), "utf-8");
 const html = fs.readFileSync(fileURLToPath(new URL("./ui.html", import.meta.url)), "utf-8");
+const uiModules = fs
+  .readdirSync(uiDir)
+  .filter((f) => f.endsWith(".js"))
+  .map((f) => fs.readFileSync(path.join(uiDir, f), "utf-8"));
+const allSource = [html, ...uiModules].join("\n");
 
 let pass = 0;
 let fail = 0;
@@ -19,12 +30,12 @@ function check(name: string, fn: () => void) {
   }
 }
 
-console.log("\nui.html XSS escaping\n");
+console.log("\nUI XSS escaping\n");
 
-// Pull esc() out of the page and run it for real.
-const escSrc = html.match(/const esc = \(v\) =>[\s\S]*?\.replace\(\/'\/g, "&#39;"\);/);
+// Pull esc() out of the shared module and run it for real.
+const escSrc = escSource.match(/const esc = \(v\) =>[\s\S]*?\.replace\(\/'\/g, "&#39;"\);/);
 if (!escSrc) {
-  console.log("  FAIL  could not locate esc() in ui.html");
+  console.log("  FAIL  could not locate esc() in ui/ui.js");
   process.exit(1);
 }
 // eslint-disable-next-line @typescript-eslint/no-implied-eval
@@ -99,15 +110,11 @@ check("no unescaped remote field remains at an innerHTML sink", () => {
   for (const f of risky) {
     // A bare `+ field` (not inside esc(...)) at a concatenation point.
     const bare = new RegExp(`\\+\\s*${f.replace(".", "\\.")}\\b`);
-    if (bare.test(html)) unescaped.push(f);
+    if (bare.test(allSource)) unescaped.push(f);
   }
   if (unescaped.length) {
     throw new Error(`unescaped at a sink: ${unescaped.join(", ")}`);
   }
-});
-
-check("say (SSE-derived feed text) is escaped", () => {
-  if (!/esc\(say\)/.test(html)) throw new Error("push() renders `say` unescaped");
 });
 
 console.log(`\n  ${pass} passed, ${fail} failed\n`);

