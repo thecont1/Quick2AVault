@@ -22,6 +22,7 @@ import { loadPack } from "./jurisdiction.js";
 import { triage, dispositionToIntakeKind, type TriageResult } from "./triage.js";
 import {
   extractTypedDocument,
+  FrankfurterFx,
   generateLearningQuestions,
   impactFor,
   transitionPipeline,
@@ -1025,6 +1026,100 @@ export function enqueue(db: DatabaseSync, ports: Ports, documentId: string, phas
 }
 
 /**
+ * Reprocess core: start a new canonical pipeline epoch and enqueue a fresh
+ * convert job (which chains analyse on completion). Shared by the
+ * /v1/documents/:id/reprocess endpoint and the duplicate-flush maintenance
+ * path, so both use the exact same reset semantics.
+ *
+ * Throws for unknown or deleted documents; reactivates a removed one.
+ */
+export function enqueueReprocess(db: DatabaseSync, ports: Ports, documentId: string): "convert" {
+  const doc = db
+    .prepare("SELECT id, lifecycle FROM documents WHERE id=?")
+    .get(documentId) as { id: string; lifecycle: string } | undefined;
+  if (!doc) throw new Error(`document ${documentId} not found`);
+  if (doc.lifecycle === "deleted") throw new Error(`document ${documentId} is deleted`);
+
+  // Reprocess is a new canonical pipeline epoch. Preserve the append-only
+  // event history, but reset the current-state pointer and replay the
+  // legal prefix up to the phase the worker will enter. Weakening the
+  // state machine here would hide illegal transitions everywhere else —
+  // the prefix (received → stable → hashed → triaged) is legal by
+  // construction, so the rows are written directly and nothing is
+  // published until COMMIT succeeds.
+  //
+  // CONCURRENCY (ITO QA): two simultaneous reprocesses used to create two
+  // convert/analyse chains against one shared state pointer, and the stale
+  // chain crashed the daemon with illegal terminal transitions. The job
+  // id is the epoch: the newest job row for a document is the current
+  // epoch, and the worker skips any job that is not the newest. Here the
+  // reset first enqueues the fresh convert job, then retires every OLDER
+  // pending job for the document so only one chain can ever run.
+  const prevState = (db
+    .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+    .get(documentId) as { state: string } | undefined)?.state ?? null;
+
+  db.exec("BEGIN");
+  let jobId: number | null = null;
+  try {
+    if (doc.lifecycle !== "active") {
+      db.prepare("UPDATE documents SET lifecycle='active' WHERE id=?").run(documentId);
+    }
+    db.prepare("DELETE FROM document_pipeline WHERE document_id=?").run(documentId);
+    const prefix = ["received", "stable", "hashed", "triaged"] as const;
+    const now = ports.clock.isoNow();
+    let from = prevState;
+    for (const toState of prefix) {
+      db.prepare(
+        `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+         VALUES (?,?,?,?,?,?,?)`,
+      ).run(documentId, from, toState, now, "reprocess", "reprocess epoch reset", "{}");
+      db.prepare(
+        `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+         ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+      ).run(documentId, toState, now);
+      from = toState;
+    }
+    // Enqueue without publishing — the JobStateChanged fires after commit.
+    const info = db
+      .prepare("INSERT INTO jobs (document_id, phase, state, created_at) VALUES (?,?,'pending',?)")
+      .run(documentId, "convert", ports.clock.isoNow());
+    jobId = Number(info.lastInsertRowid);
+    // Retire every older pending job for this document (its own convert
+    // chain, a password-submit convert, an earlier flush): the newest job
+    // row IS the current epoch, and stale jobs must never run.
+    db.prepare(
+      `UPDATE jobs SET state='done', last_error=?, finished_at=?
+        WHERE document_id=? AND state='pending' AND id < ?`,
+    ).run(`superseded by reprocess epoch ${jobId}`, now, documentId, jobId);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  // Publish only after commit so a rollback cannot emit stale events.
+  ports.bus.publish({
+    type: "PipelineStateChanged",
+    document_id: documentId,
+    from_state: prevState,
+    to_state: "triaged",
+    source: "reprocess",
+    reason: "reprocess epoch reset",
+    at: ports.clock.isoNow(),
+  });
+  if (jobId !== null) {
+    ports.bus.publish({
+      type: "JobStateChanged",
+      job_id: jobId,
+      phase: "convert",
+      state: "pending",
+      at: ports.clock.isoNow(),
+    });
+  }
+  return "convert";
+}
+
+/**
  * P1 — conversion. anydoc/plaintext/Vision-OCR -> canonical markdown v1.
  * AI never rewrites this text; it is the reading surface for every later claim.
  */
@@ -1041,7 +1136,14 @@ export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: numbe
     if (conv === null) throw new Error(`conversion returned null for ${doc.ext}`);
     const md = conv.markdown;
 
-  const mdDir = ports.paths.markdownDir(dateKey(ports.clock.now()));
+  // Markdown must live under the same date the RAW file is stored under.
+  // First conversion: that is the ingestion date (the transaction date is
+  // not known yet — the post-analysis re-file moves both). Reprocess: the
+  // raw has already been re-filed under the transaction date, so the fresh
+  // markdown lands there immediately and no re-file is needed.
+  const rawDay = path.basename(path.dirname(doc.raw_path));
+  const mdDay = /^\d{4}-\d{2}-\d{2}$/.test(rawDay) ? rawDay : dateKey(ports.clock.now());
+  const mdDir = ports.paths.markdownDir(mdDay);
   // Mirror the original filename so Markdown/ is browsable alongside Raw/.
   const stem = path.basename(doc.original_filename, path.extname(doc.original_filename));
   const mdPath = await uniquePath(mdDir, `${stem}.md`);
@@ -1246,6 +1348,28 @@ async function refileByEconomicDate(
       document_id: documentId,
       err: (err as Error)?.message,
     });
+  }
+}
+
+/**
+ * Re-file using the most recent occurred_at already on record, if any.
+ * Used when an extraction attempt FAILS: the transaction date from a
+ * previous successful pass still governs where the archive must live.
+ */
+async function refileByKnownEconomicDate(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+): Promise<void> {
+  const row = db
+    .prepare("SELECT extraction_json FROM documents WHERE id=?")
+    .get(documentId) as { extraction_json: string | null } | undefined;
+  if (!row?.extraction_json) return;
+  try {
+    const prev = JSON.parse(row.extraction_json) as { occurred_at?: string | null };
+    if (prev?.occurred_at) await refileByEconomicDate(db, ports, documentId, prev.occurred_at);
+  } catch {
+    /* unreadable extraction — nothing to re-file by */
   }
 }
 
@@ -1489,6 +1613,88 @@ function typedToExtractionResult(typed: TypedExtraction): ExtractionResult {
   };
 }
 
+/**
+ * Home currency from the jurisdiction pack (INR for the India pack).
+ */
+function homeCurrencyFor(db: DatabaseSync): string {
+  const jur = (db.prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'").get() as
+    | { value?: string }
+    | undefined)?.value;
+  try {
+    return loadPack(jur || "IN").currency.code;
+  } catch {
+    return "INR";
+  }
+}
+
+/**
+ * Fetch the home-currency rate as on the TRANSACTION date (frankfurter.dev)
+ * and stamp home_amount_minor/fx_rate/fx_date/fx_source on the transaction.
+ * This is the companion to work order 05 §A.2: foreign-currency transactions
+ * are recorded in their source currency and must be converted before they can
+ * count toward the rupee totals — otherwise the snapshot correctly excludes
+ * them and reports them under `unconverted`.
+ */
+async function convertToHomeCurrency(
+  db: DatabaseSync,
+  ports: Ports,
+  transactionId: string,
+  x: ExtractionResult,
+): Promise<void> {
+  if (!x.currency || !x.amount_minor || !x.occurred_at) return;
+  const home = homeCurrencyFor(db);
+  // recordTransaction trims + uppercases the currency — mirror that so
+  // "usd" / "USD " never spuriously converts or skips conversion.
+  const cur = String(x.currency).trim().toUpperCase();
+  const homeKey = String(home).trim().toUpperCase();
+  if (cur === homeKey) return;
+  const row = db
+    .prepare("SELECT home_amount_minor, amount_minor, occurred_at FROM transactions WHERE id=?")
+    .get(transactionId) as
+    | { home_amount_minor: number | null; amount_minor: number | null; occurred_at: string | null }
+    | undefined;
+  // Reuse an existing conversion only while the source facts are unchanged —
+  // a re-analysis that corrected the amount or date must recompute and
+  // refresh the FX fields rather than keep a stale conversion.
+  if (row?.home_amount_minor != null && row.amount_minor === x.amount_minor && row.occurred_at === x.occurred_at) {
+    return;
+  }
+  try {
+    const conv = await new FrankfurterFx(db).convert({
+      amountMinor: x.amount_minor,
+      from: cur,
+      to: homeKey,
+      date: x.occurred_at,
+    });
+    if (!conv) {
+      ports.logger.warn("fx: no rate available (offline and no cache)", {
+        transaction_id: transactionId,
+        from: x.currency,
+        to: home,
+        date: x.occurred_at,
+      });
+      return;
+    }
+    db.prepare(
+      "UPDATE transactions SET home_amount_minor=?, fx_rate=?, fx_date=?, fx_source=? WHERE id=?",
+    ).run(conv.convertedAmount, conv.rate, conv.rateDate, `frankfurter:${conv.freshness}`, transactionId);
+    ports.logger.info("fx converted", {
+      transaction_id: transactionId,
+      from: x.currency,
+      to: home,
+      rate: conv.rate,
+      rate_date: conv.rateDate,
+      freshness: conv.freshness,
+      home_amount_minor: conv.convertedAmount,
+    });
+  } catch (err) {
+    ports.logger.warn("fx conversion failed", {
+      transaction_id: transactionId,
+      err: (err as Error)?.message,
+    });
+  }
+}
+
 function typedLearningAmbiguities(db: DatabaseSync, documentId: string, extraction: TypedExtraction): LearningAmbiguity[] {
   const ambiguities: LearningAmbiguity[] = [];
   const entity = extraction.issuer?.name ?? extraction.client?.name ?? extraction.vendor?.name ?? extraction.broker?.name;
@@ -1564,7 +1770,8 @@ export async function runAnalyseJob(
     // review / a later AI pass instead of guessing a transaction.
     const result = typedToExtractionResult(typed);
     if (result.doc_type !== "unknown") {
-      recordTransaction(db, ports, documentId, result);
+      const rec = recordTransaction(db, ports, documentId, result);
+      if (rec) await convertToHomeCurrency(db, ports, rec.transaction_id, result);
     }
     return;
   }
@@ -1593,8 +1800,49 @@ export async function runAnalyseJob(
     // Extraction failure must not corrupt the ledger — the document stays in
     // the vault, unanalysed, and can be retried or reviewed.
     db.prepare("UPDATE documents SET analysed_at=? WHERE id=?").run(now, documentId);
+    // Storage still respects the transaction date we already know from a
+    // previous successful pass — a failed reprocess must not strand the
+    // archive under the ingestion date.
+    await refileByKnownEconomicDate(db, ports, documentId);
     ports.logger.warn("analyse: extraction returned nothing", { document_id: documentId });
     return;
+  }
+
+  // Never lose the transaction date across reprocesses: if this pass failed
+  // to read a date but a previous pass had one, carry the earlier date
+  // forward. The date is printed on the document and cannot have changed.
+  if (!x.occurred_at) {
+    const prev = (db
+      .prepare("SELECT extraction_json FROM documents WHERE id=?")
+      .get(documentId) as { extraction_json: string | null } | undefined)?.extraction_json;
+    if (prev) {
+      try {
+        const old = JSON.parse(prev) as { occurred_at?: string | null };
+        if (old?.occurred_at) x.occurred_at = old.occurred_at;
+      } catch {
+        /* unreadable previous extraction */
+      }
+    }
+    // Second source: the deterministic typed extraction's own date claim.
+    // It parses the same markdown without a model, so it is the most
+    // reliable date in the vault. Confirmed (user-edited) claims win.
+    if (!x.occurred_at) {
+      const claim = db
+        .prepare(
+          `SELECT value FROM field_claims
+            WHERE subject_type='document' AND subject_id=? AND field='document_date'
+              AND status IN ('proposed','confirmed')
+            ORDER BY (status='confirmed') DESC, id DESC LIMIT 1`,
+        )
+        .get(documentId) as { value: string } | undefined;
+      if (claim?.value) x.occurred_at = claim.value;
+    }
+    if (x.occurred_at) {
+      ports.logger.info("analyse: carried forward transaction date", {
+        document_id: documentId,
+        occurred_at: x.occurred_at,
+      });
+    }
   }
 
   // markdown_hash is recorded against the text the model ACTUALLY read, not
@@ -1621,6 +1869,13 @@ export async function runAnalyseJob(
   // Second index pass: the reading now exists, so the six questions become
   // searchable alongside the document text.
   indexDocument(db, documentId, markdown, flattenExtraction(x));
+
+  // File the archive under the ECONOMIC date now that we know it, so Finder
+  // folders match how the user thinks about their documents. Every analysed
+  // document re-files — statements and no-money documents included.
+  if (x.occurred_at) {
+    await refileByEconomicDate(db, ports, documentId, x.occurred_at);
+  }
 
   ports.bus.publish({
     type: "AnalysisComplete",
@@ -1684,12 +1939,6 @@ export async function runAnalyseJob(
   if (x.doc_type === "irrelevant" || x.amount_minor === null) {
     ports.logger.info("analyse: no money movement", { document_id: documentId, doc_type: x.doc_type });
     return;
-  }
-
-  // File the archive under the ECONOMIC date now that we know it, so Finder
-  // folders match how the user thinks about their documents.
-  if (x.occurred_at) {
-    await refileByEconomicDate(db, ports, documentId, x.occurred_at);
   }
 
   // ── the money shot: match before recording ──────────────────────────────
@@ -1781,6 +2030,9 @@ export async function runAnalyseJob(
 
   const rec = recordTransaction(db, ports, documentId, x);
   if (rec) {
+    // FX conversion: stamp the home-currency value so foreign income/spending
+    // counts toward the rupee totals (see convertToHomeCurrency).
+    await convertToHomeCurrency(db, ports, rec.transaction_id, x);
     ports.logger.info("transaction recorded", {
       transaction_id: rec.transaction_id,
       direction: rec.direction,
@@ -1848,6 +2100,37 @@ export class JobWorker {
     const n = Number(info.changes ?? 0);
     if (n > 0) this.ports.logger.warn("reclaimed orphaned jobs", { count: n });
     return n;
+  }
+
+  /**
+   * Epoch guard. The newest job row for a document is its current
+   * reprocess epoch; anything older was superseded by a later reset and
+   * must not write to the shared pipeline state (a stale chain would
+   * throw illegal terminal transitions and crash the daemon).
+   */
+  private jobIsCurrent(job: { id: number; document_id: string }): boolean {
+    const max = this.db
+      .prepare("SELECT MAX(id) m FROM jobs WHERE document_id=?")
+      .get(job.document_id) as { m: number | null };
+    return job.id >= (max.m ?? job.id);
+  }
+
+  /** Retire a superseded job so it is never claimed or reclaimed again. */
+  private staleOut(job: { id: number; document_id: string }, reason: string): void {
+    this.db
+      .prepare("UPDATE jobs SET state='done', last_error=?, finished_at=? WHERE id=?")
+      .run(reason, this.ports.clock.isoNow(), job.id);
+    this.ports.logger.info("job superseded by a newer reprocess — skipped", {
+      job: job.id,
+      document_id: job.document_id,
+    });
+  }
+
+  /** True when the job is still the document's newest (current epoch). */
+  private guard(job: { id: number; document_id: string }): boolean {
+    if (this.jobIsCurrent(job)) return true;
+    this.staleOut(job, "superseded by a newer reprocess epoch");
+    return false;
   }
 
   start() {
@@ -1929,6 +2212,16 @@ export class JobWorker {
       }
       if (!job) return;
 
+      // EPOCH GUARD (ITO QA): the newest job row for a document is the
+      // current reprocess epoch. A job that is not the newest was
+      // superseded by a later reset — skip it entirely so a stale chain
+      // can never write to the shared pipeline state (which would throw
+      // illegal terminal transitions and crash the daemon).
+      if (!this.jobIsCurrent(job)) {
+        this.staleOut(job, "superseded by a newer reprocess epoch");
+        return;
+      }
+
       // The row was incremented by the claim, so this run is attempt N+1.
       // Thresholding on the stale pre-increment value gave one extra retry
       // than MAX_ATTEMPTS specified.
@@ -1939,6 +2232,7 @@ export class JobWorker {
         if (job.phase === "convert") {
           // Work order 07 §B1: update the aggregated intake state to reflect
           // the current stage, not just the raw job churn.
+          if (!this.guard(job)) return;
           updateIntakeForJob(this.db, this.ports, job.document_id, "processing", "converting");
           transitionIntakePipeline(
             this.db,
@@ -1949,6 +2243,7 @@ export class JobWorker {
           );
           await runConvertJob(this.db, this.ports, job.id, job.document_id);
         } else if (job.phase === "analyse") {
+          if (!this.guard(job)) return;
           updateIntakeForJob(this.db, this.ports, job.document_id, "processing", "analysing");
           transitionIntakePipeline(
             this.db,
@@ -1971,6 +2266,7 @@ export class JobWorker {
         // Work order 07 §B1: mark the intake as complete after the final phase.
         // The convert→analyse chain means the analyse job is the last one.
         if (job.phase === "analyse") {
+          if (!this.guard(job)) return;
           transitionIntakePipeline(
             this.db,
             this.ports,
@@ -1987,6 +2283,7 @@ export class JobWorker {
         // marked password_needed by runConvertJob. Mark the job as done (not
         // failed) so the worker doesn't retry it 3 times before giving up.
         if (msg.startsWith("PASSWORD_NEEDED:")) {
+          if (!this.guard(job)) return;
           this.db
             .prepare("UPDATE jobs SET state='done', last_error=?, finished_at=? WHERE id=?")
             .run(msg, this.ports.clock.isoNow(), job.id);
@@ -2011,6 +2308,7 @@ export class JobWorker {
         // Work order 07 §B3: if the job is permanently failed, mark the intake
         // as failed too so the UI shows a visible error, not indefinite pending.
         if (state === "failed") {
+          if (!this.guard(job)) return;
           transitionIntakePipeline(
             this.db,
             this.ports,

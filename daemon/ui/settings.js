@@ -55,11 +55,10 @@ function buildProviderDropdown(selectId, currentProviderId) {
   // Build custom dropdown button
   const current = CATALOG.find((p) => p.id === currentProviderId);
   const currentName = currentProviderId === "custom" ? "Custom provider…" : (current?.name || "Select provider…");
-  const currentLogo = current?.logoUrl || "";
 
   let btnHtml = `<button type="button" class="pp-btn">`;
-  if (currentLogo) {
-    btnHtml += `<img class="pp-logo" src="${esc(currentLogo)}" width="20" height="20" onerror="this.style.display='none'">`;
+  if (current) {
+    btnHtml += logoImgHtml(providerLogoUrls(current), "pp-logo", 20);
   }
   btnHtml += `<span class="pp-name">${esc(currentName)}</span><span class="pp-arrow">▼</span></button>`;
 
@@ -70,7 +69,7 @@ function buildProviderDropdown(selectId, currentProviderId) {
     if (providers.length === 0) continue;
     panelHtml += `<div class="pp-group">${TIER_LABELS[tier]} (${providers.length})</div>`;
     for (const p of providers) {
-      const logo = p.logoUrl ? `<img class="pp-opt-logo" src="${esc(p.logoUrl)}" width="18" height="18" onerror="this.style.display='none'">` : "";
+      const logo = logoImgHtml(providerLogoUrls(p), "pp-opt-logo", 18);
       panelHtml += `<div class="pp-opt${p.id === currentProviderId ? " selected" : ""}" data-pid="${esc(p.id)}">${logo}<span class="pp-opt-name">${esc(p.name)}</span></div>`;
     }
   }
@@ -101,6 +100,127 @@ function buildProviderDropdown(selectId, currentProviderId) {
       buildProviderDropdown(selectId, pid);
     };
   });
+}
+
+// ── model dropdown with provider logos ──────────────────────────
+// models.dev serves provider logos (https://models.dev/logos/{provider}.svg).
+// Prefer the .svg form, fall back to the catalog's logoUrl (also models.dev,
+// .png), then hide on error. Native <select> cannot render images, so this is
+// a custom picker (same pattern as the provider picker); the hidden select
+// keeps saveAi/autoSave working unchanged.
+
+function providerLogoUrls(provider) {
+  const urls = [];
+  if (provider) {
+    urls.push("https://models.dev/logos/" + encodeURIComponent(provider.id) + ".svg");
+    urls.push("https://models.dev/logos/" + encodeURIComponent(provider.id) + ".png");
+    if (provider.logoUrl && !urls.includes(provider.logoUrl)) urls.push(provider.logoUrl);
+  }
+  return urls;
+}
+
+function logoImgHtml(urls, cls, w) {
+  if (!urls.length) return "";
+  let onerr;
+  if (urls.length === 1) {
+    onerr = "this.style.display='none'";
+  } else {
+    const rest = urls.slice(1).map((u) => "'" + u.replace(/'/g, "\\'") + "'").join(",");
+    onerr = `var n=Number(this.dataset.i||0);if(n>=${urls.length - 1}){this.style.display='none'}else{this.dataset.i=String(n+1);this.src=[${rest}][n]}`;
+  }
+  return `<img class="${cls}" src="${esc(urls[0])}" width="${w}" height="${w}" alt="" onerror="${onerr}">`;
+}
+
+// Per-slot state so a programmatic select.value change (e.g. a suggestion
+// applied) can rebuild the picker from the same data.
+const modelPickerState = { primary: null, secondary: null };
+
+function buildModelDropdown(which, provider, savedModel, models) {
+  const isPrimary = which === "primary";
+  const sel = document.getElementById(isPrimary ? "aiModel" : "ai2Model");
+  const picker = document.getElementById(isPrimary ? "aiModelPicker" : "ai2ModelPicker");
+  if (!sel || !picker) return;
+  modelPickerState[which] = { provider, savedModel, models };
+
+  const logos = providerLogoUrls(provider);
+
+  // Hidden native select — saveAi / autoSave keep reading .value.
+  let optHtml = "";
+  if (savedModel && !models.find((m) => m.id === savedModel)) {
+    optHtml += `<option value="${esc(savedModel)}" selected>${esc(savedModel)} (saved)</option>`;
+  }
+  for (const m of models) {
+    optHtml += `<option value="${esc(m.id)}"${m.id === savedModel ? " selected" : ""}>${esc(m.displayName)}</option>`;
+  }
+  optHtml += `<option value="__other__">Other model ID (advanced)…</option>`;
+  sel.innerHTML = optHtml;
+  if (savedModel) sel.value = savedModel;
+
+  const currentName = savedModel
+    ? (models.find((m) => m.id === savedModel)?.displayName || savedModel)
+    : (provider ? "select a model…" : "select a provider first");
+
+  let btnHtml = `<button type="button" class="pp-btn">`;
+  if (savedModel) btnHtml += logoImgHtml(logos, "pp-logo", 20);
+  btnHtml += `<span class="pp-name">${esc(currentName)}</span><span class="pp-arrow">▼</span></button>`;
+
+  let panelHtml = `<div class="pp-panel">`;
+  if (!models.length) {
+    panelHtml += `<div class="pp-opt" style="cursor:default"><span class="pp-opt-name">No eligible models for this provider in this role</span></div>`;
+  } else {
+    if (provider) panelHtml += `<div class="pp-group">${esc(provider.name)} models</div>`;
+    if (savedModel && !models.find((m) => m.id === savedModel)) {
+      panelHtml += `<div class="pp-opt selected" data-mid="${esc(savedModel)}">${logoImgHtml(logos, "pp-opt-logo", 18)}`
+        + `<span class="pp-opt-name">${esc(savedModel)}<span class="pp-opt-sub">saved</span></span></div>`;
+    }
+    for (const m of models) {
+      panelHtml += `<div class="pp-opt${m.id === savedModel ? " selected" : ""}" data-mid="${esc(m.id)}">`
+        + logoImgHtml(logos, "pp-opt-logo", 18)
+        + `<span class="pp-opt-name">${esc(m.displayName)}<span class="pp-opt-sub">${esc(m.id)}</span></span></div>`;
+    }
+  }
+  panelHtml += `<div class="pp-opt" data-other="1"><span class="pp-opt-name">Other model ID (advanced)…</span></div>`;
+  panelHtml += `</div>`;
+
+  picker.innerHTML = btnHtml + panelHtml;
+
+  const btn = picker.querySelector(".pp-btn");
+  const panel = picker.querySelector(".pp-panel");
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    document.querySelectorAll(".pp-panel.open").forEach((p) => { if (p !== panel) p.classList.remove("open"); });
+    panel.classList.toggle("open");
+  };
+  picker.querySelectorAll(".pp-opt[data-mid]").forEach((opt) => {
+    opt.onclick = () => {
+      sel.value = opt.dataset.mid;
+      sel.dispatchEvent(new Event("change"));
+    };
+  });
+  const otherOpt = picker.querySelector(".pp-opt[data-other]");
+  if (otherOpt) {
+    otherOpt.onclick = () => {
+      const mid = prompt("Enter the model ID:") || "";
+      if (!mid) return;
+      // The select must actually contain the value before assignment —
+      // setting sel.value to an unknown option silently keeps the old one.
+      if (!Array.from(sel.options).some((o) => o.value === mid)) {
+        sel.add(new Option(mid + " (user-entered)", mid));
+      }
+      sel.value = mid;
+      sel.dispatchEvent(new Event("change"));
+    };
+  }
+  // The select's change event rebuilds the picker (panel closes, button
+  // resyncs) and autoSave fires exactly as with the native select.
+  if (!sel.dataset.pickerBound) {
+    sel.dataset.pickerBound = "1";
+    sel.addEventListener("change", () => {
+      const st = modelPickerState[which];
+      if (!st) return;
+      buildModelDropdown(which, st.provider, sel.value === "__other__" ? st.savedModel : sel.value, st.models);
+    });
+  }
 }
 
 // Close dropdowns when clicking outside
@@ -206,7 +326,58 @@ async function loadSettings() {
   // Auto-test both inference providers
   testAi("primary");
   testAi("secondary");
+
+  // ── Duplicate documents (post-resync maintenance) ──────────────
+  loadDuplicates();
 }
+
+// ── Duplicate flush ──────────────────────────────────────────────
+async function loadDuplicates() {
+  const summary = document.getElementById("dupSummary");
+  const btn = document.getElementById("dupFlushBtn");
+  if (!summary) return;
+  try {
+    const d = await api("/v1/maintenance/duplicates");
+    const groups = d.groups || [];
+    const copies = d.total_copies || 0;
+    if (!groups.length) {
+      summary.textContent = "No duplicates — clean.";
+      if (btn) btn.disabled = true;
+      return;
+    }
+    summary.textContent = copies + " duplicate copies across " + groups.length + " groups.";
+    if (btn) btn.disabled = false;
+  } catch (e) {
+    summary.textContent = "could not load duplicates: " + String(e.message || e);
+  }
+}
+
+document.getElementById("dupFlushBtn").onclick = async () => {
+  const msg = document.getElementById("dupMsg");
+  const btn = document.getElementById("dupFlushBtn");
+  const policy = (document.querySelector('input[name="dupPolicy"]:checked') || {}).value || "keep_originals";
+  const what = policy === "promote_newest"
+    ? "Archived duplicates will be deleted AND every affected document will be re-processed with the current models."
+    : "Archived duplicate files will be deleted. Original documents are untouched.";
+  if (!confirm("Flush duplicate documents?\n\n" + what)) return;
+  btn.disabled = true;
+  msg.className = "msg";
+  msg.textContent = "Flushing…";
+  try {
+    const r = await apiPost("/v1/maintenance/flush-duplicates", { policy, confirm: "FLUSH" });
+    if (r && r.error) throw new Error(r.message || r.error);
+    msg.className = "msg ok";
+    msg.textContent = "Flushed " + (r.copies || 0) + " copies across " + (r.groups || 0) + " groups · "
+      + (r.deleted_files || 0) + " files deleted"
+      + (r.reprocessed ? " · re-processing " + r.reprocessed + " documents" : "");
+    loadDuplicates();
+    if (typeof refreshPipeline === "function") refreshPipeline();
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = "Failed: " + String(e.message || e);
+  }
+  btn.disabled = false;
+};
 
 /**
  * Map a base URL to a provider ID from the catalog.
@@ -266,6 +437,8 @@ function onProviderChange(which, savedModel) {
   // Custom provider: free-text model ID (use a text input)
   if (pid === "custom") {
     modelSelect.style.display = "none";
+    const pickerEl = document.getElementById(isPrimary ? "aiModelPicker" : "ai2ModelPicker");
+    if (pickerEl) pickerEl.style.display = "none";
     // Create or show a text input for custom model ID
     let modelInput = document.getElementById(isPrimary ? "aiModelText" : "ai2ModelText");
     if (!modelInput) {
@@ -283,14 +456,17 @@ function onProviderChange(which, savedModel) {
     return;
   }
 
-  // Catalog provider: use the select dropdown
-  modelSelect.style.display = "";
+  // Catalog provider: the native select stays hidden; the custom picker
+  // (with provider logos) is the visible control.
+  modelSelect.style.display = "none";
   const modelInput = document.getElementById(isPrimary ? "aiModelText" : "ai2ModelText");
   if (modelInput) modelInput.style.display = "none";
 
   if (!provider) {
     modelSelect.innerHTML = "<option value=''>select a provider first</option>";
     modelSelect.disabled = true;
+    const pickerEl = document.getElementById(isPrimary ? "aiModelPicker" : "ai2ModelPicker");
+    if (pickerEl) { pickerEl.style.display = ""; buildModelDropdown(which, null, "", []); }
     return;
   }
 
@@ -303,6 +479,8 @@ function onProviderChange(which, savedModel) {
     modelSelect.disabled = true;
     modelSelect.style.opacity = "0.6";
     if (modelNote) modelNote.textContent = "";
+    const pickerEl = document.getElementById(isPrimary ? "aiModelPicker" : "ai2ModelPicker");
+    if (pickerEl) { pickerEl.style.display = ""; buildModelDropdown(which, provider, "", []); }
     return;
   }
 
@@ -323,6 +501,8 @@ function onProviderChange(which, savedModel) {
   html += `<option value="__other__">Other model ID (advanced)…</option>`;
   modelSelect.innerHTML = html;
   if (savedModel) modelSelect.value = savedModel;
+  const pickerEl = document.getElementById(isPrimary ? "aiModelPicker" : "ai2ModelPicker");
+  if (pickerEl) { pickerEl.style.display = ""; buildModelDropdown(which, provider, savedModel, result.models); }
 
   // Show jurisdiction fallback note
   if (modelNote) {

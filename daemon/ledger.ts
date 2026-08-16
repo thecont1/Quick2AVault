@@ -224,7 +224,18 @@ export function recordTransaction(
   if (x.doc_type === "irrelevant" || x.amount_minor === null || x.amount_minor <= 0) return null;
 
   const before = (db.prepare("SELECT COUNT(*) n FROM entities").get() as { n: number }).n;
-  const occurred = x.occurred_at ?? ports.clock.isoNow().slice(0, 10);
+  // The ledger must never invent a transaction date. "Today" is the
+  // ingestion date, not the economic date — stamping it here would break
+  // financial-year attribution. A document whose date cannot be read stays
+  // unrecorded (visible for review) until a pass extracts it.
+  if (!x.occurred_at) {
+    ports.logger.warn("recordTransaction: missing occurred_at — not recording", {
+      document_id: documentId,
+      doc_type: x.doc_type,
+    });
+    return null;
+  }
+  const occurred = x.occurred_at;
 
   // ── the wallet rule ───────────────────────────────────────────────────────
   // A top-up moves money between two accounts I own. There is no counterparty
@@ -554,14 +565,21 @@ export function recordTransaction(
   }
 
   // ── evidence ──────────────────────────────────────────────────────────────
-  // INSERT OR IGNORE: on a first analysis this creates the link; on a
-  // re-analysis the link already exists (same transaction_id) and this is a
-  // no-op. The unique index on (document_id, evidence_role) is the backstop
-  // that prevents a second transaction from ever being created.
+  // First analysis creates the link; re-analysis refreshes the machine link
+  // metadata (linked_at, match_score, role) so evidence timestamps stay
+  // truthful after a reprocess. User-controlled links (linked_by='user')
+  // are preserved — a user's manual claim outranks the AI re-link.
   db.prepare(
-    `INSERT OR IGNORE INTO transaction_documents
+    `INSERT INTO transaction_documents
       (transaction_id, document_id, evidence_role, match_score, linked_by, linked_at)
-     VALUES (?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?)
+     ON CONFLICT(document_id, evidence_role) DO UPDATE SET
+       transaction_id = excluded.transaction_id,
+       match_score = excluded.match_score,
+       linked_at = excluded.linked_at,
+       linked_by = CASE WHEN transaction_documents.linked_by = 'user'
+                        THEN transaction_documents.linked_by
+                        ELSE excluded.linked_by END`,
   ).run(id, documentId, evidenceRole(x), 1.0, "ai", now);
 
   // ── provenance ────────────────────────────────────────────────────────────

@@ -89,6 +89,7 @@ const SCHEMA = {
       description: "Itemised lines on the invoice/bill, if the document lists them",
       items: {
         type: "object",
+        description: "A single itemised line on the document",
         properties: {
           description: { type: "string", description: "Description of the item or service" },
           quantity: { type: "number", description: "Quantity, if stated" },
@@ -102,6 +103,12 @@ const SCHEMA = {
     // ── document classification ──────────────────────────────────────────
     document_type: { type: "string", description: "Type of document: tax_invoice, receipt, bank_statement, card_statement, contract_note, salary_slip, etc." },
     purpose: { type: "string", description: "Purpose or description of the transaction" },
+
+    // ── ownership & direction ────────────────────────────────────────────
+    // Sarvam has no access to the vault's identity context, so the model
+    // must name the owner and classify the money movement itself.
+    owner_name: { type: "string", description: "Name of the person or entity whose financial record this document belongs to (the buyer in a purchase, the seller or service provider in a sale)" },
+    direction: { type: "string", description: "\"in\" if money is coming IN to the owner (income, sale, refund received); \"out\" if money is going OUT from the owner (expense, purchase, payment made); \"transfer\" if between the owner's own accounts; leave empty if unknown" },
   },
 };
 
@@ -156,6 +163,10 @@ export class SarvamProvider {
       // (a filename like "Ínvoice ₹1,445.pdf" would make fetch throw), and
       // name+length collides across different documents.
       const contentHash = createHash("sha256").update(fileBuffer).digest("hex");
+      // The schema is part of the extraction identity: same bytes, new schema
+      // must re-extract. Caching by content alone would replay results from
+      // an older field set forever (no direction, no owner, no dates).
+      const schemaHash = createHash("sha256").update(JSON.stringify(SCHEMA)).digest("hex").slice(0, 16);
 
       // 1. Submit the job
       const formData = new FormData();
@@ -170,7 +181,7 @@ export class SarvamProvider {
         method: "POST",
         headers: {
           "api-subscription-key": this.apiKey,
-          "Idempotency-Key": `q2av-${contentHash}`,
+          "Idempotency-Key": `q2av-${contentHash}-${schemaHash}`,
         },
         body: formData,
         signal: AbortSignal.timeout(60_000),
@@ -346,8 +357,14 @@ export class SarvamProvider {
     const occurredAt = str("invoice_date") ? parseDate(str("invoice_date")!) : null;
     const postedAt = str("due_date") ? parseDate(str("due_date")!) : null;
 
-    // Build parties with identifiers from the extracted fields
+    // Build parties with identifiers from the extracted fields. The model
+    // supplies owner_name — the person/entity whose financial record this
+    // document belongs to — because Sarvam cannot see the vault's identity
+    // context. Without it, a sales invoice issued BY the owner would mark
+    // the customer as the owner.
     const parties: ExtractedParty[] = [];
+    const ownerName = (str("owner_name") ?? "").trim().toLowerCase();
+    const isOwner = (name: string) => ownerName !== "" && name.trim().toLowerCase() === ownerName;
     const issuerName = str("issuer_name");
     if (issuerName) {
       const issuerIdentifiers: Record<string, string> = {};
@@ -359,8 +376,11 @@ export class SarvamProvider {
       if (phone) issuerIdentifiers.phone = phone;
       parties.push({
         name: issuerName,
-        kind: "organisation",
-        role: "issuer",
+        // Ownership affects the ROLE only; kind derives from the
+        // identifiers — a GSTIN-bearing issuer is an organisation even
+        // when the business owner's name appears on the invoice.
+        kind: gstin ? "organisation" : "person",
+        role: isOwner(issuerName) ? "owner" : "issuer",
         identifiers: issuerIdentifiers,
       });
     }
@@ -372,7 +392,7 @@ export class SarvamProvider {
       parties.push({
         name: customerName,
         kind: "person",
-        role: "owner",
+        role: isOwner(customerName) ? "owner" : "counterparty",
         identifiers: customerIdentifiers,
       });
     }
@@ -423,6 +443,12 @@ export class SarvamProvider {
       ? [bankName, bankAccount ? `A/c ${bankAccount}` : null].filter(Boolean).join(", ")
       : null;
 
+    // Direction: the model classifies the money movement from the document
+    // itself, since Sarvam cannot see the vault's entities.
+    const rawDir = (str("direction") ?? "").toLowerCase();
+    const direction: ExtractionResult["direction"] =
+      rawDir === "in" || rawDir === "out" || rawDir === "transfer" ? rawDir : null;
+
     return {
       doc_type: docType,
       occurred_at: occurredAt,
@@ -432,7 +458,7 @@ export class SarvamProvider {
       subtotal_minor: toMinor(subtotal),
       tax_minor: toMinor(taxAmount),
       line_items: lineItems.length > 0 ? lineItems : null,
-      direction: null,
+      direction,
       payment_rail: paymentRail,
       parties,
       reference_ids,

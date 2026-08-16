@@ -3,7 +3,7 @@
  *   npx tsx daemon/lifecycle.smoke.ts
  *
  * Pins the three verbs behind the Glaze detail footer end-to-end over HTTP:
- *   POST   /v1/documents/:id/reprocess          re-enqueues analysis, reactivates
+ *   POST   /v1/documents/:id/reprocess          re-converts then re-analyses, reactivates
  *   POST   /v1/documents/:id/remove-from-active  soft-hide, file + claims kept
  *   DELETE /v1/documents/:id                     permanent, bytes unlinked, tombstoned
  *
@@ -15,6 +15,7 @@
  */
 import * as assert from "node:assert";
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -24,6 +25,7 @@ import { createApi } from "./api.js";
 import { createLogger, createEventBus, systemClock, createPaths } from "./adapters.js";
 import type { Ports } from "./ports.js";
 import { nullAiProvider, type MutableAiProvider } from "./ai-provider.js";
+import { recordTransaction } from "./ledger.js";
 import { JobWorker } from "./pipeline.js";
 
 let pass = 0;
@@ -45,15 +47,15 @@ function testPorts(vault: string): Ports {
     logger,
     clock: systemClock,
     paths: createPaths(vault),
-    // A converter that always yields a little markdown, so a convert-phase
-    // reprocess of a document without markdown still succeeds deterministically.
+    // A converter that always yields a little markdown, so the reprocess
+    // chain's convert leg succeeds deterministically.
     converter: { async toMarkdown() { return { markdown: "# Reprocessed\n\nTotal: 100.00", converter: "plaintext", converterVersion: "test" }; } },
     bus: createEventBus(logger),
   };
 }
 
-// A deterministic AI that produces one simple invoice extraction, so an
-// analyse-phase reprocess exercises the real job path without a network call.
+// A deterministic AI that produces one simple invoice extraction, so the
+// analyse leg of a reprocess exercises the real job path without a network call.
 const fakeAi: MutableAiProvider = {
   available: true,
   model: "test",
@@ -151,18 +153,19 @@ const reproRes = await req("POST", "/v1/documents/doc_remove_B/reprocess");
 await check("reprocess of a removed doc returns 200 and reactivates it", async () => {
   assert.equal(reproRes.status, 200);
   assert.equal(reproRes.json?.reprocessing, true);
+  assert.equal(reproRes.json?.phase, "convert");
   const row = db.prepare("SELECT lifecycle FROM documents WHERE id=?").get("doc_remove_B") as { lifecycle: string };
   assert.equal(row.lifecycle, "active");
 });
-await check("reprocess enqueues an analyse job for the reactivated document", async () => {
+await check("reprocess enqueues a convert job, never analyse-only", async () => {
   const job = db
     .prepare("SELECT phase, state FROM jobs WHERE document_id=? ORDER BY id DESC LIMIT 1")
     .get("doc_remove_B") as { phase: string; state: string } | undefined;
   assert.ok(job, "a job row must exist after reprocess");
-  assert.equal(job!.phase, "analyse", "a document with markdown reprocesses at the analyse phase");
+  assert.equal(job!.phase, "convert", "reprocess must start from the original bytes");
   assert.equal(job!.state, "pending");
 });
-await check("reprocess drains through the real worker to done", async () => {
+await check("reprocess drains the full convert→analyse chain to done", async () => {
   const worker = new JobWorker(db, ports, nullAiProvider);
   for (let i = 0; i < 6; i++) {
     const job = db
@@ -171,14 +174,114 @@ await check("reprocess drains through the real worker to done", async () => {
     if (job?.state === "done") break;
     await worker.tick();
   }
-  const job = db
-    .prepare("SELECT state FROM jobs WHERE document_id=? ORDER BY id DESC LIMIT 1")
-    .get("doc_remove_B") as { state: string } | undefined;
-  assert.equal(job?.state, "done");
+  const jobs = db
+    .prepare("SELECT phase, state FROM jobs WHERE document_id=? ORDER BY id DESC")
+    .all("doc_remove_B") as { phase: string; state: string }[];
+  assert.ok(jobs.length >= 2, "convert and analyse jobs must both exist");
+  assert.equal(jobs[0]!.phase, "analyse", "analysis must be the last leg of the chain");
+  assert.ok(jobs.every((j) => j.state === "done"), jobs.map((j) => `${j.phase}:${j.state}`).join(","));
+});
+await check("reprocess re-converts the markdown from the original bytes", () => {
+  const row = db.prepare("SELECT markdown_path FROM documents WHERE id=?").get("doc_remove_B") as { markdown_path: string };
+  assert.ok(row.markdown_path, "markdown_path must exist after re-conversion");
+  assert.ok(fs.readFileSync(row.markdown_path, "utf-8").includes("Reprocessed"), "the converter must have re-run");
 });
 await check("a reactivated document is listed again", async () => {
   const ids = await listIds();
   assert.ok(ids.includes("doc_remove_B"), ids.join(","));
+});
+
+// ── concurrent reprocess (ITO QA: high severity) ────────────────────────────
+// Two resets on one document used to create two convert/analyse chains
+// against a shared state pointer; the stale chain crashed the daemon with
+// illegal terminal transitions (complete → analysing / complete → failed).
+// The newest job row is now the reprocess epoch: the reset retires older
+// pending jobs, and the worker skips any job that is not the document's
+// newest — stale work can never write to the shared pipeline state.
+await check("two concurrent reprocesses converge on one chain without crashing", async () => {
+  // Two resets back-to-back, exactly like two browser tabs or a retry
+  // arriving while the first request is still active.
+  const r1 = await req("POST", "/v1/documents/doc_remove_B/reprocess");
+  const r2 = await req("POST", "/v1/documents/doc_remove_B/reprocess");
+  assert.equal(r1.status, 200);
+  assert.equal(r2.status, 200);
+  // The newer reset must have retired the older pending chain.
+  const superseded = db
+    .prepare("SELECT COUNT(*) n FROM jobs WHERE document_id=? AND state='done' AND last_error LIKE 'superseded%'")
+    .get("doc_remove_B") as { n: number };
+  assert.ok(superseded.n >= 1, "older pending jobs must be retired by the newer reset");
+  // Drain with the worker — it must settle a terminal state, never crash.
+  const worker = new JobWorker(db, ports, nullAiProvider);
+  for (let i = 0; i < 12; i++) await worker.tick();
+  const state = db
+    .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+    .get("doc_remove_B") as { state: string };
+  assert.ok(
+    ["complete", "password_needed", "failed", "irrelevant"].includes(state.state),
+    `pipeline must settle on a terminal state, got ${state.state}`,
+  );
+  const running = db
+    .prepare("SELECT COUNT(*) n FROM jobs WHERE document_id=? AND state IN ('pending','running')")
+    .get("doc_remove_B") as { n: number };
+  assert.equal(running.n, 0, "no jobs may remain pending/running after the drain");
+});
+
+// ── evidence metadata refresh (ITO QA: medium) ─────────────────────────────
+// re-analysis used INSERT OR IGNORE, so linked_at stayed stale after a
+// reprocess. The upsert must refresh machine link metadata while
+// preserving user-controlled links.
+await check("re-analysis refreshes evidence link metadata, preserving user links", async () => {
+  const docId = "doc_evid";
+  seedDoc(docId);
+  const x = {
+    doc_type: "merchant_invoice",
+    occurred_at: "2026-08-01",
+    posted_at: "2026-08-02",
+    amount_minor: 5000,
+    currency: "INR",
+    direction: "in",
+    payment_rail: "netbanking",
+    parties: [
+      { name: "Owner", kind: "person", role: "owner" },
+      { name: "EVIDENCE TEST MERCHANT", kind: "organisation", role: "counterparty" },
+    ],
+    reference_ids: { invoice_no: "EV/001" },
+    counterparty_descriptor: "EVIDENCE TEST MERCHANT",
+    source_of_funds_text: null,
+    destination_of_funds_text: null,
+    purpose_text: "evidence refresh fixture",
+    category_hint: "consulting_income",
+    is_wallet_topup: false,
+    confidence: 0.85,
+    notes: null,
+    line_items: [],
+    holdings: [],
+  } as unknown as Parameters<typeof recordTransaction>[3];
+  const id = recordTransaction(db, ports, docId, x);
+  assert.ok(id, "first analysis must create the evidence link");
+  const first = db
+    .prepare("SELECT linked_at, linked_by FROM transaction_documents WHERE document_id=?")
+    .get(docId) as { linked_at: string; linked_by: string };
+  // A user manually claimed this link — it must survive re-analysis.
+  db.prepare("UPDATE transaction_documents SET linked_by='user' WHERE document_id=?").run(docId);
+  await new Promise((r) => setTimeout(r, 5));
+  recordTransaction(db, ports, docId, x);
+  const after = db
+    .prepare("SELECT linked_at, linked_by FROM transaction_documents WHERE document_id=?")
+    .get(docId) as { linked_at: string; linked_by: string };
+  assert.ok(after.linked_at > first.linked_at, "linked_at must refresh on re-analysis");
+  assert.equal(after.linked_by, "user", "user-controlled links must survive re-analysis");
+});
+
+// ── health query-token boundary (ITO QA: medium) ───────────────────────────
+// Query-token authentication is reserved for the SSE event stream; a
+// credential-bearing health URL must 401 while token-less probes stay open.
+await check("health rejects query-string credentials but stays open without them", async () => {
+  const withToken = await req("GET", "/v1/health?token=abc123");
+  assert.equal(withToken.status, 401);
+  const bare = await req("GET", "/v1/health");
+  assert.equal(bare.status, 200);
+  assert.equal(bare.json?.status, "ok");
 });
 
 // ── delete permanently ──────────────────────────────────────────────────────
@@ -211,6 +314,34 @@ await check("deleting an already-deleted document is idempotent", async () => {
 await check("reprocess of a deleted document is refused (409)", async () => {
   const r = await req("POST", "/v1/documents/doc_delete_C/reprocess");
   assert.equal(r.status, 409);
+});
+
+// ── reprocess restores a deleted document whose bytes survived on disk ──
+// DELETE unlinks the vault bytes, but documents deleted before that guard
+// (or with a file restored manually) still have the original on disk.
+// Reprocessing such a document must restore it from those bytes; the 409
+// guard above only applies when the bytes are genuinely gone.
+const survivorPath = path.join(rawDir, "doc_delete_C.pdf");
+fs.writeFileSync(survivorPath, "bytes-of-doc_delete_C-survivor");
+// The restore now VERIFIES the candidate's sha256 against the document —
+// align the document's hash with the surviving bytes so the restore is
+// provable, exactly like a real legacy deletion whose bytes match.
+db.prepare("UPDATE documents SET sha256=? WHERE id=?").run(
+  crypto.createHash("sha256").update("bytes-of-doc_delete_C-survivor").digest("hex"),
+  "doc_delete_C",
+);
+const restoreRes = await req("POST", "/v1/documents/doc_delete_C/reprocess");
+await check("reprocess of a deleted doc with surviving bytes restores it", () => {
+  assert.equal(restoreRes.status, 200);
+  assert.equal(restoreRes.json?.reprocessing, true);
+  assert.equal(restoreRes.json?.restored, true);
+  const row = db.prepare("SELECT lifecycle, raw_path FROM documents WHERE id=?").get("doc_delete_C") as { lifecycle: string; raw_path: string };
+  assert.equal(row.lifecycle, "active");
+  assert.equal(row.raw_path, survivorPath, "the raw pointer must be repointed at the recovered file");
+});
+await check("a restored document is listed again", async () => {
+  const ids = await listIds();
+  assert.ok(ids.includes("doc_delete_C"), ids.join(","));
 });
 
 // ── unknown ids ─────────────────────────────────────────────────────────────
