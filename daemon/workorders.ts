@@ -653,7 +653,15 @@ export function extractTypedDocument(text: string): TypedExtraction {
     }
 
     const heading = structuredText.split(/\r?\n/).map(clean).find((line) => line && !/tax invoice/i.test(line));
-    const headingPrefix = clean(structuredText.split(/tax\s+invoice/i)[0]);
+    // The merchant name is the LAST line before the title, not the whole block
+    // above it — a multi-line prefix (logo caption, address, GSTIN, date)
+    // would otherwise become the entity name.
+    const headingPrefix = structuredText
+      .split(/tax\s+invoice/i)[0]
+      .split(/\r?\n/)
+      .map(clean)
+      .filter(Boolean)
+      .at(-1);
     // The issuer is the merchant name — the line AFTER "TAX INVOICE", or
     // the text before it if present. NEVER use the "TAX INVOICE" title itself.
     const issuerName = headingPrefix || heading;
@@ -691,6 +699,9 @@ export function extractTypedDocument(text: string): TypedExtraction {
     // Skip "Name", "GST", "Address", "Tel" etc. — they are labels, not names.
     const SKIP_WORDS = new Set(["name", "gst", "gstin", "address", "tel", "phone", "mobile", "email", "pan", "aadhaar", "sr", "no", "date", "bill", "to", "contact"]);
     const findNameAfterHonorific = (text: string): string | undefined => {
+      // Inline form first: "Mr. Mahesh Kumar" on a single line.
+      const inline = /\b(?:Mr|Ms|Mrs|Dr|Shri|Smt)\.?\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b/.exec(text);
+      if (inline) return inline[1].trim();
       const m = /(?:Mr|Ms|Mrs|Dr|Shri|Smt)\.?\s*\n/i.exec(text);
       if (!m) return undefined;
       const after = text.slice(m.index + m[0].length);
@@ -701,10 +712,12 @@ export function extractTypedDocument(text: string): TypedExtraction {
         if (SKIP_WORDS.has(w.toLowerCase())) continue;
         if (/^(?:gst|gstin|pan|sr|no|date|bill|address|tel|phone|mobile|email|contact)\s*[:#-]/i.test(w)) continue;
         if (/^[A-Z0-9]{10,}$/.test(w)) continue; // GSTIN etc.
-        // A person name: starts with capital, has lowercase letters
-        if (/^[A-Z][a-z]+(?:[,\.]?\s*[A-Z]?[a-z]*)?/.test(w)) {
-          // Clean up trailing comma/s
-          return w.replace(/[,]+$/, "").replace(/,s$/, "").trim();
+        // A person name: one to four capitalised words and nothing else.
+        // Fully anchored so "Total 1445", "Invoice for services", or "Delhi"
+        // no longer qualify.
+        const candidate = w.replace(/[,]+$/, "").replace(/,s$/, "").trim();
+        if (/^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}$/.test(candidate)) {
+          return candidate;
         }
       }
       return undefined;

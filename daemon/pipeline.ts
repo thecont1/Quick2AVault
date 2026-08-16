@@ -1486,12 +1486,14 @@ export async function runAnalyseJob(
   // feeding markdown text to a generic LLM. Sarvam does OCR + field extraction
   // server-side, which is far more accurate for scanned/image documents.
   let x: ExtractionResult | null = null;
+  let usedDocumentIntelligence = false;
   if (ai.extractDocument && doc.raw_path) {
     ports.logger.info("analyse: using document intelligence provider", {
       document_id: documentId,
       raw_path: doc.raw_path,
     });
     x = await ai.extractDocument(doc.raw_path, doc.original_filename);
+    usedDocumentIntelligence = x !== null;
   }
   // Fall back to the generic text extraction path (markdown → LLM)
   if (!x) {
@@ -1509,7 +1511,9 @@ export async function runAnalyseJob(
 
   // markdown_hash is recorded against the text the model ACTUALLY read, not
   // whatever is on disk later. That is the whole point: if regeneration
-  // produces a different hash, this extraction is provably stale.
+  // produces a different hash, this extraction is provably stale. The document
+  // intelligence path reads the RAW file, not markdown, so it records its own
+  // model id and no markdown hash.
   db.prepare(
     `UPDATE documents
         SET extraction_json=?, extraction_version=?, doc_type=?, analysed_at=?,
@@ -1520,9 +1524,9 @@ export async function runAnalyseJob(
     EXTRACTION_VERSION,
     x.doc_type,
     now,
-    ai.model,
+    usedDocumentIntelligence ? (ai.documentIntelligenceModel ?? ai.model) : ai.model,
     now,
-    hashText(markdown),
+    usedDocumentIntelligence ? null : hashText(markdown),
     documentId,
   );
 

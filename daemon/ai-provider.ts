@@ -22,6 +22,11 @@ import { createSarvamProvider } from "./sarvam.js";
 export interface AiProvider {
   readonly available: boolean;
   readonly model: string;
+  /**
+   * Model id of the document-intelligence provider when `extractDocument` is
+   * backed by one (e.g. "sarvam-doc-ai"). Undefined for plain LLM providers.
+   */
+  readonly documentIntelligenceModel?: string;
   extract(markdown: string, filename: string): Promise<ExtractionResult | null>;
   /**
    * Document intelligence extraction: takes the RAW file path (PDF/image)
@@ -88,6 +93,9 @@ export function createMutableProvider(cfg: AiConfig, logger: Logger): MutableAiP
     },
     get model() {
       return inner.model;
+    },
+    get documentIntelligenceModel() {
+      return secondary.model;
     },
     extract(markdown, filename) {
       // Work order 07 §D3: routing. In primary_only mode, always use primary.

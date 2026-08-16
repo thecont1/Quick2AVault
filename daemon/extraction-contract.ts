@@ -370,7 +370,7 @@ Rules that matter more than anything else:
      counterparty (who the document is addressed to / who pays).
    - reference_ids: any invoice number, order number, receipt number, UTR.
    A document with "TAX INVOICE" and "Grand total 1445" MUST produce
-   amount_minor=144500, currency="INR", doc_type="tax_invoice" — even if
+   amount_minor=144500, currency="INR", doc_type="merchant_invoice" — even if
    the OCR text is noisy or partially garbled. Do NOT return a minimal
    stub with only documentType and confidence. The extraction is useless
    without the financial facts.
