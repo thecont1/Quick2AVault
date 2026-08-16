@@ -149,8 +149,13 @@ export class SarvamProvider {
     try {
       const { readFile } = await import("node:fs/promises");
       const { basename } = await import("node:path");
+      const { createHash } = await import("node:crypto");
       const fileBuffer = await readFile(rawPath);
       const fileBasename = basename(rawPath);
+      // Content hash, not the filename: HTTP header values must be ASCII-safe
+      // (a filename like "Ínvoice ₹1,445.pdf" would make fetch throw), and
+      // name+length collides across different documents.
+      const contentHash = createHash("sha256").update(fileBuffer).digest("hex");
 
       // 1. Submit the job
       const formData = new FormData();
@@ -165,9 +170,10 @@ export class SarvamProvider {
         method: "POST",
         headers: {
           "api-subscription-key": this.apiKey,
-          "Idempotency-Key": `q2av-${filename}-${fileBuffer.length}`,
+          "Idempotency-Key": `q2av-${contentHash}`,
         },
         body: formData,
+        signal: AbortSignal.timeout(60_000),
       });
 
       if (!submitRes.ok) {
@@ -218,9 +224,21 @@ export class SarvamProvider {
     while (Date.now() < deadline) {
       await sleep(POLL_INTERVAL_MS);
 
-      const statusRes = await fetch(`${this.baseUrl}/job/${jobId}/status`, {
-        headers: { "api-subscription-key": this.apiKey },
-      });
+      let statusRes: Response;
+      try {
+        statusRes = await fetch(`${this.baseUrl}/job/${jobId}/status`, {
+          headers: { "api-subscription-key": this.apiKey },
+          signal: AbortSignal.timeout(15_000),
+        });
+      } catch (err) {
+        // A hung status poll must not abort the whole job — retry until the
+        // deadline rather than letting one slow request kill the analyse.
+        this.logger.warn("sarvam: status poll failed", {
+          job_id: jobId,
+          err: (err as Error)?.message,
+        });
+        continue;
+      }
       if (!statusRes.ok) {
         this.logger.warn("sarvam: status poll failed", {
           job_id: jobId,
@@ -232,9 +250,19 @@ export class SarvamProvider {
 
       if (["completed", "partially_completed"].includes(statusJson.status)) {
         // Fetch results
-        const resultsRes = await fetch(`${this.baseUrl}/job/${jobId}/results?format=json`, {
-          headers: { "api-subscription-key": this.apiKey },
-        });
+        let resultsRes: Response;
+        try {
+          resultsRes = await fetch(`${this.baseUrl}/job/${jobId}/results?format=json`, {
+            headers: { "api-subscription-key": this.apiKey },
+            signal: AbortSignal.timeout(30_000),
+          });
+        } catch (err) {
+          this.logger.error("sarvam: results fetch failed", {
+            job_id: jobId,
+            err: (err as Error)?.message,
+          });
+          return null;
+        }
         if (!resultsRes.ok) {
           this.logger.error("sarvam: results fetch failed", {
             job_id: jobId,
@@ -299,9 +327,16 @@ export class SarvamProvider {
       return Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
     };
 
-    // Convert major → minor units (INR: ×100)
+    // Currency: normalise common Indian variants. An absent currency stays
+    // empty per the extraction contract (normaliseCurrency no longer defaults
+    // to INR).
+    const currencyRaw = str("currency") ?? "";
+    const currency = normaliseCurrency(currencyRaw);
+
+    // Convert major → minor units using the currency's ISO minor-unit
+    // precision (JPY/KRW are zero-decimal; KWD/BHD are three-decimal).
     const toMinor = (major: number | null): number | null =>
-      major === null ? null : Math.round(major * 100);
+      major === null ? null : Math.round(major * minorUnits(currency));
 
     const totalAmount = num("total_amount");
     const subtotal = num("subtotal");
@@ -355,10 +390,6 @@ export class SarvamProvider {
     else if (paymentMode.includes("auto") && paymentMode.includes("debit")) paymentRail = "auto_debit";
     else if (paymentMode.includes("cash")) paymentRail = "cash";
     else if (paymentMode.includes("cheque") || paymentMode.includes("check")) paymentRail = "cheque";
-
-    // Currency: normalise common Indian variants to INR
-    const currencyRaw = str("currency") ?? "";
-    const currency = normaliseCurrency(currencyRaw);
 
     // Line items — each item has its own description/amount/rate fields
     const lineItems = arr("line_items").map((item) => {
@@ -426,6 +457,11 @@ function parseDate(raw: string): string | null {
   // dd/mm/yyyy or dd/mm/yy
   const m = cleaned.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (m) {
+    // Reject out-of-range components: an American-format date like 02/13/2026
+    // would otherwise become "2026-13-02".
+    const dayNum = Number(m[1]);
+    const monthNum = Number(m[2]);
+    if (dayNum < 1 || dayNum > 31 || monthNum < 1 || monthNum > 12) return null;
     const day = m[1].padStart(2, "0");
     const month = m[2].padStart(2, "0");
     let year = m[3];
@@ -440,7 +476,18 @@ function parseDate(raw: string): string | null {
 
 /** Infer document type from extracted fields and filename. */
 function inferDocType(r: Record<string, unknown>, filename: string): ExtractionResult["doc_type"] {
-  const allText = JSON.stringify(r).toLowerCase() + " " + filename.toLowerCase();
+  // Match on VALUES only, not JSON.stringify(r): stringifying serialises schema
+  // field names too, so a key like "issuer_gstin" would make every document
+  // look like a merchant_invoice. Restrict to scalar values so nested objects
+  // (line_items) don't contribute their own keys either.
+  const allText =
+    Object.values(r)
+      .filter((v) => typeof v === "string" || typeof v === "number")
+      .map((v) => String(v))
+      .join(" ")
+      .toLowerCase() +
+    " " +
+    filename.toLowerCase();
   if (allText.includes("tax invoice") || allText.includes("gstin") || allText.includes("gst")) {
     return "merchant_invoice";
   }
@@ -487,7 +534,10 @@ function mapDocType(raw: string): ExtractionResult["doc_type"] {
  */
 function normaliseCurrency(raw: string): string {
   const c = raw.trim().toUpperCase();
-  if (!c) return "INR"; // Indian jurisdiction default
+  // The extraction contract forbids guessing: no printed currency means an
+  // empty string, not a default. Assuming INR is what rendered a USD invoice
+  // as ₹597.
+  if (!c) return "";
   if (c === "INR" || c === "₹" || c.includes("RS") || c.includes("RUPEE")) return "INR";
   if (c === "USD" || c === "$") return "USD";
   if (c === "EUR" || c === "€") return "EUR";
@@ -495,6 +545,20 @@ function normaliseCurrency(raw: string): string {
   // Already a 3-letter code? Return as-is.
   if (/^[A-Z]{3}$/.test(c)) return c;
   return raw.trim();
+}
+
+const ZERO_DECIMAL_CURRENCIES = new Set(["JPY", "KRW", "VND", "CLP", "ISK", "PYG", "UGX", "RWF", "XAF", "XOF", "XPF"]);
+const THREE_DECIMAL_CURRENCIES = new Set(["BHD", "KWD", "OMR", "JOD", "TND", "LYD", "IQD"]);
+
+/**
+ * ISO 4217 minor-unit multiplier for a currency code (major → minor).
+ * Defaults to 100 (two-decimal). Zero-decimal and three-decimal currencies
+ * need their own factors or amounts would be off by orders of magnitude.
+ */
+function minorUnits(currency: string): number {
+  if (ZERO_DECIMAL_CURRENCIES.has(currency)) return 1;
+  if (THREE_DECIMAL_CURRENCIES.has(currency)) return 1000;
+  return 100;
 }
 
 function sleep(ms: number): Promise<void> {
