@@ -18,6 +18,8 @@ import { createApi, snapshot } from "./api.js";
 import { createLogger, createEventBus, systemClock, createPaths } from "./adapters.js";
 import type { Ports } from "./ports.js";
 import { recordTransaction } from "./ledger.js";
+import { runAnalyseJob } from "./pipeline.js";
+import type { AiProvider } from "./ai-provider.js";
 import { findMatches } from "./matcher.js";
 import { resolveTransaction, writeClaim } from "./claims.js";
 import type { ExtractionResult } from "./extraction-contract.js";
@@ -297,6 +299,72 @@ check("the linked transaction carries currency and fx fields", () => {
   assert.equal(detail.json?.transactions?.[0]?.currency, "USD");
   assert.ok("home_amount_minor" in (detail.json?.transactions?.[0] ?? {}));
 });
+
+console.log("\n── §A.5: the FX conversion is wired into the analysis flow");
+
+// FrankfurterFx and the currencyConversion marker existed but nothing
+// consumed them — foreign transactions were recorded with
+// home_amount_minor = NULL and excluded from the rupee totals. This pins
+// the wiring: runAnalyseJob must stamp the home value using a rate fetched
+// as on the TRANSACTION date. The rate_cache seed keeps it offline.
+{
+  // Isolated temp vault: the raw file is seeded too, so runAnalyseJob does
+  // not warn about a missing raw_path, and everything is cleaned up with
+  // the db.
+  const fxVault = fs.mkdtempSync(path.join(os.tmpdir(), "q2v-curr-fx-"));
+  const db = openDatabase(":memory:");
+  const ports = testPorts(fxVault);
+  const fxRaw = path.join(fxVault, "usd-flow.pdf");
+  const fxMd = path.join(fxVault, "usd-flow.md");
+  fs.writeFileSync(fxRaw, "%PDF-1.4 fake raw bytes for the flow test");
+  db.prepare(
+    `INSERT INTO documents (id, sha256, original_filename, raw_path, markdown_path, markdown_chars, doc_type, received_at)
+     VALUES (?,?,?,?,?,?,?,?)`,
+  ).run("doc_usd_flow", "sha_usd_flow", "usd-flow.pdf", fxRaw, fxMd, 100, "merchant_invoice", "2026-08-09T00:00:00.000Z");
+  fs.writeFileSync(fxMd, "# Invoice\n\nTotal: 597.85 USD");
+  db.exec(`CREATE TABLE IF NOT EXISTS rate_cache (base_currency TEXT NOT NULL, quote_currency TEXT NOT NULL, rate_date TEXT NOT NULL, rate REAL NOT NULL, source TEXT NOT NULL, fetched_at TEXT NOT NULL, PRIMARY KEY(base_currency, quote_currency, rate_date, source))`);
+  db.prepare("INSERT OR REPLACE INTO rate_cache VALUES ('USD','INR','2026-05-29',84.0,'frankfurter',?)")
+    .run(new Date().toISOString());
+
+  const ai: AiProvider = {
+    available: true,
+    model: "test",
+    async extract() {
+      return { ...usdInvoice() };
+    },
+  };
+  await runAnalyseJob(db, ports, ai, "doc_usd_flow");
+
+  const t = db
+    .prepare(
+      `SELECT t.currency, t.amount_minor, t.home_amount_minor, t.fx_rate, t.fx_date, t.fx_source
+         FROM transactions t JOIN transaction_documents td ON td.transaction_id = t.id
+        WHERE td.document_id=?`,
+    )
+    .get("doc_usd_flow") as {
+    currency: string | null;
+    amount_minor: number;
+    home_amount_minor: number | null;
+    fx_rate: number | null;
+    fx_date: string | null;
+    fx_source: string | null;
+  };
+  check("analysis converts a USD transaction using the rate as on its date", () => {
+    assert.equal(t.currency, "USD");
+    assert.equal(t.amount_minor, 59785, "source amount untouched");
+    assert.equal(t.home_amount_minor, 5021940, "597.85 × 84 → ₹50,219.40");
+    assert.equal(t.fx_rate, 84);
+    assert.equal(t.fx_date, "2026-05-29");
+    assert.equal(t.fx_source, "frankfurter:cache-hit");
+  });
+  const s = snapshot(db, { from: null, to: null, label: "All", key: "all" }, "INR");
+  check("converted USD income counts toward the income total", () => {
+    assert.equal(s.income_minor, 5021940);
+    assert.equal(s.unconverted.income.length, 0);
+  });
+  db.close();
+  fs.rmSync(fxVault, { recursive: true, force: true });
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 await api.close();
