@@ -1424,9 +1424,6 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const secondaryBaseUrl = kv["ai.secondary.base_url"] ?? "";
         const secondaryModel = kv["ai.secondary.model"] ?? "";
         const routingMode = kv["ai.routing_mode"] ?? "auto";
-        // Sarvam AI document intelligence (India jurisdiction).
-        const sarvamKey = secrets ? (await secrets.get("ai.sarvam.api_key")) ?? "" : "";
-        const jurisdictionId = kv["jurisdiction.id"] ?? "IN";
         // Ask the token store, not a flag — the tokens are the truth.
         const gmailConnected = gmail ? !!(await gmail.oauth.getTokens()) : false;
         const maskKey = (k: string) => k.length <= 8
@@ -1437,7 +1434,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         // swap the mask when the user switches providers.
         const knownProviderIds = [
           "alibaba", "anthropic", "groq", "kimi", "minimax", "mimo",
-          "openai", "openrouter", "perplexity", "poolside", "together", "custom",
+          "openai", "openrouter", "perplexity", "poolside", "sarvam", "together", "custom",
         ];
         const providerKeys: Record<string, { set: boolean; mask: string }> = {};
         if (secrets) {
@@ -1475,16 +1472,6 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               configured: !!(secondaryModel && secondaryKey),
             },
             routing_mode: routingMode,
-            // Sarvam AI document intelligence — replaces the generic secondary
-            // when the India jurisdiction pack is active.
-            sarvam: {
-              api_key_set: !!sarvamKey,
-              api_key_hint: sarvamKey ? `…${sarvamKey.slice(-4)}` : "",
-              api_key_mask: sarvamKey ? maskKey(sarvamKey) : "",
-              api_key_source: sarvamKey ? "keychain" : "none",
-              available: !!sarvamKey && jurisdictionId === "IN",
-            },
-            jurisdiction_id: jurisdictionId,
           },
           vault: {
             root: ports.paths.vaultRoot(),
@@ -1572,7 +1559,6 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         for (const [field, activeKey, pid] of [
           ["api_key", "ai.api_key", primPid],
           ["secondary_api_key", "ai.secondary.api_key", secPid],
-          ["sarvam_api_key", "ai.sarvam.api_key", ""],
         ] as const) {
           const v = b[field];
           if (typeof v !== "string") continue;
@@ -1602,9 +1588,8 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         );
         const nowApiKey = secrets ? (await secrets.get("ai.api_key")) ?? "" : "";
         const nowSecKey = secrets ? (await secrets.get("ai.secondary.api_key")) ?? "" : "";
-        const nowSarvamKey = secrets ? (await secrets.get("ai.sarvam.api_key")) ?? "" : "";
         const aiTouched = [...saved, ...cleared].some((f) =>
-          ["api_key", "base_url", "model", "secondary_api_key", "secondary_base_url", "secondary_model", "routing_mode", "sarvam_api_key", "jurisdiction"].includes(f),
+          ["api_key", "base_url", "model", "secondary_api_key", "secondary_base_url", "secondary_model", "routing_mode", "jurisdiction"].includes(f),
         );
         if (aiTouched) {
           ai.reconfigure({
@@ -1612,14 +1597,14 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             apiKey: nowApiKey || process.env.Q2AV_AI_API_KEY || process.env.ANTHROPIC_API_KEY,
             baseUrl: now["ai.base_url"] || process.env.Q2AV_AI_BASE_URL || "",
             model: now["ai.model"] || process.env.Q2AV_MODEL || "",
-            // Work order 07 §D2: secondary config.
+            // Work order 07 §D2: secondary config. When the secondary base URL
+            // is Sarvam AI, the secondary provider is a SarvamProvider that
+            // does document intelligence (OCR + field extraction on the raw
+            // file) instead of text chat completions.
             secondaryApiKey: nowSecKey,
             secondaryBaseUrl: now["ai.secondary.base_url"] ?? "",
             secondaryModel: now["ai.secondary.model"] ?? "",
             routingMode: (now["ai.routing_mode"] as "auto" | "primary_only" | "vision_fallback") ?? "auto",
-            // Sarvam document intelligence (India jurisdiction).
-            sarvamApiKey: nowSarvamKey || process.env.SARVAM_API_KEY || "",
-            jurisdictionId: now["jurisdiction.id"] ?? "IN",
           });
         }
 
@@ -3751,6 +3736,47 @@ async function testProvider(cfg: {
       error: "no_api_key",
       error_explanation: "No API key configured. Set one in Settings first.",
     };
+  }
+
+  // Sarvam AI: different API protocol (async job + multipart, not chat
+  // completions). Test by probing the status endpoint with a dummy job ID.
+  // A 401 means bad key; a 404 means the key is valid but the job doesn't
+  // exist (which is exactly what we expect for a made-up ID).
+  if (cfg.baseUrl.includes("sarvam.ai")) {
+    const start = Date.now();
+    try {
+      const probeUrl = `${cfg.baseUrl.replace(/\/$/, "")}/job/test-probe/status`;
+      const res = await fetch(probeUrl, {
+        headers: { "api-subscription-key": cfg.apiKey },
+      });
+      const latency = Date.now() - start;
+      // 401/403 = bad key; 404 = key is valid, job not found (expected)
+      const authenticated = res.status !== 401 && res.status !== 403;
+      const reachable = res.status !== 0 && res.status < 500;
+      return {
+        ...base,
+        reachable,
+        authenticated,
+        model_available: authenticated, // Sarvam has one model (the endpoint)
+        structured_output: true, // Sarvam always returns structured JSON
+        vision: true, // Sarvam does OCR on images/PDFs
+        latency_ms: latency,
+        error: authenticated ? null : "auth_failed",
+        error_explanation: authenticated ? null : "API key was rejected by Sarvam AI.",
+      };
+    } catch (err) {
+      return {
+        ...base,
+        reachable: false,
+        authenticated: false,
+        model_available: false,
+        structured_output: false,
+        vision: false,
+        latency_ms: Date.now() - start,
+        error: "unreachable",
+        error_explanation: `Could not reach Sarvam AI: ${(err as Error)?.message}`,
+      };
+    }
   }
 
   if (!cfg.model) {

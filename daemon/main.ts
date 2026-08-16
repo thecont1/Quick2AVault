@@ -151,7 +151,6 @@ async function main() {
 
   const aiApiKey = (await secrets.get("ai.api_key")) ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
   const ai2ApiKey = (await secrets.get("ai.secondary.api_key")) ?? "";
-  const sarvamApiKey = (await secrets.get("ai.sarvam.api_key")) ?? process.env.SARVAM_API_KEY ?? "";
 
   // Mutable so Settings changes apply immediately. See createMutableProvider:
   // this used to be a fixed provider, and saving a key did nothing until the
@@ -165,8 +164,6 @@ async function main() {
       secondaryBaseUrl: stored["ai.secondary.base_url"] || "",
       secondaryModel: stored["ai.secondary.model"] || "",
       routingMode: (stored["ai.routing_mode"] as "auto" | "primary_only" | "vision_fallback") ?? "auto",
-      sarvamApiKey,
-      jurisdictionId: stored["jurisdiction.id"] ?? "IN",
     },
     ports.logger,
   );
