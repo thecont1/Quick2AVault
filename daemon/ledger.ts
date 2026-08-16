@@ -347,6 +347,33 @@ export function recordTransaction(
     }
   }
 
+  // ── organisation parties ────────────────────────────────────────────────────
+  // Only people were persisted as document_parties above; every organisation
+  // role — issuer (merchant), counterparty, source_of_funds — was missing, so
+  // the merchant never linked to the document. Persist them via the same
+  // document_party mechanism, reusing the already-resolved counterparty id for
+  // that role so the entity and the transaction stay consistent.
+  for (const party of x.parties.filter((pp) => pp.kind === "organisation")) {
+    if (!party.name?.trim()) continue;
+    try {
+      const orgId = party.role === "counterparty" && counterpartyId
+        ? counterpartyId
+        : resolveEntity(db, ports, party.name, "organisation", {
+            subtype: party.subtype,
+            identifiers: party.identifiers,
+          });
+      db.prepare(
+        "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+      ).run(documentId, orgId, party.role);
+    } catch (err) {
+      ports.logger.warn("could not record organisation party", {
+        name: party.name,
+        role: party.role,
+        err: (err as Error)?.message,
+      });
+    }
+  }
+
   // ── transaction ───────────────────────────────────────────────────────────
   // Work order 07 §A1: idempotent ledger writes. Before creating a new
   // transaction, check whether this document already produced one with the

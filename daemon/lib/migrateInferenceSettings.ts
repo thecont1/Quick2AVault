@@ -23,6 +23,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SecretStore } from "../secret-store.js";
 import type { SlotConfig } from "../data/schema.js";
 import type { ProviderPreset } from "../data/schema.js";
+import { modelBelongsToOtherProvider } from "./catalog.js";
 import { CredentialManager } from "./credentials.js";
 
 interface OldSettings {
@@ -200,10 +201,15 @@ export function validateSlotConfig(
   if (!config) return null;
   const provider = catalog.find((p) => p.id === config.providerId);
   if (!provider) return config; // Unknown provider (e.g. custom) — leave as-is
-  const modelValid = provider.models.some((m) => m.id === config.modelId);
-  if (modelValid) return config;
-  // Model doesn't belong to this provider — clear it
-  return { ...config, modelId: "" };
+  if (provider.models.some((m) => m.id === config.modelId)) return config;
+  // The model isn't in this provider's list. Clear it ONLY when it belongs to
+  // a DIFFERENT catalog provider (a genuine cross-provider leak). A model id
+  // absent from the catalog entirely is a user-entered / legacy id and must be
+  // preserved per the migration contract.
+  if (modelBelongsToOtherProvider(catalog, config.providerId, config.modelId)) {
+    return { ...config, modelId: "" };
+  }
+  return config;
 }
 
 /**

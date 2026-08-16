@@ -1410,6 +1410,85 @@ function persistTypedExtraction(
     .run(extraction.documentType, JSON.stringify(extraction), EXTRACTION_VERSION, ports.clock.isoNow(), documentId);
 }
 
+/**
+ * Convert a deterministic TypedExtraction into the ledger-compatible
+ * ExtractionResult shape so the no-AI path can still record the transaction.
+ * persistTypedExtraction already wrote the claims and party links; the ledger
+ * transaction and its evidence link are the missing piece.
+ */
+function typedToExtractionResult(typed: TypedExtraction): ExtractionResult {
+  // The deterministic taxonomy names some types differently from the ledger:
+  // tax_invoice is the workorders name for merchant_invoice; form_16 (a TDS
+  // certificate) is not a money movement and maps to "irrelevant".
+  const DOC_TYPE_MAP: Record<string, ExtractionResult["doc_type"]> = {
+    tax_invoice: "merchant_invoice",
+    contract_note: "contract_note",
+    bank_statement: "bank_statement",
+    card_confirmation: "card_confirmation",
+    rent_receipt: "payment_receipt",
+    form_16: "irrelevant",
+  };
+  const doc_type = DOC_TYPE_MAP[typed.documentType] ?? "unknown";
+  const parties: ExtractionResult["parties"] = [];
+  if (typed.issuer?.name) {
+    parties.push({
+      name: typed.issuer.name,
+      kind: typed.issuer.kind,
+      role: "issuer",
+      identifiers: { email: typed.issuer.email ?? "", gstin: typed.issuer.gstin ?? "" },
+    });
+  }
+  if (typed.client?.name) {
+    parties.push({
+      name: typed.client.name,
+      kind: "person",
+      role: "owner",
+      identifiers: { pan: typed.client.pan ?? "", ucc: typed.client.ucc ?? "" },
+    });
+  }
+  if (typed.person?.name) {
+    parties.push({ name: typed.person.name, kind: "person", role: "owner" });
+  }
+  if (typed.vendor?.name) {
+    parties.push({
+      name: typed.vendor.name,
+      kind: "organisation",
+      role: "counterparty",
+      identifiers: { email: typed.vendor.email ?? "" },
+    });
+  } else if (typed.broker?.name) {
+    parties.push({
+      name: typed.broker.name,
+      kind: "organisation",
+      role: "counterparty",
+      identifiers: { pan: typed.broker.pan ?? "", gstin: typed.broker.gstin ?? "" },
+    });
+  }
+
+  return {
+    doc_type,
+    occurred_at: typed.documentDate ?? typed.tradeDate ?? null,
+    posted_at: typed.settlementDate ?? null,
+    amount_minor: typed.amountMinor ?? null,
+    currency: typed.currency ?? "",
+    subtotal_minor: typed.subtotalMinor ?? null,
+    tax_minor: typed.taxMinor ?? null,
+    line_items: typed.lineItems?.map((li) => ({ description: li.description, amount_minor: li.amountMinor })) ?? null,
+    direction: null,
+    payment_rail: null,
+    parties,
+    reference_ids: {},
+    counterparty_descriptor: typed.vendor?.name ?? typed.broker?.name ?? null,
+    source_of_funds_text: null,
+    destination_of_funds_text: null,
+    purpose_text: null,
+    category_hint: null,
+    is_wallet_topup: false,
+    confidence: typed.confidence,
+    notes: "Deterministic typed extraction (no AI provider configured)",
+  };
+}
+
 function typedLearningAmbiguities(db: DatabaseSync, documentId: string, extraction: TypedExtraction): LearningAmbiguity[] {
   const ambiguities: LearningAmbiguity[] = [];
   const entity = extraction.issuer?.name ?? extraction.client?.name ?? extraction.vendor?.name ?? extraction.broker?.name;
@@ -1478,6 +1557,15 @@ export async function runAnalyseJob(
       document_id: documentId,
       document_type: typed.documentType,
     });
+    // persistTypedExtraction wrote the claims and party links, but the ledger
+    // transaction (and its evidence link) are only written on the AI path
+    // below. Record it from the deterministic result when the type is a
+    // confidently-detected financial document; an "unknown" type defers to
+    // review / a later AI pass instead of guessing a transaction.
+    const result = typedToExtractionResult(typed);
+    if (result.doc_type !== "unknown") {
+      recordTransaction(db, ports, documentId, result);
+    }
     return;
   }
 

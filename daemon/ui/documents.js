@@ -1,6 +1,10 @@
 // ════════════════════════════════════════════════════════════════════════
 // DOCUMENTS REVIEW TAB
 // ════════════════════════════════════════════════════════════════════════
+// Monotonic generation counter so a slower earlier period request can't
+// overwrite a newer one when responses arrive out of order.
+let reviewLoadGen = 0;
+
 async function loadReview() {
   // Refresh the pipeline board so it's populated when the user switches to
   // this tab — SSE events keep it live thereafter.
@@ -10,9 +14,11 @@ async function loadReview() {
   // elements are about to be replaced, so a dangling detail slot would
   // reference a removed card.
   collapseOpenDoc();
+  const gen = ++reviewLoadGen;
   let url = "/v1/documents?period=" + encodeURIComponent(period) + "&limit=500";
   if (pipelineFilter) url += "&state=" + encodeURIComponent(pipelineFilter);
   const d = await api(url);
+  if (gen !== reviewLoadGen) return; // superseded by a newer period selection
   const docs = d.documents || [];
   const label = (d.period && d.period.label) ? d.period.label : "all time";
   const dp = document.getElementById("docPeriod");

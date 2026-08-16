@@ -38,7 +38,7 @@ import {
 import { resolveEntity } from "./ledger.js";
 import { rebuildSearchIndex, searchDocuments, removeFromIndex } from "./search.js";
 import { activeDocumentSql, activeTransactionSql, isActive, listableDocumentSql } from "./lifecycle.js";
-import { loadCatalog, findProvider, findModel } from "./lib/catalog.js";
+import { loadCatalog, findProvider, findModel, modelBelongsToOtherProvider } from "./lib/catalog.js";
 import { eligibleModels } from "./lib/eligibility.js";
 import { CredentialManager } from "./lib/credentials.js";
 import { suggestDefaults, hasSuggestions } from "./lib/suggestDefaults.js";
@@ -1569,6 +1569,12 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           if (typeof p.modelId !== "string" || !p.modelId.trim()) {
             return send(res, 400, { error: "invalid_slot", slot: "primary", reason: "modelId required" });
           }
+          // Reject a model that belongs to a DIFFERENT catalog provider
+          // (cross-provider leak, e.g. "gpt-4.1 under Poolside"). A model id
+          // absent from the catalog is a valid user-entered id.
+          if (p.providerId !== "custom" && modelBelongsToOtherProvider(loadCatalog(), p.providerId, p.modelId)) {
+            return send(res, 400, { error: "invalid_slot", slot: "primary", reason: `model "${p.modelId}" does not belong to provider "${p.providerId}"` });
+          }
           writeSlotConfig(db, "primary", {
             providerId: p.providerId,
             modelId: p.modelId,
@@ -1583,6 +1589,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           }
           if (typeof s.modelId !== "string" || !s.modelId.trim()) {
             return send(res, 400, { error: "invalid_slot", slot: "secondary", reason: "modelId required" });
+          }
+          if (s.providerId !== "custom" && modelBelongsToOtherProvider(loadCatalog(), s.providerId, s.modelId)) {
+            return send(res, 400, { error: "invalid_slot", slot: "secondary", reason: `model "${s.modelId}" does not belong to provider "${s.providerId}"` });
           }
           writeSlotConfig(db, "secondary", {
             providerId: s.providerId,

@@ -220,6 +220,22 @@ export function findModel(
 }
 
 /**
+ * True when `modelId` is a known catalog model that belongs to a DIFFERENT
+ * provider than `providerId` — a cross-provider identity leak (e.g. "gpt-4.1
+ * under Poolside"). A modelId absent from the catalog entirely is a
+ * user-entered / legacy id and returns false: it is preserved, not rejected.
+ */
+export function modelBelongsToOtherProvider(
+  catalog: ProviderPreset[],
+  providerId: string,
+  modelId: string,
+): boolean {
+  return catalog.some(
+    (p) => p.id !== providerId && p.models.some((m) => m.id === modelId),
+  );
+}
+
+/**
  * Get all models across all providers, flattened.
  */
 export function allModels(catalog: ProviderPreset[]): ModelRecord[] {

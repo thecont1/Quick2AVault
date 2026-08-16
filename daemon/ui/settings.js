@@ -140,13 +140,14 @@ async function loadSettings() {
   const primProviderId = inference?.primary?.providerId
     || (ai.base_url ? providerIdFromCatalog(ai.base_url) : "");
   let primModelId = inference?.primary?.modelId || ai.model || "";
-  // Validate: if the saved model doesn't belong to the provider in the
-  // catalog, clear it (referential integrity — prevents gpt-4.1 under Poolside)
+  // Clear only a genuine cross-provider leak (the saved model id belongs to a
+  // DIFFERENT catalog provider). A model id absent from the catalog is a
+  // user-entered / legacy id and is preserved.
   if (primProviderId && primProviderId !== "custom" && primModelId) {
     const provider = CATALOG.find((p) => p.id === primProviderId);
-    if (provider && !provider.models.find((m) => m.id === primModelId)) {
-      primModelId = "";
-    }
+    const belongsHere = provider && provider.models.some((m) => m.id === primModelId);
+    const belongsElsewhere = CATALOG.some((p) => p.id !== primProviderId && p.models.some((m) => m.id === primModelId));
+    if (!belongsHere && belongsElsewhere) primModelId = "";
   }
 
   buildProviderDropdown("aiProvider", primProviderId);
@@ -170,12 +171,13 @@ async function loadSettings() {
   const sec = ai.secondary || {};
   const secProviderId = inference?.secondary?.providerId || (sec.base_url ? providerIdFromCatalog(sec.base_url) : "");
   let secModelId = inference?.secondary?.modelId || sec.model || "";
-  // Validate referential integrity (same as primary)
+  // Validate referential integrity (same as primary): clear only a genuine
+  // cross-provider leak; preserve user-entered / legacy model ids.
   if (secProviderId && secProviderId !== "custom" && secModelId) {
     const provider = CATALOG.find((p) => p.id === secProviderId);
-    if (provider && !provider.models.find((m) => m.id === secModelId)) {
-      secModelId = "";
-    }
+    const belongsHere = provider && provider.models.some((m) => m.id === secModelId);
+    const belongsElsewhere = CATALOG.some((p) => p.id !== secProviderId && p.models.some((m) => m.id === secModelId));
+    if (!belongsHere && belongsElsewhere) secModelId = "";
   }
 
   buildProviderDropdown("ai2Provider", secProviderId);
