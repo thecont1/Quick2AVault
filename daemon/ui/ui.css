@@ -45,23 +45,43 @@
 
   /* ── Document Scope list (left) ──────────────────────────────── */
   .obs-scope .scope-list{flex:1 1 auto;min-height:0;overflow-y:auto;border:1px solid var(--line);
-    border-radius:6px;background:var(--panel);font:11.5px var(--mono)}
-  .scope-list .drow{padding:9px 13px;border-bottom:1px solid var(--line2);display:grid;
-    grid-template-columns:1fr auto auto;gap:8px;align-items:baseline;cursor:pointer}
-  .scope-list .drow:last-child{border-bottom:0}
+    border-radius:6px;background:var(--panel);font:11.5px var(--mono);padding:4px}
+  /* Rows are plain list rows inside the framed card — never cards of their
+     own (the global .drow style must not leak in here). */
+  .scope-list .drow{padding:9px 12px;border:0;border-radius:5px;background:transparent;margin:0 0 1px;
+    display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:baseline;cursor:pointer}
+  .scope-list .drow:last-child{margin-bottom:0}
   .scope-list .drow:hover{background:var(--panel2)}
   .scope-list .drow .fn{color:var(--ink);word-break:break-all}
   .scope-list .drow .meta{color:var(--faint);font-size:10px;margin-top:3px}
   .scope-list .kind{color:var(--faint);font-size:10px;text-transform:uppercase}
   .scope-list .dt{color:var(--faint);font-size:10px;text-align:right;white-space:nowrap}
 
-  /* ── Document Pipeline (right): squarish live cells ─────────── */
-  .obs-pipeline .board{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
-    background:transparent;border:0;margin-bottom:0;overflow-y:auto;align-content:start}
-  .obs-pipeline .state{aspect-ratio:1/1;display:flex;flex-direction:column;align-items:center;
-    justify-content:center;border-radius:8px;background:var(--panel);
-    border:1px solid var(--line);min-width:0;padding:4px}
-  .obs-pipeline .state .v{font:600 22px var(--mono)}
+  /* ── Document Pipeline (right): the flowchart ────────────────── */
+  .obs-pipeline .board{background:transparent;border:0;margin-bottom:0;overflow-y:auto}
+  .obs-pipeline .flow-main{display:flex;align-items:stretch;gap:5px;flex-wrap:wrap}
+  .obs-pipeline .fstep{flex:1 1 0;min-width:44px;aspect-ratio:1/1.05;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;border-radius:7px;background:var(--panel);
+    border:1px solid var(--line);padding:3px;cursor:pointer;transition:background .12s}
+  .obs-pipeline .fstep:hover{background:var(--panel2)}
+  .obs-pipeline .fstep.selected{background:var(--panel2);box-shadow:inset 0 -2px 0 var(--blue)}
+  .obs-pipeline .fstep .k{font:8.5px var(--mono);letter-spacing:.4px;text-transform:uppercase;
+    color:var(--faint);text-align:center;line-height:1.2}
+  .obs-pipeline .fstep .v{font:600 17px var(--mono);color:var(--ink);margin-top:2px;
+    font-variant-numeric:tabular-nums}
+  .obs-pipeline .fstep .v.zero{color:var(--faint);opacity:.4}
+  .obs-pipeline .fstep.term .v{color:var(--faint)}
+  .obs-pipeline .fstep.complete .v{color:var(--ok)}
+  .obs-pipeline .fstep.failed .v{color:var(--bad)}
+  .obs-pipeline .fstep.duplicate .v,.obs-pipeline .fstep.irrelevant .v,
+  .obs-pipeline .fstep.password_needed .v{color:var(--warn)}
+  .obs-pipeline .fstep.active .v{color:var(--blue)}
+  .obs-pipeline .farrow{display:flex;align-items:center;color:var(--faint);font-size:12px;flex-shrink:0}
+  .obs-pipeline .flow-branch{display:flex;align-items:stretch;gap:5px;flex-wrap:wrap;margin-top:10px;
+    padding-left:14px;border-left:2px dashed var(--line)}
+  .obs-pipeline .flow-branch .fstep{flex:0 1 auto;min-width:40px}
+  .obs-pipeline .stalled-chip{display:inline-block;margin-bottom:8px;padding:3px 10px;border-radius:10px;
+    background:rgba(204,80,50,.12);color:var(--bad);font:10.5px var(--mono)}
 
   /* ── period selector ──────────────────────────────────────────── */
   .periods{display:flex;gap:4px;margin-bottom:18px;flex-wrap:wrap}

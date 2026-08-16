@@ -71,27 +71,53 @@ const STATES = [
 // can watch documents move from received → stable → hashed → … → complete
 // in real time without waiting for a full refresh.
 let pipelineCounts = {};
+let pipelineDocCounts = {};
 let pipelineStalled = 0;
 // When set, the Documents Browser filters its document list to this pipeline
 // state. Clicking the selected cell again clears it.
 let pipelineFilter = null;
 
+// Document Pipeline — rendered as a flowchart: documents travel along the
+// main chain (received → … → complete) and branch to terminal states.
+const FLOW_MAIN = ["received", "stable", "hashed", "triaged", "converting", "analysing", "complete"];
+const FLOW_BRANCH = ["failed", "duplicate", "irrelevant", "password_needed"];
+const FLOW_STATE = {
+  received: { label: "Received", cls: "" },
+  stable: { label: "Stable", cls: "" },
+  hashed: { label: "Hashed", cls: "" },
+  triaged: { label: "Triaged", cls: "active" },
+  converting: { label: "Converting", cls: "active" },
+  analysing: { label: "Analysing", cls: "active" },
+  complete: { label: "Complete", cls: "complete" },
+  failed: { label: "Failed", cls: "failed" },
+  duplicate: { label: "Duplicate", cls: "duplicate term" },
+  irrelevant: { label: "Irrelevant", cls: "irrelevant term" },
+  password_needed: { label: "Password", cls: "password_needed" },
+};
+
 function renderPipelineBoard() {
-  // Dashboard board — each cell is a clickable Document Scope selector:
-  // clicking a state shows only the documents in that pipeline state, and
-  // the counter moves live as documents flow through it.
-  const dashHtml = STATES.map((st) => {
-    const n = pipelineCounts[st.k] || 0;
-    const sel = docScope.state === st.k ? " selected" : "";
-    return "<div class='state clickable " + esc(st.cls) + sel + "' data-state='" + esc(st.k) + "'><div class='k'>" + esc(st.label) + "</div>"
+  // Dashboard board — the flowchart. Each step is a clickable Document
+  // Scope selector and the counters tick live as documents flow through.
+  const flowStep = (k) => {
+    const st = FLOW_STATE[k] || { label: k, cls: "" };
+    const n = pipelineDocCounts[k] || 0;
+    const sel = docScope.state === k ? " selected" : "";
+    return "<div class='fstep " + esc(st.cls) + sel + "' data-state='" + esc(k) + "'>"
+      + "<div class='k'>" + esc(st.label) + "</div>"
       + "<div class='v " + (n ? "" : "zero") + "'>" + esc(n) + "</div></div>";
-  }).join("") + (pipelineStalled
-    ? "<div class='state stalled'><div class='k'>Stalled</div><div class='v'>" + esc(pipelineStalled) + "</div></div>"
-    : "");
+  };
+  const arrow = () => "<div class='farrow'>→</div>";
+  const mainHtml = FLOW_MAIN.map(flowStep).join(arrow());
+  const branchHtml = FLOW_BRANCH.map(flowStep).join(arrow());
+  const stalledHtml = pipelineStalled
+    ? "<div class='stalled-chip'>⚠ " + esc(pipelineStalled) + " stalled</div>"
+    : "";
   const board = document.getElementById("board");
   if (board) {
-    board.innerHTML = dashHtml;
-    board.querySelectorAll(".state.clickable").forEach((cell) =>
+    board.innerHTML = stalledHtml
+      + "<div class='flow-main'>" + mainHtml + "</div>"
+      + "<div class='flow-branch'>" + branchHtml + "</div>";
+    board.querySelectorAll(".fstep").forEach((cell) =>
       cell.onclick = () => setStateScope(cell.dataset.state));
   }
 
@@ -123,9 +149,11 @@ function renderPipelineBoard() {
 function onPipelineStateChanged(data) {
   if (data.from_state) {
     pipelineCounts[data.from_state] = Math.max(0, (pipelineCounts[data.from_state] || 0) - 1);
+    pipelineDocCounts[data.from_state] = Math.max(0, (pipelineDocCounts[data.from_state] || 0) - 1);
   }
   if (data.to_state) {
     pipelineCounts[data.to_state] = (pipelineCounts[data.to_state] || 0) + 1;
+    pipelineDocCounts[data.to_state] = (pipelineDocCounts[data.to_state] || 0) + 1;
   }
   renderPipelineBoard();
 }
@@ -133,6 +161,7 @@ function onPipelineStateChanged(data) {
 // A new document arriving increments the "received" counter immediately.
 function onDocumentReceived() {
   pipelineCounts["received"] = (pipelineCounts["received"] || 0) + 1;
+  pipelineDocCounts["received"] = (pipelineDocCounts["received"] || 0) + 1;
   renderPipelineBoard();
 }
 
@@ -217,6 +246,7 @@ async function refreshPipeline() {
   pipelineCounts = {};
   const counts = intake.counts || {};
   for (const k of Object.keys(counts)) pipelineCounts[k] = counts[k];
+  pipelineDocCounts = intake.pipeline_counts || {};
   pipelineStalled = intake.stalled || 0;
   renderPipelineBoard();
   renderScopeList();

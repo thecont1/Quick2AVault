@@ -3172,7 +3172,14 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             (r) => Date.parse(now) - Date.parse(r.heartbeat_at) > STALL_THRESHOLD_MS,
           ).length;
           const total = (db.prepare("SELECT COUNT(*) AS n FROM intake_events").get() as { n: number }).n;
-          return send(res, 200, { events: enriched, counts, stalled: stalledTotal, total, offset, limit });
+          // Document-pipeline state counts — the vocabulary the dashboard's
+          // flowchart uses (converting/analysing/complete/failed/…).
+          const pipeRows = db
+            .prepare("SELECT state, COUNT(*) AS n FROM document_pipeline GROUP BY state")
+            .all() as { state: string; n: number }[];
+          const pipeline_counts: Record<string, number> = {};
+          for (const r of pipeRows) pipeline_counts[r.state] = r.n;
+          return send(res, 200, { events: enriched, counts, stalled: stalledTotal, total, offset, limit, pipeline_counts });
         }
 
         // Work order 06 §9 — irrelevant items only, for the Irrelevant view.
