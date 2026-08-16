@@ -99,7 +99,13 @@
   /* connector between consecutive process rows */
   .obs-pipeline .pipeline-stage + .pipeline-stage::after{content:"";position:absolute;left:9px;
     top:calc(-50% + 4px);height:100%;width:2px;background:var(--line2);transition:background .2s}
-  .obs-pipeline .pipeline-stage.handoff::after{background:var(--blue)}
+  /* the connector into each stage carries that stage's zone color:
+     waiting stages stay neutral, the active zone (converting/analysing)
+     is blue, building in intensity toward the branch */
+  .obs-pipeline .pipeline-stage[data-stage="converting"]::after{background:rgba(80,140,255,.45)}
+  .obs-pipeline .pipeline-stage[data-stage="analysing"]::after{background:rgba(80,140,255,.8)}
+  .obs-pipeline .pipeline-stage.handoff::after{background:var(--blue);
+    box-shadow:0 0 8px rgba(80,140,255,.85)}
   .obs-pipeline .pipeline-outcome.handoff .pipeline-branch{color:var(--blue)}
   .obs-pipeline .pipeline-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     font-size:13px;font-weight:500;color:var(--ink)}
@@ -113,7 +119,7 @@
     border-bottom-left-radius:2px;flex-shrink:0}
   /* the branch run: a short line from the Analysing node into the outcomes */
   .obs-pipeline .pipeline-outcome:nth-child(7)::before{content:"";position:absolute;left:9px;
-    top:calc(-50% - 4px);height:calc(50% + 20px);width:2px;background:var(--line2)}
+    top:calc(-50% - 4px);height:calc(50% + 20px);width:2px;background:rgba(80,140,255,.65)}
   .obs-pipeline .pipeline-outcome.is-complete .pipeline-branch{border-color:var(--ok)}
   .obs-pipeline .pipeline-outcome.is-complete .pipeline-count{color:var(--ok)}
   .obs-pipeline .pipeline-outcome.is-failed .pipeline-branch{border-color:var(--bad)}
