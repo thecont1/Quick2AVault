@@ -7,6 +7,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import * as fsp from "node:fs/promises";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
@@ -715,16 +716,28 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         if (rm && req.method === "POST") {
           const documentId = decodeURIComponent(rm[1]);
           const doc = db
-            .prepare("SELECT id, lifecycle FROM documents WHERE id=?")
-            .get(documentId) as { id: string; lifecycle: string } | undefined;
+            .prepare("SELECT id, lifecycle, original_filename FROM documents WHERE id=?")
+            .get(documentId) as { id: string; lifecycle: string; original_filename: string | null } | undefined;
           if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
-          if (doc.lifecycle === "deleted") return send(res, 409, { error: "document_deleted", document_id: documentId });
+          let restored = false;
+          if (doc.lifecycle === "deleted") {
+            // DELETE clears the disk pointers but keeps the original bytes on
+            // disk — reprocessing a deleted document restores it from those
+            // bytes. If the bytes are genuinely gone, the deletion stands.
+            const found = recoverRawFile(ports, doc.original_filename);
+            if (!found) {
+              return send(res, 409, { error: "document_deleted", document_id: documentId });
+            }
+            db.prepare("UPDATE documents SET lifecycle='active', raw_path=? WHERE id=?").run(found, documentId);
+            restored = true;
+            ports.logger.info("restored deleted document from disk", { document_id: documentId, raw_path: found });
+          }
           // Always restart from the original bytes: a botched conversion needs
           // this rescan, and a clean one just pays a cheap idempotent
           // re-convert. The convert job enqueues analyse on completion, so a
           // single "convert" enqueue drains the entire chain.
           const phase = enqueueReprocess(db, ports, documentId);
-          return send(res, 200, { reprocessing: true, document_id: documentId, phase });
+          return send(res, 200, { reprocessing: true, document_id: documentId, phase, restored });
         }
       }
       {
@@ -3769,6 +3782,36 @@ function safeParse(s: string): unknown {
   } catch {
     return null;
   }
+}
+
+/**
+ * The DELETE flow clears a document's disk pointers but leaves the original
+ * bytes under Raw/. Find them again by filename (uniquePath may have added
+ * " (N)" suffixes), so a deleted document can be restored and reprocessed.
+ */
+function recoverRawFile(ports: Ports, filename: string | null): string | null {
+  if (!filename) return null;
+  const esc = filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^${esc}( \\(\\d+\\))?$`);
+  const walk = (dir: string): string | null => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+    for (const entry of entries) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const hit = walk(p);
+        if (hit) return hit;
+      } else if (re.test(entry.name)) {
+        return p;
+      }
+    }
+    return null;
+  };
+  return walk(ports.paths.rawDir(""));
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, string>> {

@@ -221,6 +221,27 @@ await check("reprocess of a deleted document is refused (409)", async () => {
   assert.equal(r.status, 409);
 });
 
+// ── reprocess restores a deleted document whose bytes survived on disk ──
+// DELETE unlinks the vault bytes, but documents deleted before that guard
+// (or with a file restored manually) still have the original on disk.
+// Reprocessing such a document must restore it from those bytes; the 409
+// guard above only applies when the bytes are genuinely gone.
+const survivorPath = path.join(rawDir, "doc_delete_C.pdf");
+fs.writeFileSync(survivorPath, "bytes-of-doc_delete_C-survivor");
+const restoreRes = await req("POST", "/v1/documents/doc_delete_C/reprocess");
+await check("reprocess of a deleted doc with surviving bytes restores it", () => {
+  assert.equal(restoreRes.status, 200);
+  assert.equal(restoreRes.json?.reprocessing, true);
+  assert.equal(restoreRes.json?.restored, true);
+  const row = db.prepare("SELECT lifecycle, raw_path FROM documents WHERE id=?").get("doc_delete_C") as { lifecycle: string; raw_path: string };
+  assert.equal(row.lifecycle, "active");
+  assert.equal(row.raw_path, survivorPath, "the raw pointer must be repointed at the recovered file");
+});
+await check("a restored document is listed again", async () => {
+  const ids = await listIds();
+  assert.ok(ids.includes("doc_delete_C"), ids.join(","));
+});
+
 // ── unknown ids ─────────────────────────────────────────────────────────────
 await check("lifecycle verbs 404 on an unknown document", async () => {
   const r1 = await req("POST", "/v1/documents/nope/remove-from-active");
