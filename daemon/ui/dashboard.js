@@ -77,10 +77,11 @@ let pipelineStalled = 0;
 // state. Clicking the selected cell again clears it.
 let pipelineFilter = null;
 
-// Document Pipeline — rendered as a flowchart: documents travel along the
-// main chain (received → … → complete) and branch to terminal states.
-const FLOW_MAIN = ["received", "stable", "hashed", "triaged", "converting", "analysing", "complete"];
-const FLOW_BRANCH = ["failed", "duplicate", "irrelevant", "password_needed"];
+// Document Pipeline — rendered as a vertical status rail: six process
+// stages (received → … → analysing) on the rail, five terminal outcomes
+// branched off below. The rail rows are PIPELINE_RAIL; the outcomes are
+// built inline in renderPipelineBoard.
+const PIPELINE_RAIL = ["received", "stable", "hashed", "triaged", "converting", "analysing"];
 const FLOW_STATE = {
   received: { label: "Received", cls: "" },
   stable: { label: "Stable", cls: "" },
@@ -96,29 +97,44 @@ const FLOW_STATE = {
 };
 
 function renderPipelineBoard() {
-  // Dashboard board — the flowchart. Each step is a clickable Document
-  // Scope selector and the counters tick live as documents flow through.
-  const flowStep = (k) => {
+  // Dashboard: the Document Pipeline status rail. Six process stages on a
+  // vertical rail, five terminal outcomes branched off below. Every row is
+  // a clickable Document Scope selector; counters tick live via SSE and
+  // micro-handoffs (connector brighten, travelling dot, node pulse).
+  const stageRow = (k) => {
     const st = FLOW_STATE[k] || { label: k, cls: "" };
     const n = pipelineDocCounts[k] || 0;
-    const sel = docScope.state === k ? " selected" : "";
-    return "<div class='fstep " + esc(st.cls) + sel + "' data-state='" + esc(k) + "'>"
-      + "<div class='k'>" + esc(st.label) + "</div>"
-      + "<div class='v " + (n ? "" : "zero") + "'>" + esc(n) + "</div></div>";
+    return "<div class='pipeline-stage" + (n ? " is-active" : "") + (docScope.state === k ? " is-selected" : "") + "' data-stage='" + esc(k) + "'>"
+      + "<span class='pipeline-node'></span>"
+      + "<span class='pipeline-label'>" + esc(st.label) + "</span>"
+      + "<span class='pipeline-count" + (n ? "" : " zero") + "'>" + esc(n) + "</span></div>";
   };
-  const arrow = () => "<div class='farrow'>→</div>";
-  const mainHtml = FLOW_MAIN.map(flowStep).join(arrow());
-  const branchHtml = FLOW_BRANCH.map(flowStep).join(arrow());
-  const stalledHtml = pipelineStalled
-    ? "<div class='stalled-chip'>⚠ " + esc(pipelineStalled) + " stalled</div>"
-    : "";
+  const OUTCOMES = [
+    { k: "complete", cls: "is-complete", g: "├" },
+    { k: "failed", cls: "is-failed", g: "├" },
+    { k: "duplicate", cls: "is-duplicate", g: "├" },
+    { k: "irrelevant", cls: "is-irrelevant", g: "├" },
+    { k: "password_needed", cls: "is-password", g: "└" },
+  ];
+  const outcomeRow = (o) => {
+    const st = FLOW_STATE[o.k] || { label: o.k };
+    const n = pipelineDocCounts[o.k] || 0;
+    return "<div class='pipeline-outcome " + o.cls + (docScope.state === o.k ? " is-selected" : "") + "' data-stage='" + esc(o.k) + "'>"
+      + "<span class='pipeline-branch'>" + o.g + "</span>"
+      + "<span class='pipeline-label'>" + esc(st.label) + "</span>"
+      + "<span class='pipeline-count" + (n ? "" : " zero") + "'>" + esc(n) + "</span></div>";
+  };
   const board = document.getElementById("board");
   if (board) {
-    board.innerHTML = stalledHtml
-      + "<div class='flow-main'>" + mainHtml + "</div>"
-      + "<div class='flow-branch'>" + branchHtml + "</div>";
-    board.querySelectorAll(".fstep").forEach((cell) =>
-      cell.onclick = () => setStateScope(cell.dataset.state));
+    board.innerHTML = PIPELINE_RAIL.map(stageRow).join("") + OUTCOMES.map(outcomeRow).join("");
+    board.querySelectorAll(".pipeline-stage,.pipeline-outcome").forEach((row) =>
+      row.onclick = () => setStateScope(row.dataset.stage));
+  }
+  const footer = document.getElementById("pipelineFooter");
+  if (footer) {
+    let lifetime = 0;
+    for (const v of Object.values(pipelineDocCounts)) lifetime += v;
+    footer.textContent = lifetime + " processed lifetime";
   }
 
   // Documents Browser board — each cell is a clickable filter.
@@ -156,6 +172,7 @@ function onPipelineStateChanged(data) {
     pipelineDocCounts[data.to_state] = (pipelineDocCounts[data.to_state] || 0) + 1;
   }
   renderPipelineBoard();
+  if (data.from_state && data.to_state) animateHandoff(data.from_state, data.to_state);
 }
 
 // A new document arriving increments the "received" counter immediately.
@@ -163,6 +180,56 @@ function onDocumentReceived() {
   pipelineCounts["received"] = (pipelineCounts["received"] || 0) + 1;
   pipelineDocCounts["received"] = (pipelineDocCounts["received"] || 0) + 1;
   renderPipelineBoard();
+  animateNewArrival();
+}
+
+// ── pipeline micro-handoffs ─────────────────────────────────────
+// When a document moves between stages: the connector between the two
+// rows brightens, a tiny dot travels along it, the destination node
+// pulses, and the destination count flips. New arrivals pop a +1 ghost
+// on Received. Nothing animates continuously — each event is a single
+// sub-second handoff (count flip 180ms, travel 450ms, pulse 300ms).
+function animateHandoff(fromState, toState) {
+  const rail = document.getElementById("board");
+  if (!rail) return;
+  const fromRow = rail.querySelector('.pipeline-stage[data-stage="' + fromState + '"]');
+  const toRow = rail.querySelector('[data-stage="' + toState + '"]');
+  if (!fromRow || !toRow) return;
+  toRow.classList.add("handoff");
+  setTimeout(() => toRow.classList.remove("handoff"), 700);
+  const fromNode = fromRow.querySelector(".pipeline-node, .pipeline-branch");
+  const toNode = toRow.querySelector(".pipeline-node, .pipeline-branch");
+  if (fromNode && toNode) {
+    const railRect = rail.getBoundingClientRect();
+    const fromY = fromNode.getBoundingClientRect().top - railRect.top + fromNode.offsetHeight / 2;
+    const toY = toNode.getBoundingClientRect().top - railRect.top + toNode.offsetHeight / 2;
+    const dot = document.createElement("div");
+    dot.className = "pipeline-dot";
+    dot.style.left = "7px";
+    dot.style.top = fromY + "px";
+    rail.appendChild(dot);
+    requestAnimationFrame(() => { dot.style.top = toY + "px"; });
+    setTimeout(() => dot.remove(), 520);
+  }
+  toRow.classList.add("pulse");
+  setTimeout(() => toRow.classList.remove("pulse"), 350);
+  const toCount = toRow.querySelector(".pipeline-count");
+  if (toCount) {
+    toCount.classList.add("flip");
+    setTimeout(() => toCount.classList.remove("flip"), 200);
+  }
+}
+
+function animateNewArrival() {
+  const row = document.querySelector('#board .pipeline-stage[data-stage="received"]');
+  if (!row) return;
+  row.classList.add("pulse");
+  setTimeout(() => row.classList.remove("pulse"), 350);
+  const ghost = document.createElement("span");
+  ghost.className = "pipeline-ghost";
+  ghost.textContent = "+1";
+  row.appendChild(ghost);
+  setTimeout(() => ghost.remove(), 850);
 }
 
 // ── Document Scope ──────────────────────────────────────────────

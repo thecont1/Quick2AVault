@@ -3,7 +3,7 @@
     --bg:#f6f8fb; --panel:#ffffff; --panel2:#eef3f9; --line:#d8e0ea; --line2:#e6ecf3;
     --ink:#0f1b2d; --dim:#5a6b82; --faint:#94a3b8;
     --blue:#2563eb; --blue-d:#1d4ed8; --blue-l:#dbeafe; --blue-xl:#eff6ff;
-    --in:#059669; --out:#dc2626; --xfer:#2563eb; --inv:#7c3aed; --ok:#059669; --warn:#d97706; --bad:#dc2626;
+    --in:#059669; --out:#dc2626; --xfer:#2563eb; --inv:#7c3aed; --ok:#059669; --warn:#d97706; --bad:#dc2626; --gold:#d9a021;
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
   }
   *{box-sizing:border-box;margin:0;padding:0}
@@ -42,15 +42,23 @@
   /* even vertical rhythm: 18px between each section (periods -> Money ->
      columns); the global 28px section margin is overridden here */
   #tab-obs.on section{margin-bottom:18px}
-  #tab-obs.on .obs-cols{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:60% 40%;gap:18px}
-  #tab-obs.on .obs-cols>section{min-height:0;display:flex;flex-direction:column;margin-bottom:0}
+  #tab-obs.on .obs-cols{flex:1 1 auto;min-height:0;display:grid;
+    grid-template-columns:minmax(0,1fr) clamp(220px,24vw,260px);gap:16px}
+  #tab-obs.on .obs-cols>section{min-height:0;display:flex;flex-direction:column;margin-bottom:0;
+    border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:12px 14px}
   #tab-obs.on #card .card{max-height:200px;overflow-y:auto}
 
-  /* ── Document Scope list (left) ──────────────────────────────── */
-  .obs-scope .scope-list{flex:1 1 auto;min-height:0;overflow-y:auto;border:1px solid var(--line);
-    border-radius:6px;background:var(--panel);font:11.5px var(--mono);padding:4px}
-  /* Rows are plain list rows inside the framed card — never cards of their
-     own (the global .drow style must not leak in here). */
+  /* ── shared card heads ────────────────────────────────────────── */
+  .obs-card-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+    border-bottom:1px solid var(--line2);padding-bottom:8px;margin-bottom:10px}
+  .obs-card-head h2{margin:0}
+  .obs-card-head .sub{font-size:11px;color:var(--faint);text-transform:none;letter-spacing:0;font-weight:400}
+  /* the narrow pipeline column stacks title over subtitle so nothing wraps */
+  .obs-pipeline .obs-card-head{flex-direction:column;align-items:flex-start;gap:3px}
+
+  /* ── Document Scope list (left, dominant) ────────────────────── */
+  .obs-scope .scope-list{flex:1 1 auto;min-height:0;overflow-y:auto;background:transparent;
+    font:11.5px var(--mono)}
   .scope-list .drow{padding:9px 12px;border:0;border-radius:5px;background:transparent;margin:0 0 1px;
     display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:baseline;cursor:pointer}
   .scope-list .drow:last-child{margin-bottom:0}
@@ -60,31 +68,69 @@
   .scope-list .kind{color:var(--faint);font-size:10px;text-transform:uppercase}
   .scope-list .dt{color:var(--faint);font-size:10px;text-align:right;white-space:nowrap}
 
-  /* ── Document Pipeline (right): the flowchart ────────────────── */
-  .obs-pipeline .board{background:transparent;border:0;margin-bottom:0;overflow-y:auto}
-  .obs-pipeline .flow-main{display:flex;align-items:stretch;gap:5px;flex-wrap:wrap}
-  .obs-pipeline .fstep{flex:1 1 0;min-width:44px;aspect-ratio:1/1.05;display:flex;flex-direction:column;
-    align-items:center;justify-content:center;border-radius:7px;background:var(--panel);
-    border:1px solid var(--line);padding:3px;cursor:pointer;transition:background .12s}
-  .obs-pipeline .fstep:hover{background:var(--panel2)}
-  .obs-pipeline .fstep.selected{background:var(--panel2);box-shadow:inset 0 -2px 0 var(--blue)}
-  .obs-pipeline .fstep .k{font:8.5px var(--mono);letter-spacing:.4px;text-transform:uppercase;
-    color:var(--faint);text-align:center;line-height:1.2}
-  .obs-pipeline .fstep .v{font:600 17px var(--mono);color:var(--ink);margin-top:2px;
-    font-variant-numeric:tabular-nums}
-  .obs-pipeline .fstep .v.zero{color:var(--faint);opacity:.4}
-  .obs-pipeline .fstep.term .v{color:var(--faint)}
-  .obs-pipeline .fstep.complete .v{color:var(--ok)}
-  .obs-pipeline .fstep.failed .v{color:var(--bad)}
-  .obs-pipeline .fstep.duplicate .v,.obs-pipeline .fstep.irrelevant .v,
-  .obs-pipeline .fstep.password_needed .v{color:var(--warn)}
-  .obs-pipeline .fstep.active .v{color:var(--blue)}
-  .obs-pipeline .farrow{display:flex;align-items:center;color:var(--faint);font-size:12px;flex-shrink:0}
-  .obs-pipeline .flow-branch{display:flex;align-items:stretch;gap:5px;flex-wrap:wrap;margin-top:10px;
-    padding-left:14px;border-left:2px dashed var(--line)}
-  .obs-pipeline .flow-branch .fstep{flex:0 1 auto;min-width:40px}
-  .obs-pipeline .stalled-chip{display:inline-block;margin-bottom:8px;padding:3px 10px;border-radius:10px;
-    background:rgba(204,80,50,.12);color:var(--bad);font:10.5px var(--mono)}
+  /* ── Document Pipeline (right): the status rail ──────────────── */
+  .obs-pipeline .pipeline-rail{flex:1 1 auto;min-height:0;overflow:hidden;position:relative;
+    display:grid;grid-template-rows:repeat(6,minmax(30px,1fr)) 8px repeat(5,minmax(26px,1fr));
+    align-content:start}
+  .obs-pipeline .pipeline-stage,.obs-pipeline .pipeline-outcome{display:grid;
+    grid-template-columns:14px minmax(0,1fr) auto;align-items:center;column-gap:10px;
+    position:relative;cursor:pointer;border-radius:6px;padding:0 6px}
+  /* The rail grid is 6 stage tracks + 1 gap track + 5 outcome tracks; the
+     outcomes must be placed explicitly or auto-placement drops them into
+     the 8px gap. */
+  .obs-pipeline .pipeline-stage:nth-child(1){grid-row:1}
+  .obs-pipeline .pipeline-stage:nth-child(2){grid-row:2}
+  .obs-pipeline .pipeline-stage:nth-child(3){grid-row:3}
+  .obs-pipeline .pipeline-stage:nth-child(4){grid-row:4}
+  .obs-pipeline .pipeline-stage:nth-child(5){grid-row:5}
+  .obs-pipeline .pipeline-stage:nth-child(6){grid-row:6}
+  .obs-pipeline .pipeline-outcome:nth-child(7){grid-row:8}
+  .obs-pipeline .pipeline-outcome:nth-child(8){grid-row:9}
+  .obs-pipeline .pipeline-outcome:nth-child(9){grid-row:10}
+  .obs-pipeline .pipeline-outcome:nth-child(10){grid-row:11}
+  .obs-pipeline .pipeline-outcome:nth-child(11){grid-row:12}
+  .obs-pipeline .pipeline-stage:hover,.obs-pipeline .pipeline-outcome:hover{background:var(--panel2)}
+  .obs-pipeline .pipeline-stage.is-selected,.obs-pipeline .pipeline-outcome.is-selected{
+    background:var(--panel2);box-shadow:inset 2px 0 0 var(--blue)}
+  .obs-pipeline .pipeline-node{width:8px;height:8px;border-radius:999px;background:var(--dim);
+    flex-shrink:0;transition:background .18s}
+  .obs-pipeline .pipeline-stage.is-active .pipeline-node{background:var(--blue);
+    box-shadow:0 0 0 3px rgba(80,140,255,.14)}
+  /* connector between consecutive process rows */
+  .obs-pipeline .pipeline-stage + .pipeline-stage::after{content:"";position:absolute;left:9px;
+    top:calc(-50% + 4px);height:100%;width:2px;background:var(--line2);transition:background .2s}
+  .obs-pipeline .pipeline-stage.handoff::after{background:var(--blue)}
+  .obs-pipeline .pipeline-outcome.handoff .pipeline-branch{color:var(--blue)}
+  .obs-pipeline .pipeline-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-size:13px;font-weight:500;color:var(--ink)}
+  .obs-pipeline .pipeline-count{font-variant-numeric:tabular-nums;font-weight:600;font-size:15px;
+    color:var(--ink)}
+  .obs-pipeline .pipeline-count.zero{color:var(--faint);opacity:.55}
+  .obs-pipeline .pipeline-count.flip{animation:countFlip .18s ease-out}
+  /* terminal outcomes — branch stubs + restrained semantic colors */
+  .obs-pipeline .pipeline-branch{font:11px var(--mono);color:var(--dim);text-align:center}
+  .obs-pipeline .pipeline-outcome.is-complete .pipeline-branch,
+  .obs-pipeline .pipeline-outcome.is-complete .pipeline-count{color:var(--ok)}
+  .obs-pipeline .pipeline-outcome.is-failed .pipeline-branch,
+  .obs-pipeline .pipeline-outcome.is-failed .pipeline-count{color:var(--bad)}
+  .obs-pipeline .pipeline-outcome.is-duplicate .pipeline-branch,
+  .obs-pipeline .pipeline-outcome.is-duplicate .pipeline-count{color:var(--warn)}
+  .obs-pipeline .pipeline-outcome.is-irrelevant .pipeline-branch,
+  .obs-pipeline .pipeline-outcome.is-irrelevant .pipeline-count{color:var(--faint)}
+  .obs-pipeline .pipeline-outcome.is-password .pipeline-branch,
+  .obs-pipeline .pipeline-outcome.is-password .pipeline-count{color:var(--gold)}
+  /* micro-handoff motion */
+  .pipeline-dot{position:absolute;width:6px;height:6px;border-radius:999px;background:var(--blue);
+    z-index:3;transition:top .45s cubic-bezier(.4,0,.2,1);pointer-events:none}
+  .obs-pipeline .pipeline-stage.pulse .pipeline-node,
+  .obs-pipeline .pipeline-outcome.pulse .pipeline-branch{animation:nodePulse .3s ease-out}
+  .pipeline-ghost{position:absolute;right:10px;top:2px;font:11px var(--mono);color:var(--blue);
+    animation:ghostUp .8s ease-out forwards;pointer-events:none}
+  .obs-pipeline .pipeline-footer{margin-top:auto;padding-top:9px;border-top:1px solid var(--line2);
+    color:var(--faint);font:10.5px var(--mono);letter-spacing:.3px}
+  @keyframes nodePulse{0%{transform:scale(1)}50%{transform:scale(1.7)}100%{transform:scale(1)}}
+  @keyframes countFlip{0%{transform:scale(1)}50%{transform:scale(1.18)}100%{transform:scale(1)}}
+  @keyframes ghostUp{0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-14px)}}
 
   /* ── period selector ──────────────────────────────────────────── */
   .periods{display:flex;gap:4px;margin-bottom:18px;flex-wrap:wrap}

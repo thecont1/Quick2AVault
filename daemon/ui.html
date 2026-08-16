@@ -59,12 +59,19 @@
 
   <div class="obs-cols">
     <section class="obs-scope">
-      <h2>Document Scope <span class="sub" id="scopeLabel">All documents</span></h2>
+      <header class="obs-card-head">
+        <h2>Document Scope</h2>
+        <span class="sub" id="scopeLabel">All documents</span>
+      </header>
       <div class="scope-list" id="scopeList"><div class="empty">loading…</div></div>
     </section>
     <section class="obs-pipeline">
-      <h2>Document Pipeline</h2>
-      <div class="board" id="board"></div>
+      <header class="obs-card-head">
+        <h2>Document Pipeline</h2>
+        <span class="sub">live intake status</span>
+      </header>
+      <div class="pipeline-rail" id="board"></div>
+      <div class="pipeline-footer" id="pipelineFooter"></div>
     </section>
   </div>
 </div>
