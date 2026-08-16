@@ -21,9 +21,15 @@ const keyPrefix = "ai.provider_key.";
 export class CredentialManager {
   constructor(private secrets: SecretStore) {}
 
-  /** Store an API key for a provider. */
+  /** Store an API key for a provider. Rejects empty/whitespace-only keys. */
   async setKey(providerId: string, key: string): Promise<void> {
-    await this.secrets.set(keyPrefix + providerId, key);
+    const trimmed = key.trim();
+    if (!trimmed) {
+      // Empty key — remove any existing key instead of storing an empty string
+      await this.secrets.remove(keyPrefix + providerId);
+      return;
+    }
+    await this.secrets.set(keyPrefix + providerId, trimmed);
   }
 
   /** Remove the stored API key for a provider. */
@@ -31,15 +37,16 @@ export class CredentialManager {
     await this.secrets.remove(keyPrefix + providerId);
   }
 
-  /** Get the raw API key for a provider (or null if not set). */
+  /** Get the raw API key for a provider (or null if not set/empty). */
   async getKey(providerId: string): Promise<string | null> {
-    return this.secrets.get(keyPrefix + providerId);
+    const key = await this.secrets.get(keyPrefix + providerId);
+    return key && key.trim() ? key : null;
   }
 
-  /** Check if a valid key exists for a provider. */
+  /** Check if a valid (non-empty) key exists for a provider. */
   async hasValidKey(providerId: string): Promise<boolean> {
     const key = await this.secrets.get(keyPrefix + providerId);
-    return !!key;
+    return !!key && !!key.trim();
   }
 
   /** Get a CredentialRecord (metadata only, never the raw key) for UI display. */
@@ -47,7 +54,7 @@ export class CredentialManager {
     const key = await this.secrets.get(keyPrefix + providerId);
     return {
       providerId,
-      hasKey: !!key,
+      hasKey: !!key && !!key.trim(),
     };
   }
 
