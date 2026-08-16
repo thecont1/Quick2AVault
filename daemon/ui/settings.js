@@ -32,17 +32,16 @@ function trustLegend() {
 
 // ── Provider grouping ────────────────────────────────────────────────────
 const TIER_LABELS = {
-  core: "CORE",
-  regional: "REGIONAL",
-  aggregator: "AGGREGATORS",
-  local: "LOCAL",
+  core: "Core",
+  regional: "Regional",
+  aggregator: "Aggregators",
+  local: "Local",
 };
 const TIER_ORDER = ["core", "regional", "aggregator", "local"];
 
 /**
- * Build the provider dropdown with tier grouping.
- * Aggregators are collapsed behind an <optgroup> (browsers show them
- * when the user scrolls, but they're visually separated).
+ * Build the provider dropdown with tier grouping and provider counts.
+ * Providers are sorted alphabetically within each tier.
  */
 function buildProviderDropdown(selectId, currentProviderId) {
   const sel = document.getElementById(selectId);
@@ -54,17 +53,42 @@ function buildProviderDropdown(selectId, currentProviderId) {
 
   let html = "";
   for (const tier of TIER_ORDER) {
-    const providers = grouped[tier] || [];
+    const providers = (grouped[tier] || []).sort((a, b) => a.name.localeCompare(b.name));
     if (providers.length === 0) continue;
-    html += `<optgroup label="${TIER_LABELS[tier]}">`;
+    html += `<optgroup label="${TIER_LABELS[tier]} (${providers.length})">`;
     for (const p of providers) {
       html += `<option value="${esc(p.id)}"${p.id === currentProviderId ? " selected" : ""}>${esc(p.name)}</option>`;
     }
     html += "</optgroup>";
   }
-  // Custom is always last, outside all groups
-  html += `<optgroup label="CUSTOM"><option value="custom"${currentProviderId === "custom" ? " selected" : ""}>Custom provider…</option></optgroup>`;
+  html += `<optgroup label="Custom"><option value="custom"${currentProviderId === "custom" ? " selected" : ""}>Custom provider…</option></optgroup>`;
   sel.innerHTML = html;
+}
+
+/**
+ * Filter the provider dropdown by search query.
+ * Hides non-matching options while preserving optgroup structure.
+ * Empty optgroups are also hidden.
+ */
+function filterProviderDropdown(selectId, query) {
+  const sel = document.getElementById(selectId);
+  const q = query.toLowerCase().trim();
+  for (const group of sel.querySelectorAll("optgroup")) {
+    let visibleCount = 0;
+    for (const opt of group.querySelectorAll("option")) {
+      const pid = opt.value;
+      if (pid === "custom") { opt.hidden = q ? !opt.textContent.toLowerCase().includes(q) : false; if (!opt.hidden) visibleCount++; continue; }
+      const provider = CATALOG.find((p) => p.id === pid);
+      if (!q) { opt.hidden = false; visibleCount++; continue; }
+      const matches = provider && (
+        provider.name.toLowerCase().includes(q) ||
+        pid.toLowerCase().includes(q)
+      );
+      opt.hidden = !matches;
+      if (matches) visibleCount++;
+    }
+    group.hidden = visibleCount === 0;
+  }
 }
 
 // ── Load settings ────────────────────────────────────────────────────────
@@ -644,6 +668,8 @@ document.getElementById("aiModel").onchange = () => {
   autoSave("primary");
 };
 document.getElementById("aiBaseUrl").oninput = () => autoSave("primary");
+document.getElementById("aiProviderSearch").oninput = (e) =>
+  filterProviderDropdown("aiProvider", e.target.value);
 
 document.getElementById("ai2Test").onclick = () => testAi("secondary");
 document.getElementById("ai2Provider").onchange = () => {
@@ -661,6 +687,8 @@ document.getElementById("ai2Model").onchange = () => {
   autoSave("secondary");
 };
 document.getElementById("ai2BaseUrl").oninput = () => autoSave("secondary");
+document.getElementById("ai2ProviderSearch").oninput = (e) =>
+  filterProviderDropdown("ai2Provider", e.target.value);
 
 document.getElementById("jurSave").onclick = saveJur;
 
