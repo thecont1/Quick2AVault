@@ -415,12 +415,30 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           // outgoing edges. Re-enqueuing conversion for a document that is
           // already converting, analysing, or complete would rewind the
           // canonical pipeline and start a second conversion pass.
-          if (intake.processing_state !== "password_needed") {
+          // Applicability comes from the DOCUMENT, not the intake row: a
+          // previous failed attempt can leave the intake stuck at 'queued'
+          // while the document is genuinely still waiting on a password.
+          const pwDoc = db
+            .prepare("SELECT markdown_path, markdown_chars FROM documents WHERE id=?")
+            .get(intake.document_id) as
+            | { markdown_path: string | null; markdown_chars: number | null }
+            | undefined;
+          if (pwDoc?.markdown_path && pwDoc.markdown_chars) {
             return send(res, 409, {
               error: "password_not_applicable",
               intake_id: id,
               document_id: intake.document_id,
-              state: intake.processing_state,
+              state: "already_converted",
+            });
+          }
+          const activeConvert = db
+            .prepare("SELECT 1 FROM jobs WHERE document_id=? AND phase='convert' AND state IN ('pending','running') LIMIT 1")
+            .get(intake.document_id);
+          if (activeConvert) {
+            return send(res, 409, {
+              error: "password_already_processing",
+              intake_id: id,
+              document_id: intake.document_id,
             });
           }
           const now = ports.clock.isoNow();
@@ -503,20 +521,45 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           if (typeof password !== "string") {
             return send(res, 400, { error: "password required" });
           }
-          const intake = db
-            .prepare("SELECT id, document_id, processing_state FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+          // Prefer the LIVE intake row (accepted/added) over the newer
+          // 'archived' audit copy minted when the source is consumed —
+          // ORDER BY id DESC alone can pick the archive and misreport state.
+          let intake = db
+            .prepare(
+              `SELECT id, document_id, processing_state FROM intake_events
+                WHERE document_id=? AND kind IN ('accepted','added')
+                ORDER BY id DESC LIMIT 1`,
+            )
             .get(docId) as { id: number; document_id: string | null; processing_state: string } | undefined;
+          if (!intake) {
+            intake = db
+              .prepare("SELECT id, document_id, processing_state FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+              .get(docId) as { id: number; document_id: string | null; processing_state: string } | undefined;
+          }
           if (!intake) {
             return send(res, 404, { error: "intake not found for document", document_id: docId });
           }
-          // Same guard as the intake-level endpoint: only a document waiting
-          // on a password may be reset. Rewinding a converting/analysing/
-          // complete document would start a second conversion pass.
-          if (intake.processing_state !== "password_needed") {
+          // Same document-truth guard as the intake-level endpoint: only a
+          // document that is still awaiting conversion may be reset, and only
+          // when no conversion is already in flight.
+          const pwDoc = db
+            .prepare("SELECT markdown_path, markdown_chars FROM documents WHERE id=?")
+            .get(docId) as { markdown_path: string | null; markdown_chars: number | null } | undefined;
+          if (!pwDoc) return send(res, 404, { error: "document_not_found", document_id: docId });
+          if (pwDoc.markdown_path && pwDoc.markdown_chars) {
             return send(res, 409, {
               error: "password_not_applicable",
               document_id: docId,
-              state: intake.processing_state,
+              state: "already_converted",
+            });
+          }
+          const activeConvert = db
+            .prepare("SELECT 1 FROM jobs WHERE document_id=? AND phase='convert' AND state IN ('pending','running') LIMIT 1")
+            .get(docId);
+          if (activeConvert) {
+            return send(res, 409, {
+              error: "password_already_processing",
+              document_id: docId,
             });
           }
           const now = ports.clock.isoNow();
@@ -3296,16 +3339,34 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             const pipeline = db
               .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
               .get(docId) as { state: string } | undefined;
-            const intake = db
-              .prepare("SELECT id FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+            let intake = db
+              .prepare("SELECT id FROM intake_events WHERE document_id=? AND kind IN ('accepted','added') ORDER BY id DESC LIMIT 1")
               .get(docId) as { id: number } | undefined;
+            if (!intake) {
+              intake = db
+                .prepare("SELECT id FROM intake_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+                .get(docId) as { id: number } | undefined;
+            }
+            // The document_pipeline row can be missing after a failed
+            // password cycle — fall back to the last pipeline event so the
+            // UI still offers the password prompt for a document that is
+            // genuinely still encrypted (no markdown yet).
+            const lastEvt = pipeline?.state
+              ? undefined
+              : (db
+                  .prepare("SELECT to_state FROM pipeline_events WHERE document_id=? ORDER BY id DESC LIMIT 1")
+                  .get(docId) as { to_state: string } | undefined);
+            const pipelineState = pipeline?.state
+              ?? ((!doc.markdown_path || !doc.markdown_chars) && lastEvt?.to_state === "password_needed"
+                ? "password_needed"
+                : null);
 
             return send(res, 200, {
               document: doc,
               extraction,
               claims: claimMap,
               editable_fields: [...allowedFields("document")],
-              pipeline_state: pipeline?.state ?? null,
+              pipeline_state: pipelineState,
               intake_id: intake?.id ?? null,
               effective: {
                 doc_type: effective("doc_type"),
