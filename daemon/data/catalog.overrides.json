@@ -30,6 +30,10 @@
     "trust": "verified",
     "capabilities": { "chat": true, "json": true, "vision": false }
   },
+  "poolside/poolside/laguna-xs-2.1": {
+    "trust": "verified",
+    "capabilities": { "chat": true, "json": true, "vision": false }
+  },
 
   "sarvam/sarvam-105b": {
     "trust": "verified",

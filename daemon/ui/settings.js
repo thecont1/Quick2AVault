@@ -12,24 +12,6 @@ let ACTIVE_JURISDICTION = "IN";
 let currentPrimaryProviderId = "";
 let currentSecondaryProviderId = "";
 
-// ── Trust badge rendering ────────────────────────────────────────────────
-// Note: <option> elements in <select> don't render inline HTML/CSS colors.
-// We use text markers (✓ for verified, ~ for community) that work in plain
-// text, plus a legend below the dropdown with colored dots.
-function trustMarker(trust) {
-  if (trust === "verified") return " ✓";
-  if (trust === "community") return " ~";
-  return " ?";
-}
-
-function trustLegend() {
-  return "<div class='hint' style='margin-top:4px'>"
-    + "<span style='color:var(--ok)'>●</span> verified"
-    + " &nbsp; <span style='color:var(--faint)'>●</span> community"
-    + " &nbsp; ✓ = verified &nbsp; ~ = community"
-    + "</div>";
-}
-
 // ── Provider grouping ────────────────────────────────────────────────────
 const TIER_LABELS = {
   core: "Core",
@@ -40,56 +22,92 @@ const TIER_LABELS = {
 const TIER_ORDER = ["core", "regional", "aggregator", "local"];
 
 /**
- * Build the provider dropdown with tier grouping and provider counts.
- * Providers are sorted alphabetically within each tier.
+ * Build the custom provider picker with logos inside the dropdown.
+ * Replaces the native <select> with a button + dropdown panel.
  */
 function buildProviderDropdown(selectId, currentProviderId) {
   const sel = document.getElementById(selectId);
+  const pickerId = selectId === "aiProvider" ? "aiProviderPicker" : "ai2ProviderPicker";
+  const picker = document.getElementById(pickerId);
+  if (!picker) return;
+
   const grouped = {};
   for (const p of CATALOG) {
     if (!grouped[p.tier]) grouped[p.tier] = [];
     grouped[p.tier].push(p);
   }
 
-  let html = "";
+  // Build hidden select options (for compatibility)
+  let optHtml = "";
   for (const tier of TIER_ORDER) {
     const providers = (grouped[tier] || []).sort((a, b) => a.name.localeCompare(b.name));
     if (providers.length === 0) continue;
-    html += `<optgroup label="${TIER_LABELS[tier]} (${providers.length})">`;
+    optHtml += `<optgroup label="${TIER_LABELS[tier]} (${providers.length})">`;
     for (const p of providers) {
-      html += `<option value="${esc(p.id)}"${p.id === currentProviderId ? " selected" : ""}>${esc(p.name)}</option>`;
+      optHtml += `<option value="${esc(p.id)}"${p.id === currentProviderId ? " selected" : ""}>${esc(p.name)}</option>`;
     }
-    html += "</optgroup>";
+    optHtml += "</optgroup>";
   }
-  html += `<optgroup label="Custom"><option value="custom"${currentProviderId === "custom" ? " selected" : ""}>Custom provider…</option></optgroup>`;
-  sel.innerHTML = html;
+  optHtml += `<optgroup label="Custom"><option value="custom"${currentProviderId === "custom" ? " selected" : ""}>Custom provider…</option></optgroup>`;
+  sel.innerHTML = optHtml;
+
+  // Build custom dropdown button
+  const current = CATALOG.find((p) => p.id === currentProviderId);
+  const currentName = currentProviderId === "custom" ? "Custom provider…" : (current?.name || "Select provider…");
+  const currentLogo = current?.logoUrl || "";
+
+  let btnHtml = `<button type="button" class="pp-btn">`;
+  if (currentLogo) {
+    btnHtml += `<img class="pp-logo" src="${esc(currentLogo)}" width="20" height="20" onerror="this.style.display='none'">`;
+  }
+  btnHtml += `<span class="pp-name">${esc(currentName)}</span><span class="pp-arrow">▼</span></button>`;
+
+  // Build dropdown panel
+  let panelHtml = `<div class="pp-panel">`;
+  for (const tier of TIER_ORDER) {
+    const providers = (grouped[tier] || []).sort((a, b) => a.name.localeCompare(b.name));
+    if (providers.length === 0) continue;
+    panelHtml += `<div class="pp-group">${TIER_LABELS[tier]} (${providers.length})</div>`;
+    for (const p of providers) {
+      const logo = p.logoUrl ? `<img class="pp-opt-logo" src="${esc(p.logoUrl)}" width="18" height="18" onerror="this.style.display='none'">` : "";
+      panelHtml += `<div class="pp-opt${p.id === currentProviderId ? " selected" : ""}" data-pid="${esc(p.id)}">${logo}<span class="pp-opt-name">${esc(p.name)}</span></div>`;
+    }
+  }
+  panelHtml += `<div class="pp-group">Custom</div>`;
+  panelHtml += `<div class="pp-opt${currentProviderId === "custom" ? " selected" : ""}" data-pid="custom"><span class="pp-opt-name">Custom provider…</span></div>`;
+  panelHtml += `</div>`;
+
+  picker.innerHTML = btnHtml + panelHtml;
+
+  // Wire up interactions
+  const btn = picker.querySelector(".pp-btn");
+  const panel = picker.querySelector(".pp-panel");
+
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    // Close any other open pickers
+    document.querySelectorAll(".pp-panel.open").forEach((p) => { if (p !== panel) p.classList.remove("open"); });
+    panel.classList.toggle("open");
+  };
+
+  panel.querySelectorAll(".pp-opt").forEach((opt) => {
+    opt.onclick = () => {
+      const pid = opt.dataset.pid;
+      sel.value = pid;
+      panel.classList.remove("open");
+      sel.dispatchEvent(new Event("change"));
+      // Rebuild to update the button
+      buildProviderDropdown(selectId, pid);
+    };
+  });
 }
 
-/**
- * Filter the provider dropdown by search query.
- * Hides non-matching options while preserving optgroup structure.
- * Empty optgroups are also hidden.
- */
-function filterProviderDropdown(selectId, query) {
-  const sel = document.getElementById(selectId);
-  const q = query.toLowerCase().trim();
-  for (const group of sel.querySelectorAll("optgroup")) {
-    let visibleCount = 0;
-    for (const opt of group.querySelectorAll("option")) {
-      const pid = opt.value;
-      if (pid === "custom") { opt.hidden = q ? !opt.textContent.toLowerCase().includes(q) : false; if (!opt.hidden) visibleCount++; continue; }
-      const provider = CATALOG.find((p) => p.id === pid);
-      if (!q) { opt.hidden = false; visibleCount++; continue; }
-      const matches = provider && (
-        provider.name.toLowerCase().includes(q) ||
-        pid.toLowerCase().includes(q)
-      );
-      opt.hidden = !matches;
-      if (matches) visibleCount++;
-    }
-    group.hidden = visibleCount === 0;
+// Close dropdowns when clicking outside
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".provider-picker")) {
+    document.querySelectorAll(".pp-panel.open").forEach((p) => p.classList.remove("open"));
   }
-}
+});
 
 // ── Load settings ────────────────────────────────────────────────────────
 async function loadSettings() {
@@ -211,46 +229,6 @@ function providerBaseUrl(which) {
   return provider ? provider.baseUrl : "";
 }
 
-/**
- * Show the provider's logo beside the provider dropdown.
- * Logos come from models.dev via logoUrl in the catalog.
- */
-function updateProviderLogo(which, provider) {
-  const isPrimary = which === "primary";
-  const sel = document.getElementById(isPrimary ? "aiProvider" : "ai2Provider");
-  const logoId = isPrimary ? "aiProviderLogo" : "ai2ProviderLogo";
-  let logo = document.getElementById(logoId);
-  if (!logo) {
-    // Wrap the select in an inline-flex container with the logo beside it
-    const wrapper = document.createElement("div");
-    wrapper.style.cssText = "display:flex;align-items:center;gap:8px";
-    sel.parentNode.insertBefore(wrapper, sel);
-    wrapper.appendChild(sel);
-    logo = document.createElement("img");
-    logo.id = logoId;
-    logo.style.cssText = "width:18px;height:18px;border-radius:3px;flex-shrink:0;object-fit:contain";
-    // Fallback: show a generic provider glyph if the logo fails to load
-    logo.onerror = () => {
-      logo.style.display = "none";
-      const fallback = document.createElement("span");
-      fallback.style.cssText = "width:18px;height:18px;border-radius:3px;background:var(--panel-border,#ccc);display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:var(--faint,#888);flex-shrink:0";
-      fallback.textContent = provider?.name?.charAt(0)?.toUpperCase() || "?";
-      logo.parentNode?.appendChild(fallback);
-    };
-    wrapper.appendChild(logo);
-  }
-  // Remove any previous fallback glyph
-  const prevFallback = logo.parentNode?.querySelector("span:last-child");
-  if (prevFallback && prevFallback.textContent?.length === 1) prevFallback.remove();
-
-  if (provider && provider.logoUrl) {
-    logo.src = provider.logoUrl;
-    logo.alt = provider.name;
-    logo.style.display = "";
-  } else {
-    logo.style.display = "none";
-  }
-}
 
 /**
  * Called when the provider dropdown changes.
@@ -263,9 +241,6 @@ function onProviderChange(which, savedModel) {
   const pid = sel.value;
   const provider = CATALOG.find((p) => p.id === pid);
   const baseUrl = provider ? provider.baseUrl : "";
-
-  // Show provider logo beside the dropdown
-  updateProviderLogo(which, provider);
 
   // Base URL: read-only for catalog providers, editable for Custom
   const customUrlRow = document.getElementById(isPrimary ? "aiCustomUrlRow" : "ai2CustomUrlRow");
@@ -339,18 +314,16 @@ function onProviderChange(which, savedModel) {
   }
   for (const m of result.models) {
     const selected = m.id === savedModel ? " selected" : "";
-    const marker = trustMarker(m.trust);
-    html += `<option value="${esc(m.id)}"${selected}>${esc(m.displayName)}${marker}</option>`;
+    html += `<option value="${esc(m.id)}"${selected}>${esc(m.displayName)}</option>`;
   }
   // "Other model ID (advanced)" — always at the bottom
   html += `<option value="__other__">Other model ID (advanced)…</option>`;
   modelSelect.innerHTML = html;
   if (savedModel) modelSelect.value = savedModel;
 
-  // Show jurisdiction fallback note + trust legend
+  // Show jurisdiction fallback note
   if (modelNote) {
-    const fallbackNote = result.jurisdictionFallback ? result.note : "";
-    modelNote.innerHTML = (fallbackNote ? esc(fallbackNote) + " " : "") + trustLegend();
+    modelNote.textContent = result.jurisdictionFallback ? result.note : "";
   }
 }
 
@@ -668,8 +641,6 @@ document.getElementById("aiModel").onchange = () => {
   autoSave("primary");
 };
 document.getElementById("aiBaseUrl").oninput = () => autoSave("primary");
-document.getElementById("aiProviderSearch").oninput = (e) =>
-  filterProviderDropdown("aiProvider", e.target.value);
 
 document.getElementById("ai2Test").onclick = () => testAi("secondary");
 document.getElementById("ai2Provider").onchange = () => {
@@ -687,46 +658,8 @@ document.getElementById("ai2Model").onchange = () => {
   autoSave("secondary");
 };
 document.getElementById("ai2BaseUrl").oninput = () => autoSave("secondary");
-document.getElementById("ai2ProviderSearch").oninput = (e) =>
-  filterProviderDropdown("ai2Provider", e.target.value);
 
 document.getElementById("jurSave").onclick = saveJur;
-
-// ── Custom provider buttons ──────────────────────────────────────────────
-document.getElementById("customSavePrimary").onclick = async () => {
-  const name = document.getElementById("customName").value.trim();
-  const baseUrl = document.getElementById("customBaseUrl").value.trim();
-  const modelId = document.getElementById("customModelId").value.trim();
-  const msg = document.getElementById("customMsg");
-  if (!baseUrl || !modelId) {
-    msg.className = "msg bad";
-    msg.textContent = "Base URL and Model ID are required";
-    return;
-  }
-  // Select "custom" in the primary dropdown and fill the fields
-  document.getElementById("aiProvider").value = "custom";
-  document.getElementById("aiBaseUrl").value = baseUrl;
-  onProviderChange("primary", modelId);
-  const r = await saveAi("primary");
-  msg.className = "msg ok";
-  msg.textContent = "saved as primary";
-};
-document.getElementById("customSaveSecondary").onclick = async () => {
-  const baseUrl = document.getElementById("customBaseUrl").value.trim();
-  const modelId = document.getElementById("customModelId").value.trim();
-  const msg = document.getElementById("customMsg");
-  if (!baseUrl || !modelId) {
-    msg.className = "msg bad";
-    msg.textContent = "Base URL and Model ID are required";
-    return;
-  }
-  document.getElementById("ai2Provider").value = "custom";
-  document.getElementById("ai2BaseUrl").value = baseUrl;
-  onProviderChange("secondary", modelId);
-  await saveAi("secondary");
-  msg.className = "msg ok";
-  msg.textContent = "saved as secondary";
-};
 
 // ── Gmail ────────────────────────────────────────────────────────────────
 async function gmailAction(action) {

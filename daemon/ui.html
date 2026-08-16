@@ -82,8 +82,8 @@
         <div class="hint" style="margin-bottom:10px">Used for fast text tasks like categorization, normalization, and short explanations.</div>
         <div class="field">
           <label>Provider</label>
-          <input type="text" id="aiProviderSearch" placeholder="Filter providers…" style="margin-bottom:4px;font-size:13px">
-          <select id="aiProvider"></select>
+          <div class="provider-picker" id="aiProviderPicker"></div>
+          <select id="aiProvider" style="display:none"></select>
         </div>
         <div class="field" id="aiCustomUrlRow" style="display:none">
           <label>Base URL</label>
@@ -116,8 +116,8 @@
         <div class="hint" style="margin-bottom:10px">Used for image and document tasks like receipts, screenshots, and scanned statements.</div>
         <div class="field">
           <label>Provider</label>
-          <input type="text" id="ai2ProviderSearch" placeholder="Filter providers…" style="margin-bottom:4px;font-size:13px">
-          <select id="ai2Provider"></select>
+          <div class="provider-picker" id="ai2ProviderPicker"></div>
+          <select id="ai2Provider" style="display:none"></select>
         </div>
         <div class="field" id="ai2CustomUrlRow" style="display:none">
           <label>Base URL</label>
@@ -146,39 +146,6 @@
       </div>
   </div>
 
-  <!-- Custom provider (always last, clearly labeled as manual/unsupported) -->
-  <div class="panel" style="margin-top:7px" id="customProviderPanel">
-    <h3>Custom provider</h3>
-    <div class="hint" style="margin-bottom:10px;color:var(--warn)">No compatibility checks are performed for custom providers. Use this only if your provider isn't in the catalog above.</div>
-    <div class="settings-cols">
-      <div class="field">
-        <label>Display name</label>
-        <input type="text" id="customName" placeholder="My Provider">
-      </div>
-      <div class="field">
-        <label>Base URL</label>
-        <input type="text" id="customBaseUrl" placeholder="https://your-provider.com/v1">
-      </div>
-      <div class="field">
-        <label>API style</label>
-        <select id="customApiStyle">
-          <option value="openai">OpenAI-compatible</option>
-          <option value="anthropic">Anthropic</option>
-          <option value="gemini">Gemini</option>
-          <option value="ollama">Ollama</option>
-        </select>
-      </div>
-      <div class="field">
-        <label>Model ID</label>
-        <input type="text" id="customModelId" placeholder="model-id">
-      </div>
-    </div>
-    <div class="save-row">
-      <button class="act" id="customSavePrimary">Use as Primary</button>
-      <button class="act" id="customSaveSecondary">Use as Secondary</button>
-      <span class="msg" id="customMsg"></span>
-    </div>
-  </div>
 
   <div class="settings-cols" style="margin-top:7px">
       <div class="panel">

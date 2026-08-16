@@ -106,6 +106,7 @@ export function loadCatalog(): ProviderPreset[] {
       ...(pov?.tier !== undefined && { tier: pov.tier }),
       ...(pov?.name !== undefined && { name: pov.name }),
       ...(pov?.docsUrl !== undefined && { docsUrl: pov.docsUrl }),
+      ...(pov?.logoUrl !== undefined && { logoUrl: pov.logoUrl }),
     };
 
     // Merge existing models with overrides
