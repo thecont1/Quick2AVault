@@ -7,9 +7,10 @@
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
   }
   *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
   body{background:var(--bg);color:var(--ink);
        font:13.5px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
-       padding:0 0 80px}
+       padding:0;display:flex;flex-direction:column;overflow:hidden}
 
   /* ── top bar ──────────────────────────────────────────────────── */
   .topbar{background:var(--panel);border-bottom:1px solid var(--line);
@@ -23,14 +24,29 @@
 
   /* ── tabs ─────────────────────────────────────────────────────── */
   .tabs{display:flex;gap:0;background:var(--panel);border-bottom:1px solid var(--line);
-        padding:0 32px;overflow-x:auto}
+        padding:0 32px;overflow-x:auto;flex:0 0 auto}
   .tabs button{background:transparent;border:0;border-bottom:2px solid transparent;
                color:var(--dim);font:600 12px/1 -apple-system,sans-serif;letter-spacing:.3px;
                padding:11px 16px;cursor:pointer;white-space:nowrap}
   .tabs button:hover{color:var(--ink)}
   .tabs button.on{color:var(--blue);border-bottom-color:var(--blue)}
-  .tab{display:none;padding:24px 32px;max-width:1280px;margin:0 auto}
+  .tab{display:none;flex:1 1 auto;min-height:0;overflow-y:auto;padding:24px 32px;
+       max-width:1280px;margin:0 auto;width:100%}
   .tab.on{display:block}
+
+  /* ── Your Money: fixed viewport dashboard, no page scroll ───────
+     The whole tab is contained in the viewport; only the intake
+     queue scrolls (infinite scroll, 20 documents at a time). */
+  #tab-obs.on{display:flex;flex-direction:column;overflow:hidden}
+  #tab-obs.on>*{flex:0 0 auto;min-width:0}
+  #tab-obs.on>section:last-of-type{flex:1 1 auto;min-height:0;
+      display:flex;flex-direction:column;margin-bottom:0}
+  #tab-obs.on>section:last-of-type h2{flex:0 0 auto}
+  #tab-obs.on>section:last-of-type .board{flex:0 0 auto}
+  #tab-obs.on .pcols{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  #tab-obs.on .pcols>div{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+  #tab-obs.on .intake{flex:1 1 auto;min-height:0;max-height:none}
+  #tab-obs.on #card .card{max-height:200px;overflow-y:auto}
 
   /* ── period selector ──────────────────────────────────────────── */
   .periods{display:flex;gap:4px;margin-bottom:18px;flex-wrap:wrap}
@@ -422,7 +438,8 @@
              margin:0 0 6px;padding:4px 0;border-bottom:1px solid var(--line)}
   .dgroup>h4 .n{color:var(--faint);font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px}
 
-  footer{margin:34px 32px 0;padding-top:14px;border-top:1px solid var(--line);
+  footer{flex:0 0 auto;margin:10px 32px 12px;padding-top:12px;border-top:1px solid var(--line);
          font:10.5px var(--mono);color:var(--faint);max-width:1280px;margin-left:auto;margin-right:auto;
+         width:100%;
          text-align:center;display:flex;justify-content:center;align-items:center;gap:14px}
   footer a{color:#00e;text-decoration:underline}

@@ -129,32 +129,76 @@ function onDocumentReceived() {
   renderPipelineBoard();
 }
 
-async function refreshPipeline() {
-  const intake = await api("/v1/intake/status?limit=100");
-  const events = intake.events || [];
-  document.getElementById("intakeCount").textContent = events.length + " items";
-  // Rebuild counts from the authoritative server state.
-  pipelineCounts = {};
-  for (const e of events) pipelineCounts[e.processing_state] = (pipelineCounts[e.processing_state] || 0) + 1;
-  pipelineStalled = 0;
-  for (const e of events) if (e.stalled) pipelineStalled++;
-  renderPipelineBoard();
+// ── intake queue: infinite scroll, 20 at a time ─────────────────
+// The queue keeps loading pages until the very first document ever
+// ingested is on screen. The box itself scrolls inside the viewport.
+const INTAKE_PAGE = 20;
+let intakeOffset = 0;
+let intakeTotal = null;
+let intakeLoading = false;
+let intakeExhausted = false;
 
+function intakeRowHtml(e) {
+  const state = esc(e.processing_state);
+  const err = e.last_error ? "<span class='err'>" + esc(e.last_error) + "</span>" : "";
+  const stall = e.stalled ? "  <span class='stall'>STALLED</span>" : "";
+  const retry = e.retry_count ? "  · retry " + esc(e.retry_count) : "";
+  const docLink = e.document_id ? "  · doc " + esc(String(e.document_id).slice(0, 12)) : "";
+  const meta = "<div class='meta'>" + esc(e.kind) + " · " + esc(e.source) + retry
+    + docLink + (err ? "  · " + err : "") + stall + "</div>";
+  return "<div class='irow'>"
+    + "<div><div class='fn'>" + esc(e.filename) + "</div>" + meta + "</div>"
+    + "<span class='pill " + state + "'>" + state + "</span>"
+    + "<span class='age'>" + ago(e.updated_at || e.created_at) + "</span></div>";
+}
+
+async function loadIntakePage(append) {
+  if (intakeLoading || intakeExhausted) return;
+  intakeLoading = true;
+  try {
+    const d = await api("/v1/intake/status?limit=" + INTAKE_PAGE + "&offset=" + intakeOffset);
+    const events = d.events || [];
+    intakeTotal = d.total ?? null;
+    const box = document.getElementById("intake");
+    if (append) {
+      box.insertAdjacentHTML("beforeend", events.map(intakeRowHtml).join(""));
+    } else {
+      box.innerHTML = events.length
+        ? events.map(intakeRowHtml).join("")
+        : "<div class='empty'>No intake events yet.</div>";
+    }
+    intakeOffset += events.length;
+    if (!events.length || (intakeTotal !== null && intakeOffset >= intakeTotal)) intakeExhausted = true;
+  } finally {
+    intakeLoading = false;
+  }
+}
+
+function bindIntakeScroll() {
   const box = document.getElementById("intake");
-  if (!events.length) { box.innerHTML = "<div class='empty'>No intake events yet.</div>"; return; }
-  box.innerHTML = events.map((e) => {
-    const state = esc(e.processing_state);
-    const err = e.last_error ? "<span class='err'>" + esc(e.last_error) + "</span>" : "";
-    const stall = e.stalled ? "  <span class='stall'>STALLED</span>" : "";
-    const retry = e.retry_count ? "  · retry " + esc(e.retry_count) : "";
-    const docLink = e.document_id ? "  · doc " + esc(String(e.document_id).slice(0, 12)) : "";
-    const meta = "<div class='meta'>" + esc(e.kind) + " · " + esc(e.source) + retry
-      + docLink + (err ? "  · " + err : "") + stall + "</div>";
-    return "<div class='irow'>"
-      + "<div><div class='fn'>" + esc(e.filename) + "</div>" + meta + "</div>"
-      + "<span class='pill " + state + "'>" + state + "</span>"
-      + "<span class='age'>" + ago(e.updated_at || e.created_at) + "</span></div>";
-  }).join("");
+  if (!box || box.dataset.infinite) return;
+  box.dataset.infinite = "1";
+  box.addEventListener("scroll", () => {
+    if (box.scrollTop + box.clientHeight >= box.scrollHeight - 80) {
+      loadIntakePage(true);
+    }
+  });
+}
+
+async function refreshPipeline() {
+  // Reset the queue to page 0. Counts come from the authoritative server
+  // state covering the WHOLE intake table, not just the visible page.
+  intakeOffset = 0;
+  intakeExhausted = false;
+  intakeLoading = false;
+  const intake = await api("/v1/intake/status?limit=" + INTAKE_PAGE + "&offset=0");
+  const counts = intake.counts || {};
+  pipelineCounts = {};
+  for (const k of Object.keys(counts)) pipelineCounts[k] = counts[k];
+  pipelineStalled = intake.stalled || 0;
+  renderPipelineBoard();
+  bindIntakeScroll();
+  await loadIntakePage(false);
 }
 
 // ── live event stream ────────────────────────────────────────────

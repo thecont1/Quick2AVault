@@ -3065,6 +3065,8 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         // actionable failure/retry information. The UI should not infer
         // completion from individual JobStateChanged events.
         case "/v1/intake/status": {
+          const limit = Number(url.searchParams.get("limit") ?? 100);
+          const offset = Number(url.searchParams.get("offset") ?? 0);
           const rows = db
             .prepare(
               `SELECT id, filename, source, kind, processing_state,
@@ -3072,9 +3074,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                       stage_started_at, heartbeat_at, finished_at,
                       created_at, updated_at, document_id, reason_code, reason
                  FROM intake_events
-                 ORDER BY id DESC LIMIT ?`,
+                 ORDER BY id DESC LIMIT ? OFFSET ?`,
             )
-            .all(Number(url.searchParams.get("limit") ?? 100)) as Record<string, unknown>[];
+            .all(limit, offset) as Record<string, unknown>[];
           // Work order 07 §B3: stall detection. An item whose heartbeat is
           // stale relative to the current time is marked as stalled.
           const now = ports.clock.isoNow();
@@ -3087,7 +3089,20 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               Date.parse(now) - Date.parse(hb) > STALL_THRESHOLD_MS;
             return { ...r, stalled };
           });
-          return send(res, 200, { events: enriched });
+          // Pipeline board counts and stall totals cover the WHOLE table —
+          // pagination must not skew the state cells or hide stalled work.
+          const countRows = db
+            .prepare("SELECT processing_state AS state, COUNT(*) AS n FROM intake_events GROUP BY processing_state")
+            .all() as { state: string; n: number }[];
+          const counts: Record<string, number> = {};
+          for (const c of countRows) counts[c.state] = c.n;
+          const stalledTotal = (db
+            .prepare("SELECT heartbeat_at FROM intake_events WHERE processing_state='processing' AND heartbeat_at IS NOT NULL")
+            .all() as { heartbeat_at: string }[]).filter(
+            (r) => Date.parse(now) - Date.parse(r.heartbeat_at) > STALL_THRESHOLD_MS,
+          ).length;
+          const total = (db.prepare("SELECT COUNT(*) AS n FROM intake_events").get() as { n: number }).n;
+          return send(res, 200, { events: enriched, counts, stalled: stalledTotal, total, offset, limit });
         }
 
         // Work order 06 §9 — irrelevant items only, for the Irrelevant view.

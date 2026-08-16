@@ -224,7 +224,18 @@ export function recordTransaction(
   if (x.doc_type === "irrelevant" || x.amount_minor === null || x.amount_minor <= 0) return null;
 
   const before = (db.prepare("SELECT COUNT(*) n FROM entities").get() as { n: number }).n;
-  const occurred = x.occurred_at ?? ports.clock.isoNow().slice(0, 10);
+  // The ledger must never invent a transaction date. "Today" is the
+  // ingestion date, not the economic date — stamping it here would break
+  // financial-year attribution. A document whose date cannot be read stays
+  // unrecorded (visible for review) until a pass extracts it.
+  if (!x.occurred_at) {
+    ports.logger.warn("recordTransaction: missing occurred_at — not recording", {
+      document_id: documentId,
+      doc_type: x.doc_type,
+    });
+    return null;
+  }
+  const occurred = x.occurred_at;
 
   // ── the wallet rule ───────────────────────────────────────────────────────
   // A top-up moves money between two accounts I own. There is no counterparty

@@ -1041,7 +1041,14 @@ export async function runConvertJob(db: DatabaseSync, ports: Ports, jobId: numbe
     if (conv === null) throw new Error(`conversion returned null for ${doc.ext}`);
     const md = conv.markdown;
 
-  const mdDir = ports.paths.markdownDir(dateKey(ports.clock.now()));
+  // Markdown must live under the same date the RAW file is stored under.
+  // First conversion: that is the ingestion date (the transaction date is
+  // not known yet — the post-analysis re-file moves both). Reprocess: the
+  // raw has already been re-filed under the transaction date, so the fresh
+  // markdown lands there immediately and no re-file is needed.
+  const rawDay = path.basename(path.dirname(doc.raw_path));
+  const mdDay = /^\d{4}-\d{2}-\d{2}$/.test(rawDay) ? rawDay : dateKey(ports.clock.now());
+  const mdDir = ports.paths.markdownDir(mdDay);
   // Mirror the original filename so Markdown/ is browsable alongside Raw/.
   const stem = path.basename(doc.original_filename, path.extname(doc.original_filename));
   const mdPath = await uniquePath(mdDir, `${stem}.md`);
@@ -1246,6 +1253,28 @@ async function refileByEconomicDate(
       document_id: documentId,
       err: (err as Error)?.message,
     });
+  }
+}
+
+/**
+ * Re-file using the most recent occurred_at already on record, if any.
+ * Used when an extraction attempt FAILS: the transaction date from a
+ * previous successful pass still governs where the archive must live.
+ */
+async function refileByKnownEconomicDate(
+  db: DatabaseSync,
+  ports: Ports,
+  documentId: string,
+): Promise<void> {
+  const row = db
+    .prepare("SELECT extraction_json FROM documents WHERE id=?")
+    .get(documentId) as { extraction_json: string | null } | undefined;
+  if (!row?.extraction_json) return;
+  try {
+    const prev = JSON.parse(row.extraction_json) as { occurred_at?: string | null };
+    if (prev?.occurred_at) await refileByEconomicDate(db, ports, documentId, prev.occurred_at);
+  } catch {
+    /* unreadable extraction — nothing to re-file by */
   }
 }
 
@@ -1593,8 +1622,49 @@ export async function runAnalyseJob(
     // Extraction failure must not corrupt the ledger — the document stays in
     // the vault, unanalysed, and can be retried or reviewed.
     db.prepare("UPDATE documents SET analysed_at=? WHERE id=?").run(now, documentId);
+    // Storage still respects the transaction date we already know from a
+    // previous successful pass — a failed reprocess must not strand the
+    // archive under the ingestion date.
+    await refileByKnownEconomicDate(db, ports, documentId);
     ports.logger.warn("analyse: extraction returned nothing", { document_id: documentId });
     return;
+  }
+
+  // Never lose the transaction date across reprocesses: if this pass failed
+  // to read a date but a previous pass had one, carry the earlier date
+  // forward. The date is printed on the document and cannot have changed.
+  if (!x.occurred_at) {
+    const prev = (db
+      .prepare("SELECT extraction_json FROM documents WHERE id=?")
+      .get(documentId) as { extraction_json: string | null } | undefined)?.extraction_json;
+    if (prev) {
+      try {
+        const old = JSON.parse(prev) as { occurred_at?: string | null };
+        if (old?.occurred_at) x.occurred_at = old.occurred_at;
+      } catch {
+        /* unreadable previous extraction */
+      }
+    }
+    // Second source: the deterministic typed extraction's own date claim.
+    // It parses the same markdown without a model, so it is the most
+    // reliable date in the vault. Confirmed (user-edited) claims win.
+    if (!x.occurred_at) {
+      const claim = db
+        .prepare(
+          `SELECT value FROM field_claims
+            WHERE subject_type='document' AND subject_id=? AND field='document_date'
+              AND status IN ('proposed','confirmed')
+            ORDER BY (status='confirmed') DESC, id DESC LIMIT 1`,
+        )
+        .get(documentId) as { value: string } | undefined;
+      if (claim?.value) x.occurred_at = claim.value;
+    }
+    if (x.occurred_at) {
+      ports.logger.info("analyse: carried forward transaction date", {
+        document_id: documentId,
+        occurred_at: x.occurred_at,
+      });
+    }
   }
 
   // markdown_hash is recorded against the text the model ACTUALLY read, not
@@ -1621,6 +1691,13 @@ export async function runAnalyseJob(
   // Second index pass: the reading now exists, so the six questions become
   // searchable alongside the document text.
   indexDocument(db, documentId, markdown, flattenExtraction(x));
+
+  // File the archive under the ECONOMIC date now that we know it, so Finder
+  // folders match how the user thinks about their documents. Every analysed
+  // document re-files — statements and no-money documents included.
+  if (x.occurred_at) {
+    await refileByEconomicDate(db, ports, documentId, x.occurred_at);
+  }
 
   ports.bus.publish({
     type: "AnalysisComplete",
@@ -1684,12 +1761,6 @@ export async function runAnalyseJob(
   if (x.doc_type === "irrelevant" || x.amount_minor === null) {
     ports.logger.info("analyse: no money movement", { document_id: documentId, doc_type: x.doc_type });
     return;
-  }
-
-  // File the archive under the ECONOMIC date now that we know it, so Finder
-  // folders match how the user thinks about their documents.
-  if (x.occurred_at) {
-    await refileByEconomicDate(db, ports, documentId, x.occurred_at);
   }
 
   // ── the money shot: match before recording ──────────────────────────────
