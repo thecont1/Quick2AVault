@@ -15,6 +15,20 @@ async function loadReview() {
   // reference a removed card.
   collapseOpenDoc();
   const gen = ++reviewLoadGen;
+  // The Duplicate board cell shows the duplicate archive instead of the
+  // documents list — duplicates are intake items, not documents. The
+  // archive is lifetime, so the period buttons don't apply (hide them).
+  const periodsRow = document.getElementById("periodsReview");
+  if (pipelineFilter === "duplicate") {
+    if (periodsRow) periodsRow.style.display = "none";
+    renderDuplicatesInto(document.getElementById("docList"), {
+      gen,
+      labelEl: document.getElementById("docCount"),
+      labelPrefix: "· ",
+    });
+    return;
+  }
+  if (periodsRow) periodsRow.style.display = "";
   let url = "/v1/documents?period=" + encodeURIComponent(period) + "&limit=500";
   if (pipelineFilter) url += "&state=" + encodeURIComponent(pipelineFilter);
   const d = await api(url);
@@ -89,6 +103,65 @@ function toggleDoc(row, id) {
   showDoc(id, slot);
 }
 
+// ── duplicate archive renderer (shared by Documents Browser + Your Money) ─
+// Duplicates are byte-identical re-arrivals set aside by the sha256 guard —
+// intake items, not documents. Each row shows the duplicated filename, the
+// copy span and whether the linked original is alive; clicking a row opens
+// the original document (via the pinned slot when the list filter hides it).
+async function renderDuplicatesInto(container, opts = {}) {
+  if (!container) return;
+  let d = null;
+  try {
+    d = await api("/v1/maintenance/duplicates");
+  } catch {
+    // d stays null — the empty state below explains itself
+  }
+  if (opts.gen !== undefined && opts.gen !== reviewLoadGen) return;
+  const groups = (d && d.groups) || [];
+  const total = (d && d.total_copies) || 0;
+  if (opts.labelEl) {
+    opts.labelEl.textContent = (opts.labelPrefix || "") + groups.length + " group" + (groups.length === 1 ? "" : "s")
+      + " · " + total + " cop" + (total === 1 ? "y" : "ies");
+  }
+  if (!groups.length) {
+    container.innerHTML = "<div class='empty'>No duplicates — every arrival is unique.</div>";
+    return;
+  }
+  let html = opts.hint !== false
+    ? "<div class='empty dup-hint'>Byte-identical re-arrivals set aside by the sha256 guard. Click a row to open the linked original. Flush: Settings → Duplicate documents.</div>"
+    : "";
+  for (const g of groups) {
+    const files = g.files || [];
+    const first = files.length ? String(files[files.length - 1].created_at).slice(0, 10) : "?";
+    const last = files.length ? String(files[0].created_at).slice(0, 10) : "?";
+    // Only an active original can be opened (the detail endpoint serves
+    // active docs; removed -> 404, deleted -> 410 by design). Deleted
+    // originals are restorable via reprocess — hence the hint.
+    const lc = g.document_lifecycle || null;
+    const orphan = !g.document_id || lc !== "active";
+    const linkNote = !g.document_id
+      ? " · <span class='err'>no live document</span>"
+      : lc === "deleted"
+        ? " · <span class='err'>original deleted · reprocess restores</span>"
+        : lc === "removed"
+          ? " · <span class='err'>original removed</span>"
+          : " · original linked";
+    html += "<div class='drow" + (orphan ? " orphan" : "") + "' data-id='" + (orphan ? "" : esc(g.document_id || "")) + "'>"
+      + "<div><div class='fn'>" + esc(g.original_filename || (files[0] || {}).filename || "unknown") + "</div>"
+      + "<div class='meta'>" + esc(String(g.sha256).slice(0, 12)) + "… · " + g.copies + " cop" + (g.copies === 1 ? "y" : "ies")
+      + " · " + esc(first) + " → " + esc(last)
+      + linkNote + "</div></div>"
+      + "<span class='kind'>" + esc(g.copies) + "×</span>"
+      + "<span class='dt'>" + esc(last) + "</span></div>";
+  }
+  container.innerHTML = html;
+  container.querySelectorAll(".drow").forEach((el) => {
+    el.onclick = () => {
+      if (el.dataset.id) openDocumentDirect(el.dataset.id);
+    };
+  });
+}
+
 // Refresh the open document's detail when a pipeline state change arrives
 // via SSE — this is how the user sees reprocessing progress.
 function refreshOpenDocIfMatch(docId) {
@@ -107,7 +180,9 @@ function refreshOpenDocIfMatch(docId) {
 // no matter which scope they were in.
 function openDocumentDirect(id) {
   const tabBtn = document.querySelector('.tabs button[data-tab="review"]');
-  if (tabBtn) tabBtn.click();
+  // Re-clicking the active tab would re-run loadReview and wipe any detail
+  // slot we are about to open — only switch when we are elsewhere.
+  if (tabBtn && !tabBtn.classList.contains("on")) tabBtn.click();
   const tryRow = () => {
     const row = document.querySelector("#docList .drow[data-id='" + CSS.escape(id) + "']");
     if (row) { toggleDoc(row, id); return true; }

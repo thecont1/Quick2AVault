@@ -329,28 +329,20 @@ async function loadSettings() {
 // ── Duplicate flush ──────────────────────────────────────────────
 async function loadDuplicates() {
   const summary = document.getElementById("dupSummary");
-  const list = document.getElementById("dupList");
   const btn = document.getElementById("dupFlushBtn");
-  if (!summary || !list) return;
+  if (!summary) return;
   try {
     const d = await api("/v1/maintenance/duplicates");
     const groups = d.groups || [];
     const copies = d.total_copies || 0;
     if (!groups.length) {
       summary.textContent = "No duplicates — clean.";
-      list.innerHTML = "";
       if (btn) btn.disabled = true;
       return;
     }
-    summary.textContent = copies + " duplicate copies across " + groups.length + " groups. Re-delivered attachments (e.g. after a hard Gmail resync) land here; originals stay untouched.";
-    list.innerHTML = groups.map((g) =>
-      "<div class='irow'>"
-      + "<div><div class='fn'>" + esc(g.original_filename || (g.files[0] || {}).filename || "unknown") + "</div>"
-      + "<div class='meta'>" + esc(String(g.sha256).slice(0, 12)) + "… · " + g.copies + " cop" + (g.copies > 1 ? "ies" : "y")
-      + (g.document_id ? "" : " · <span class='err'>no live document</span>") + "</div></div>"
-      + "<span class='pill archived'>duplicate</span>"
-      + "<span class='age'>" + ago((g.files[0] || {}).created_at) + "</span></div>"
-    ).join("");
+    summary.textContent = copies + " duplicate copies across " + groups.length + " groups. "
+      + "Re-delivered attachments (e.g. after a hard Gmail resync) land here; originals stay untouched. "
+      + "Review the archive in Documents Browser or Your Money → Duplicates.";
     if (btn) btn.disabled = false;
   } catch (e) {
     summary.textContent = "could not load duplicates: " + String(e.message || e);

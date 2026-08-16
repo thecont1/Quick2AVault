@@ -58,8 +58,8 @@ const STATES = [
   { k: "stable", label: "Stable", cls: "active" },
   { k: "hashed", label: "Hashed", cls: "active" },
   { k: "triaged", label: "Triaged", cls: "active" },
-  { k: "queued", label: "Queued", cls: "active" },
-  { k: "processing", label: "Processing", cls: "active" },
+  { k: "converting", label: "Converting", cls: "active" },
+  { k: "analysing", label: "Analysing", cls: "active" },
   { k: "complete", label: "Complete", cls: "complete" },
   { k: "failed", label: "Failed", cls: "failed" },
   { k: "duplicate", label: "Duplicate", cls: "duplicate term" },
@@ -137,9 +137,11 @@ function renderPipelineBoard() {
     footer.textContent = lifetime + " processed lifetime";
   }
 
-  // Documents Browser board — each cell is a clickable filter.
+  // Documents Browser board — each cell is a clickable filter. Counts come
+  // from the document-pipeline states (the same vocabulary as the dashboard
+  // tower and the SSE events), so both boards always agree.
   const reviewHtml = STATES.map((st) => {
-    const n = pipelineCounts[st.k] || 0;
+    const n = pipelineDocCounts[st.k] || 0;
     const sel = pipelineFilter === st.k ? " selected" : "";
     return "<div class='state clickable " + esc(st.cls) + sel + "' data-state='" + esc(st.k) + "'>"
       + "<div class='k'>" + esc(st.label) + "</div>"
@@ -267,6 +269,16 @@ function scopeLabel() {
 async function renderScopeList() {
   const box = document.getElementById("scopeList");
   if (!box) return;
+  if (docScope.state === "duplicate") {
+    // The Duplicate cell shows the duplicate archive — byte-identical
+    // re-arrivals set aside by the sha256 guard (intake items, not
+    // documents). Rows drill into the linked original document.
+    renderDuplicatesInto(box, {
+      labelEl: document.getElementById("scopeLabel"),
+      labelPrefix: "Duplicate · ",
+    });
+    return;
+  }
   const url = "/v1/documents?limit=500&sort=received"
     + "&period=" + encodeURIComponent(period)
     + (docScope.state ? "&state=" + encodeURIComponent(docScope.state) : "")
@@ -286,11 +298,7 @@ async function renderScopeList() {
       + " document" + (docs.length === 1 ? "" : "s");
   }
   if (!docs.length) {
-    box.innerHTML = "<div class='empty'>No documents in this scope."
-      + (docScope.state === "duplicate" || docScope.state === "irrelevant"
-        ? " Duplicate and irrelevant copies are intake items, not documents — flush duplicates from Settings."
-        : "")
-      + "</div>";
+    box.innerHTML = "<div class='empty'>No documents in this scope.</div>";
     return;
   }
   box.innerHTML = docs.map((x) => {

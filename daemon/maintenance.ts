@@ -26,6 +26,7 @@ export interface DuplicateGroup {
   sha256: string;
   original_filename: string | null;
   document_id: string | null;
+  document_lifecycle: string | null;
   copies: number;
   files: { filename: string; created_at: string }[];
 }
@@ -34,7 +35,8 @@ export function listDuplicateGroups(db: DatabaseSync): DuplicateGroup[] {
   const rows = db
     .prepare(
       `SELECT i.sha256, i.filename, i.created_at,
-              d.original_filename AS original_filename, d.id AS document_id
+              d.original_filename AS original_filename, d.id AS document_id,
+              d.lifecycle AS document_lifecycle
          FROM intake_events i
          LEFT JOIN documents d ON d.sha256 = i.sha256
         WHERE i.kind='duplicate' AND i.sha256 IS NOT NULL
@@ -46,6 +48,7 @@ export function listDuplicateGroups(db: DatabaseSync): DuplicateGroup[] {
     created_at: string;
     original_filename: string | null;
     document_id: string | null;
+    document_lifecycle: string | null;
   }[];
 
   const groups = new Map<string, DuplicateGroup>();
@@ -56,6 +59,7 @@ export function listDuplicateGroups(db: DatabaseSync): DuplicateGroup[] {
         sha256: r.sha256,
         original_filename: r.original_filename,
         document_id: r.document_id,
+        document_lifecycle: r.document_lifecycle,
         copies: 0,
         files: [],
       };
