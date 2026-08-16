@@ -71,7 +71,7 @@ export class CredentialManager {
    * Returns null if no key is set.
    */
   async getMaskedKey(providerId: string): Promise<string | null> {
-    const key = await this.secrets.get(keyPrefix + providerId);
+    const key = (await this.secrets.get(keyPrefix + providerId))?.trim() ?? "";
     if (!key) return null;
     if (key.length <= 8) return "****";
     return `${key.slice(0, 4)}…${key.slice(-4)}`;

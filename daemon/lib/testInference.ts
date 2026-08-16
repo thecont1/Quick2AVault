@@ -53,8 +53,11 @@ export async function testInference(
 
     // Standard chat completion test
     const isAnthropic = provider.apiStyle === "anthropic";
+    // Anthropic catalog baseUrls already end in /v1, so appending /v1/messages
+    // again would produce /v1/v1/messages. Strip a trailing /v1 for Anthropic
+    // only; OpenAI-style providers keep their baseUrl verbatim.
     const url = isAnthropic
-      ? `${provider.baseUrl.replace(/\/$/, "")}/v1/messages`
+      ? `${provider.baseUrl.replace(/\/$/, "").replace(/\/v1$/, "")}/v1/messages`
       : `${provider.baseUrl.replace(/\/$/, "")}/chat/completions`;
 
     const headers: Record<string, string> = {

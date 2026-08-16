@@ -58,6 +58,14 @@ const dataDir = () =>
 let cachedCatalog: ProviderPreset[] | null = null;
 
 /**
+ * Default capabilities for models added via overrides (not present in the
+ * generated catalog). An all-false default would make every such model
+ * ineligible for every slot, which is never what "I added this model" means.
+ * Vision stays opt-in; chat+json is the safe common case.
+ */
+const DEFAULT_CAPABILITIES: ModelCapabilities = { chat: true, json: true, vision: false };
+
+/**
  * Load and merge the generated catalog with overrides.
  * Result is cached for the lifetime of the process.
  *
@@ -72,9 +80,18 @@ export function loadCatalog(): ProviderPreset[] {
   const generatedPath = path.join(dataDir(), "catalog.generated.json");
   const overridesPath = path.join(dataDir(), "catalog.overrides.json");
 
-  const generated = JSON.parse(
-    fs.readFileSync(generatedPath, "utf-8"),
-  ) as GeneratedCatalog;
+  let generated: GeneratedCatalog = { providers: [] };
+  try {
+    generated = JSON.parse(
+      fs.readFileSync(generatedPath, "utf-8"),
+    ) as GeneratedCatalog;
+  } catch (err) {
+    // A missing or truncated generated catalog must not brick the settings and
+    // inference paths — start with an empty provider list and let the settings
+    // page report the fault instead of throwing on every caller.
+    console.error(`catalog: could not read ${generatedPath}`, err);
+  }
+  if (!Array.isArray(generated.providers)) generated.providers = [];
 
   let overrides: OverridesMap = {};
   try {
@@ -138,7 +155,7 @@ export function loadCatalog(): ProviderPreset[] {
         id: modelId,
         displayName: ov.displayName ?? modelId,
         providerId: provider.id,
-        capabilities: ov.capabilities ?? { chat: false, json: false, vision: false },
+        capabilities: ov.capabilities ?? DEFAULT_CAPABILITIES,
         trust: ov.trust ?? "community",
         ...(ov.jurisdictionTags !== undefined && { jurisdictionTags: ov.jurisdictionTags }),
         ...(ov.notes !== undefined && { notes: ov.notes }),
@@ -168,7 +185,7 @@ export function loadCatalog(): ProviderPreset[] {
           id: m.id,
           displayName: m.displayName ?? m.id,
           providerId: key,
-          capabilities: m.capabilities ?? { chat: false, json: false, vision: false },
+          capabilities: m.capabilities ?? DEFAULT_CAPABILITIES,
           trust: m.trust ?? "community",
           ...(m.jurisdictionTags !== undefined && { jurisdictionTags: m.jurisdictionTags }),
           ...(m.notes !== undefined && { notes: m.notes }),

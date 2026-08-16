@@ -4,7 +4,7 @@
  * Old shape (app_settings + SecretStore):
  *   ai.base_url, ai.model, ai.api_key (or ai.api_key.<providerId>)
  *   ai.secondary.base_url, ai.secondary.model, ai.secondary.api_key
- *   (or ai.secondary.api_key.<providerId>)
+ *   (or ai.secondary_api_key.<providerId>)
  *
  * New shape:
  *   inference.primary = SlotConfig { providerId, modelId }
@@ -91,18 +91,30 @@ async function readOldSettings(
     return row?.value;
   };
 
+  const primaryBaseUrl = get("ai.base_url");
+  const secondaryBaseUrl = get("ai.secondary.base_url");
+  const primaryProviderId = providerIdFromBaseUrl(primaryBaseUrl ?? "");
+  const secondaryProviderId = providerIdFromBaseUrl(secondaryBaseUrl ?? "");
+
+  // Flat key first, then the per-provider key the old UI wrote for the
+  // provider this slot pointed at (ai.api_key.<pid> / ai.secondary_api_key.<pid>).
+  // Without the fallback, per-provider credentials are silently dropped.
   const primaryApiKey =
-    (await secrets.get("ai.api_key")) ?? undefined;
+    (await secrets.get("ai.api_key"))
+    ?? (await secrets.get(`ai.api_key.${primaryProviderId}`))
+    ?? undefined;
   const secondaryApiKey =
-    (await secrets.get("ai.secondary.api_key")) ?? undefined;
+    (await secrets.get("ai.secondary.api_key"))
+    ?? (await secrets.get(`ai.secondary_api_key.${secondaryProviderId}`))
+    ?? undefined;
 
   return {
-    primaryBaseUrl: get("ai.base_url"),
+    primaryBaseUrl,
     primaryModel: get("ai.model"),
-    primaryApiKey: primaryApiKey ?? undefined,
-    secondaryBaseUrl: get("ai.secondary.base_url"),
+    primaryApiKey,
+    secondaryBaseUrl,
     secondaryModel: get("ai.secondary.model"),
-    secondaryApiKey: secondaryApiKey ?? undefined,
+    secondaryApiKey,
   };
 }
 

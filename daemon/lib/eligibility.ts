@@ -56,8 +56,14 @@ export function eligibleModels(
     (m) => !m.jurisdictionTags || m.jurisdictionTags.includes(jurisdiction),
   );
 
+  const trustRank: Record<ModelRecord["trust"], number> = {
+    verified: 0,
+    community: 1,
+    unverified: 2,
+  };
   const trustSort = (a: ModelRecord, b: ModelRecord) => {
-    if (a.trust !== b.trust) return a.trust === "verified" ? -1 : 1;
+    const t = trustRank[a.trust] - trustRank[b.trust];
+    if (t !== 0) return t;
     return a.displayName.localeCompare(b.displayName);
   };
 
