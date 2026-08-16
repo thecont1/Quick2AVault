@@ -38,6 +38,13 @@ import {
 import { resolveEntity } from "./ledger.js";
 import { rebuildSearchIndex, searchDocuments, removeFromIndex } from "./search.js";
 import { activeDocumentSql, activeTransactionSql, isActive, listableDocumentSql } from "./lifecycle.js";
+import { loadCatalog, findProvider, findModel } from "./lib/catalog.js";
+import { eligibleModels } from "./lib/eligibility.js";
+import { CredentialManager } from "./lib/credentials.js";
+import { suggestDefaults, hasSuggestions } from "./lib/suggestDefaults.js";
+import { readSlotConfig, writeSlotConfig, migrateInferenceSettings } from "./lib/migrateInferenceSettings.js";
+import { testInference } from "./lib/testInference.js";
+import { PROVIDER_ALIASES, searchProviderIds } from "./data/providerAliases.js";
 import {
   backfillEmbeddings,
   hybridSearch,
@@ -1410,6 +1417,179 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
       // 0600 file elsewhere) so they are never stored as plaintext in the
       // SQLite database. The API key is NEVER returned — only whether one is
       // set, and its last 4 characters for recognition.
+      // ── Inference catalog ─────────────────────────────────────────────
+      // Returns the full provider catalog (merged with overrides) plus
+      // eligibility-filtered model lists for each slot.
+      if (p === "/v1/settings/catalog" && req.method === "GET") {
+        const catalog = loadCatalog();
+        const jurId = (db
+          .prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'")
+          .get() as { value?: string } | undefined)?.value ?? "IN";
+
+        // Build credential records for all providers
+        const credMgr = secrets ? new CredentialManager(secrets) : null;
+        const providerIds = catalog.map((p) => p.id);
+        const credRecords = credMgr
+          ? await credMgr.getRecords(providerIds)
+          : {};
+
+        // Build provider name map for search
+        const providerNames: Record<string, string> = {};
+        for (const p of catalog) providerNames[p.id] = p.name;
+
+        return send(res, 200, {
+          providers: catalog,
+          credentials: credRecords,
+          jurisdiction: jurId,
+          suggestions: {
+            primary: suggestDefaults(jurId, "primary"),
+            secondary: suggestDefaults(jurId, "secondary"),
+            hasAny: hasSuggestions(jurId),
+          },
+          aliases: PROVIDER_ALIASES,
+        });
+      }
+
+      // ── Inference slot config ─────────────────────────────────────────
+      // GET: returns the current SlotConfig for both slots + credential state
+      if (p === "/v1/settings/inference" && req.method === "GET") {
+        const jurId = (db
+          .prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'")
+          .get() as { value?: string } | undefined)?.value ?? "IN";
+
+        const primary = readSlotConfig(db, "primary");
+        const secondary = readSlotConfig(db, "secondary");
+
+        const credMgr = secrets ? new CredentialManager(secrets) : null;
+        const providerIds = [
+          ...(primary ? [primary.providerId] : []),
+          ...(secondary ? [secondary.providerId] : []),
+        ];
+        const credRecords = credMgr
+          ? await credMgr.getRecords(providerIds)
+          : {};
+
+        return send(res, 200, {
+          primary,
+          secondary,
+          credentials: credRecords,
+          jurisdiction: jurId,
+          suggestions: {
+            primary: suggestDefaults(jurId, "primary"),
+            secondary: suggestDefaults(jurId, "secondary"),
+            hasAny: hasSuggestions(jurId),
+          },
+        });
+      }
+
+      // POST: save inference slot config + optionally set API key
+      if (p === "/v1/settings/inference" && req.method === "POST") {
+        const b = await readJson(req);
+        const credMgr = secrets ? new CredentialManager(secrets) : null;
+        const saved: string[] = [];
+        const cleared: string[] = [];
+
+        if (b.primary) {
+          const p = b.primary as unknown as { providerId: string; modelId: string; baseUrlOverride?: string };
+          if (typeof p.providerId === "string") {
+            writeSlotConfig(db, "primary", {
+              providerId: p.providerId,
+              modelId: p.modelId,
+              baseUrlOverride: p.baseUrlOverride,
+            });
+            saved.push("primary");
+          }
+        }
+        if (b.secondary) {
+          const s = b.secondary as unknown as { providerId: string; modelId: string; baseUrlOverride?: string };
+          if (typeof s.providerId === "string") {
+            writeSlotConfig(db, "secondary", {
+              providerId: s.providerId,
+              modelId: s.modelId,
+              baseUrlOverride: s.baseUrlOverride,
+            });
+            saved.push("secondary");
+          }
+        }
+
+        // Handle API key set/clear per provider
+        if (b.api_key && typeof b.api_key === "object") {
+          const { providerId, key } = b.api_key as { providerId: string; key: string };
+          if (credMgr) {
+            if (key) {
+              await credMgr.setKey(providerId, key);
+              saved.push(`api_key:${providerId}`);
+            } else {
+              await credMgr.removeKey(providerId);
+              cleared.push(`api_key:${providerId}`);
+            }
+          }
+        }
+
+        // Reconfigure the AI provider if the primary or secondary changed
+        if (ai && (saved.includes("primary") || saved.includes("secondary") || saved.some(s => s.startsWith("api_key:")) || cleared.some(s => s.startsWith("api_key:")))) {
+          const newPrimary = readSlotConfig(db, "primary");
+          const newSecondary = readSlotConfig(db, "secondary");
+          const catalog = loadCatalog();
+          const primProvider = newPrimary ? findProvider(catalog, newPrimary.providerId) : undefined;
+          const primModel = newPrimary && primProvider ? findModel(catalog, primProvider.id, newPrimary.modelId) : undefined;
+          const secProvider = newSecondary ? findProvider(catalog, newSecondary.providerId) : undefined;
+          const secModel = newSecondary && secProvider ? findModel(catalog, secProvider.id, newSecondary.modelId) : undefined;
+
+          const primKey = newPrimary && credMgr ? await credMgr.getKey(newPrimary.providerId) : "";
+          const secKey = newSecondary && credMgr ? await credMgr.getKey(newSecondary.providerId) : "";
+
+          ai.reconfigure({
+            apiKey: primKey ?? "",
+            baseUrl: primProvider?.baseUrl ?? newPrimary?.baseUrlOverride ?? "",
+            model: primModel?.id ?? newPrimary?.modelId ?? "",
+            secondaryApiKey: secKey ?? "",
+            secondaryBaseUrl: secProvider?.baseUrl ?? newSecondary?.baseUrlOverride ?? "",
+            secondaryModel: secModel?.id ?? newSecondary?.modelId ?? "",
+            routingMode: "auto",
+          });
+        }
+
+        return send(res, 200, { saved, cleared, ai_available: ai.available });
+      }
+
+      // ── Inference test ────────────────────────────────────────────────
+      if (p === "/v1/settings/inference/test" && req.method === "POST") {
+        const b = await readJson(req);
+        const slot = (b.slot as "primary" | "secondary") ?? "primary";
+        const config = readSlotConfig(db, slot);
+        if (!config) {
+          return send(res, 200, {
+            success: false,
+            error: "not_configured",
+            errorExplanation: `No ${slot} inference slot configured.`,
+          });
+        }
+        const catalog = loadCatalog();
+        const provider = findProvider(catalog, config.providerId);
+        const model = provider ? findModel(catalog, provider.id, config.modelId) : undefined;
+        if (!provider || !model) {
+          return send(res, 200, {
+            success: false,
+            error: "not_in_catalog",
+            errorExplanation: `Provider/model not found in catalog: ${config.providerId}/${config.modelId}`,
+          });
+        }
+        const credMgr = secrets ? new CredentialManager(secrets) : null;
+        const apiKey = credMgr ? await credMgr.getKey(config.providerId) : "";
+        const result = await testInference(provider, model, apiKey ?? "", slot);
+        return send(res, 200, result);
+      }
+
+      // ── Migration ─────────────────────────────────────────────────────
+      if (p === "/v1/settings/migrate" && req.method === "POST") {
+        if (!secrets) {
+          return send(res, 200, { migrated: false, error: "no_secret_store" });
+        }
+        const result = await migrateInferenceSettings(db, secrets, ports.logger);
+        return send(res, 200, result);
+      }
+
       if (p === "/v1/settings" && req.method === "GET") {
         const rows = db.prepare("SELECT key, value FROM app_settings").all() as {
           key: string;
