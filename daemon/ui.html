@@ -240,7 +240,7 @@
   </div>
 
   <!-- Danger Zone -->
-  <div class="danger-zone" style="margin-top:0;max-width:none">
+  <div class="danger-zone">
   <div class="danger-panel">
     <h3>Danger Zone</h3>
     <div class="danger-options">
@@ -380,6 +380,9 @@ const UI_VERSION = "%%UIVERSION%%";</script>
 // ── tab navigation + init ────────────────────────────────────────
 // TAB_LOADERS references functions from all feature modules, so it
 // must be defined after all scripts have loaded.
+// The most recent tab loader's completion promise (stashed by the tab
+// click handler) — openDocumentDirect awaits it instead of a timeout.
+let __lastLoaderPromise = null;
 const TAB_LOADERS = {
   settings: loadSettings,
   people: loadPeople,
@@ -392,7 +395,9 @@ document.getElementById("tabs").querySelectorAll("button").forEach((b) =>
     localStorage.setItem("q2av_tab", activeTab);
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + activeTab));
-    if (TAB_LOADERS[activeTab]) TAB_LOADERS[activeTab]();
+    // Stash the loader's completion promise — openDocumentDirect
+    // synchronises its row lookup on it instead of a fixed timeout.
+    __lastLoaderPromise = TAB_LOADERS[activeTab] ? TAB_LOADERS[activeTab]() : null;
   });
 // Restore the saved tab on load.
 document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === activeTab));

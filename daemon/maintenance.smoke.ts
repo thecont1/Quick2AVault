@@ -140,6 +140,31 @@ file("fileB.pdf", "BBB");
   });
 }
 
+// ── orphan + deleted-original duplicates ───────────────────────────
+// A duplicate whose sha256 has no document row is an orphan; one whose
+// document was deleted is skipped too — both must be reported in the
+// result and neither may be reprocessed.
+{
+  const shaOrphan = sha("ORPHAN");
+  const shaDel = sha("DEL");
+  seedDoc(db, "doc_del", shaDel, "orig-del.pdf");
+  db.prepare("UPDATE documents SET lifecycle='deleted' WHERE id='doc_del'").run();
+  addDup(db, "orphan.pdf", shaOrphan, "2026-08-15T00:00:00.000Z");
+  addDup(db, "del.pdf", shaDel, "2026-08-15T00:00:00.000Z");
+  file("orphan.pdf", "ORPHAN");
+  file("del.pdf", "DEL");
+  const result = await flushDuplicates(db, ports, "promote_newest");
+  await check("flush reports skipped_orphan and skipped_deleted and does not reprocess them", () => {
+    assert.equal(result.skipped_orphan, 1);
+    assert.equal(result.skipped_deleted, 1);
+    assert.equal(result.reprocessed, 0);
+    assert.ok(!fs.existsSync(path.join(dupDir, "orphan.pdf")), "orphan copy file is flushed");
+    assert.ok(!fs.existsSync(path.join(dupDir, "del.pdf")), "deleted-original copy file is flushed");
+    const jobs = db.prepare("SELECT COUNT(*) n FROM jobs").get() as { n: number };
+    assert.equal(jobs.n, 2, "only the earlier promote_newest jobs exist");
+  });
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 fs.rmSync(vault, { recursive: true, force: true });
 if (fail > 0) process.exit(1);

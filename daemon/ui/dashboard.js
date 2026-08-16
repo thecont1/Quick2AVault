@@ -11,7 +11,13 @@ async function refreshHealth() {
 async function refreshMoney() {
   const s = await api("/v1/snapshot?period=" + encodeURIComponent(period));
   if (!s || s.error) {
+    // Degraded snapshot: say so and clear every money display rather than
+    // showing stale figures beside a "period unavailable" label.
     document.getElementById("moneyPeriod").textContent = "— period unavailable";
+    for (const id of ["income", "spend", "invest", "xfer", "incomeN", "spendN", "investN", "incomeSub", "spendSub", "investSub", "xferSub"]) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = "";
+    }
     return;
   }
   document.getElementById("moneyPeriod").textContent = "— " + (s.period ? s.period.label : period);
@@ -183,7 +189,8 @@ function onPipelineStateChanged(data) {
 
 // A new document arriving increments the "received" counter immediately.
 function onDocumentReceived() {
-  pipelineCounts["received"] = (pipelineCounts["received"] || 0) + 1;
+  // Document events drive the document-pipeline counts only; pipelineCounts
+  // (intake-vocabulary) is reserved for pipeline/intake-state events.
   pipelineDocCounts["received"] = (pipelineDocCounts["received"] || 0) + 1;
   renderPipelineBoard();
   animateNewArrival();
@@ -198,7 +205,8 @@ function onDocumentReceived() {
 function animateHandoff(fromState, toState) {
   const rail = document.getElementById("board");
   if (!rail) return;
-  const fromRow = rail.querySelector('.pipeline-stage[data-stage="' + fromState + '"]');
+  const fromRow = rail.querySelector(
+    '.pipeline-stage[data-stage="' + fromState + '"], .pipeline-outcome[data-stage="' + fromState + '"]');
   const toRow = rail.querySelector('[data-stage="' + toState + '"]');
   if (!fromRow || !toRow) return;
   toRow.classList.add("handoff");
@@ -214,6 +222,10 @@ function animateHandoff(fromState, toState) {
     dot.style.left = "7px";
     dot.style.top = fromY + "px";
     rail.appendChild(dot);
+    // Force layout so the initial position is committed before the
+    // transition target is set — otherwise the browser coalesces the two
+    // and the dot teleports instead of travelling.
+    void dot.offsetHeight;
     requestAnimationFrame(() => { dot.style.top = toY + "px"; });
     setTimeout(() => dot.remove(), 520);
   }
@@ -270,9 +282,14 @@ function scopeLabel() {
   return parts.length ? parts.join(" · ") : "All documents";
 }
 
+// Guards renderScopeList against out-of-order responses: an older, slower
+// fetch must never overwrite a newer one (same pattern as reviewLoadGen).
+let scopeLoadGen = 0;
+
 async function renderScopeList() {
   const box = document.getElementById("scopeList");
   if (!box) return;
+  const gen = ++scopeLoadGen;
   if (docScope.state === "duplicate") {
     // The Duplicate cell shows the duplicate archive — byte-identical
     // re-arrivals set aside by the sha256 guard (intake items, not
@@ -280,6 +297,8 @@ async function renderScopeList() {
     renderDuplicatesInto(box, {
       labelEl: document.getElementById("scopeLabel"),
       labelPrefix: "Duplicate · ",
+      gen,
+      genCheck: () => scopeLoadGen,
     });
     return;
   }
@@ -291,9 +310,11 @@ async function renderScopeList() {
   try {
     d = await api(url);
   } catch {
+    if (gen !== scopeLoadGen) return;
     box.innerHTML = "<div class='empty'>could not load documents.</div>";
     return;
   }
+  if (gen !== scopeLoadGen) return;
   const docs = d.documents || [];
   const label = document.getElementById("scopeLabel");
   if (label) {
@@ -330,13 +351,21 @@ function animateDuplicateArrival() {
 
 async function refreshPipeline() {
   // Pipeline counters come from the authoritative whole-table intake
-  // state; the Document Scope list refetches per the active scope.
-  const intake = await api("/v1/intake/status?limit=20&offset=0");
-  pipelineCounts = {};
-  const counts = intake.counts || {};
-  for (const k of Object.keys(counts)) pipelineCounts[k] = counts[k];
-  pipelineDocCounts = intake.pipeline_counts || {};
-  pipelineStalled = intake.stalled || 0;
+  // state; the Document Scope list refetches per the active scope. A
+  // failed status fetch must not kill refreshObs — boards render with
+  // the last-known (or zero) counts and the next tick retries.
+  try {
+    const intake = await api("/v1/intake/status?limit=20&offset=0");
+    pipelineCounts = {};
+    const counts = intake.counts || {};
+    for (const k of Object.keys(counts)) pipelineCounts[k] = counts[k];
+    pipelineDocCounts = intake.pipeline_counts || {};
+    pipelineStalled = intake.stalled || 0;
+  } catch {
+    pipelineCounts = pipelineCounts || {};
+    pipelineDocCounts = pipelineDocCounts || {};
+    pipelineStalled = pipelineStalled || 0;
+  }
   renderPipelineBoard();
   renderScopeList();
 }

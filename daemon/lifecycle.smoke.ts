@@ -15,6 +15,7 @@
  */
 import * as assert from "node:assert";
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -228,6 +229,13 @@ await check("reprocess of a deleted document is refused (409)", async () => {
 // guard above only applies when the bytes are genuinely gone.
 const survivorPath = path.join(rawDir, "doc_delete_C.pdf");
 fs.writeFileSync(survivorPath, "bytes-of-doc_delete_C-survivor");
+// The restore now VERIFIES the candidate's sha256 against the document —
+// align the document's hash with the surviving bytes so the restore is
+// provable, exactly like a real legacy deletion whose bytes match.
+db.prepare("UPDATE documents SET sha256=? WHERE id=?").run(
+  crypto.createHash("sha256").update("bytes-of-doc_delete_C-survivor").digest("hex"),
+  "doc_delete_C",
+);
 const restoreRes = await req("POST", "/v1/documents/doc_delete_C/reprocess");
 await check("reprocess of a deleted doc with surviving bytes restores it", () => {
   assert.equal(restoreRes.status, 200);

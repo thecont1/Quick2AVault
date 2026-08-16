@@ -14,6 +14,10 @@ async function loadReview() {
   // elements are about to be replaced, so a dangling detail slot would
   // reference a removed card.
   collapseOpenDoc();
+  // A list reload or filter/period change means the pinned slot's document
+  // is no longer part of this view — hide it so it cannot linger above a
+  // list it doesn't belong to.
+  hidePin();
   const gen = ++reviewLoadGen;
   // The Duplicate board cell shows the duplicate archive instead of the
   // documents list — duplicates are intake items, not documents. The
@@ -116,7 +120,7 @@ async function renderDuplicatesInto(container, opts = {}) {
   } catch {
     // d stays null — the empty state below explains itself
   }
-  if (opts.gen !== undefined && opts.gen !== reviewLoadGen) return;
+  if (opts.gen !== undefined && opts.gen !== (opts.genCheck || (() => reviewLoadGen))()) return;
   const groups = (d && d.groups) || [];
   const total = (d && d.total_copies) || 0;
   if (opts.labelEl) {
@@ -146,12 +150,14 @@ async function renderDuplicatesInto(container, opts = {}) {
         : lc === "removed"
           ? " · <span class='err'>original removed</span>"
           : " · original linked";
+    const sha = g.sha256 ? String(g.sha256).slice(0, 12) : "unknown";
+    const copies = Number.isFinite(Number(g.copies)) ? String(g.copies) : "?";
     html += "<div class='drow" + (orphan ? " orphan" : "") + "' data-id='" + (orphan ? "" : esc(g.document_id || "")) + "'>"
       + "<div><div class='fn'>" + esc(g.original_filename || (files[0] || {}).filename || "unknown") + "</div>"
-      + "<div class='meta'>" + esc(String(g.sha256).slice(0, 12)) + "… · " + g.copies + " cop" + (g.copies === 1 ? "y" : "ies")
+      + "<div class='meta'>" + esc(sha) + "… · " + esc(copies) + " cop" + (copies === "1" ? "y" : "ies")
       + " · " + esc(first) + " → " + esc(last)
       + linkNote + "</div></div>"
-      + "<span class='kind'>" + esc(g.copies) + "×</span>"
+      + "<span class='kind'>" + esc(copies) + "×</span>"
       + "<span class='dt'>" + esc(last) + "</span></div>";
   }
   container.innerHTML = html;
@@ -180,18 +186,30 @@ function refreshOpenDocIfMatch(docId) {
 // no matter which scope they were in.
 function openDocumentDirect(id) {
   const tabBtn = document.querySelector('.tabs button[data-tab="review"]');
-  // Re-clicking the active tab would re-run loadReview and wipe any detail
-  // slot we are about to open — only switch when we are elsewhere.
-  if (tabBtn && !tabBtn.classList.contains("on")) tabBtn.click();
+  const switching = tabBtn && !tabBtn.classList.contains("on");
   const tryRow = () => {
     const row = document.querySelector("#docList .drow[data-id='" + CSS.escape(id) + "']");
-    if (row) { toggleDoc(row, id); return true; }
+    if (row) { toggleDoc(row, id); hidePin(); return true; }
     return false;
   };
   if (tryRow()) return;
-  // loadReview() is async (triggered by the tab switch) — give it one beat
-  // before falling back to the pinned detail.
-  setTimeout(() => { if (!tryRow()) pinDoc(id); }, 800);
+  if (switching) {
+    // The tab switch runs loadReview() async; synchronise the row lookup
+    // on that completion promise instead of a fixed timeout (the tab
+    // handler stashes the promise in __lastLoaderPromise). Only fall back
+    // to the pinned slot once loading has actually finished.
+    tabBtn.click();
+    Promise.resolve(window.__lastLoaderPromise).then(() => {
+      if (!tryRow()) pinDoc(id);
+    });
+  } else {
+    pinDoc(id);
+  }
+}
+
+function hidePin() {
+  const pin = document.getElementById("docPin");
+  if (pin) pin.style.display = "none";
 }
 
 function pinDoc(id) {
@@ -203,7 +221,17 @@ function pinDoc(id) {
 }
 
 async function showDoc(id, container) {
-  const d = await api("/v1/documents/" + encodeURIComponent(id) + "/detail");
+  let d;
+  try {
+    d = await api("/v1/documents/" + encodeURIComponent(id) + "/detail");
+  } catch (err) {
+    // A network/daemon failure must never leave the loading placeholder
+    // (or a blank slot) — render the same non-blank error state.
+    container.innerHTML = "<div class='empty doc-err'>could not load this document"
+      + " — " + esc(String((err && err.message) || err || "request failed"))
+      + "</div>";
+    return;
+  }
   if (d && d.error) {
     // Never leave the slot blank: deleted/removed documents explain
     // themselves and offer the restore path (reprocess revives a deleted
@@ -221,10 +249,16 @@ async function showDoc(id, container) {
         btn.textContent = "reprocessing…";
         try {
           const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/reprocess", {});
-          if (r && r.error) { btn.textContent = "refused: " + r.error; return; }
+          if (r && r.error) {
+            // Re-enable so the user can retry once the conflict clears.
+            btn.disabled = false;
+            btn.textContent = "refused: " + r.error;
+            return;
+          }
           btn.textContent = "restored — reprocessing…";
           showDoc(id, container);
         } catch {
+          btn.disabled = false;
           btn.textContent = "failed — see daemon log";
         }
       };

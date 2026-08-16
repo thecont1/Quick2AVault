@@ -1043,27 +1043,63 @@ export function enqueueReprocess(db: DatabaseSync, ports: Ports, documentId: str
   // Reprocess is a new canonical pipeline epoch. Preserve the append-only
   // event history, but reset the current-state pointer and replay the
   // legal prefix up to the phase the worker will enter. Weakening the
-  // state machine here would hide illegal transitions everywhere else.
+  // state machine here would hide illegal transitions everywhere else —
+  // the prefix (received → stable → hashed → triaged) is legal by
+  // construction, so the rows are written directly and nothing is
+  // published until COMMIT succeeds.
+  const prevState = (db
+    .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+    .get(documentId) as { state: string } | undefined)?.state ?? null;
+
   db.exec("BEGIN");
+  let jobId: number | null = null;
   try {
     if (doc.lifecycle !== "active") {
       db.prepare("UPDATE documents SET lifecycle='active' WHERE id=?").run(documentId);
     }
     db.prepare("DELETE FROM document_pipeline WHERE document_id=?").run(documentId);
     const prefix = ["received", "stable", "hashed", "triaged"] as const;
+    const now = ports.clock.isoNow();
+    let from = prevState;
     for (const toState of prefix) {
-      transitionPipeline(db, {
-        documentId,
-        toState,
-        timestamp: ports.clock.isoNow(),
-        source: "reprocess",
-      });
+      db.prepare(
+        `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+         VALUES (?,?,?,?,?,?,?)`,
+      ).run(documentId, from, toState, now, "reprocess", "reprocess epoch reset", "{}");
+      db.prepare(
+        `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+         ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+      ).run(documentId, toState, now);
+      from = toState;
     }
-    enqueue(db, ports, documentId, "convert");
+    // Enqueue without publishing — the JobStateChanged fires after commit.
+    const info = db
+      .prepare("INSERT INTO jobs (document_id, phase, state, created_at) VALUES (?,?,'pending',?)")
+      .run(documentId, "convert", ports.clock.isoNow());
+    jobId = Number(info.lastInsertRowid);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
+  }
+  // Publish only after commit so a rollback cannot emit stale events.
+  ports.bus.publish({
+    type: "PipelineStateChanged",
+    document_id: documentId,
+    from_state: prevState,
+    to_state: "triaged",
+    source: "reprocess",
+    reason: "reprocess epoch reset",
+    at: ports.clock.isoNow(),
+  });
+  if (jobId !== null) {
+    ports.bus.publish({
+      type: "JobStateChanged",
+      job_id: jobId,
+      phase: "convert",
+      state: "pending",
+      at: ports.clock.isoNow(),
+    });
   }
   return "convert";
 }
@@ -1592,16 +1628,27 @@ async function convertToHomeCurrency(
 ): Promise<void> {
   if (!x.currency || !x.amount_minor || !x.occurred_at) return;
   const home = homeCurrencyFor(db);
-  if (x.currency === home) return;
+  // recordTransaction trims + uppercases the currency — mirror that so
+  // "usd" / "USD " never spuriously converts or skips conversion.
+  const cur = String(x.currency).trim().toUpperCase();
+  const homeKey = String(home).trim().toUpperCase();
+  if (cur === homeKey) return;
   const row = db
-    .prepare("SELECT home_amount_minor FROM transactions WHERE id=?")
-    .get(transactionId) as { home_amount_minor: number | null } | undefined;
-  if (row?.home_amount_minor != null) return; // never clobber an existing conversion
+    .prepare("SELECT home_amount_minor, amount_minor, occurred_at FROM transactions WHERE id=?")
+    .get(transactionId) as
+    | { home_amount_minor: number | null; amount_minor: number | null; occurred_at: string | null }
+    | undefined;
+  // Reuse an existing conversion only while the source facts are unchanged —
+  // a re-analysis that corrected the amount or date must recompute and
+  // refresh the FX fields rather than keep a stale conversion.
+  if (row?.home_amount_minor != null && row.amount_minor === x.amount_minor && row.occurred_at === x.occurred_at) {
+    return;
+  }
   try {
     const conv = await new FrankfurterFx(db).convert({
       amountMinor: x.amount_minor,
-      from: x.currency,
-      to: home,
+      from: cur,
+      to: homeKey,
       date: x.occurred_at,
     });
     if (!conv) {

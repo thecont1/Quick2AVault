@@ -70,30 +70,20 @@
 
   /* ── Document Pipeline (right): the status rail ──────────────── */
   .obs-pipeline .pipeline-rail{flex:1 1 auto;min-height:0;overflow:hidden;position:relative;
-    display:grid;grid-template-rows:repeat(6,minmax(30px,1fr)) 8px repeat(5,minmax(26px,1fr));
+    display:grid;grid-template-rows:repeat(6,minmax(30px,1fr)) repeat(5,minmax(26px,1fr));
     align-content:start}
+  /* Auto-placement assigns the six stages to tracks 1-6 and the five
+     outcomes to tracks 7-11 — no nth-child coupling to list lengths. The
+     branch spacing is the first outcome's top margin. */
   .obs-pipeline .pipeline-stage,.obs-pipeline .pipeline-outcome{display:grid;
     grid-template-columns:14px minmax(0,1fr) auto;align-items:center;column-gap:10px;
     position:relative;cursor:pointer;border-radius:6px;padding:0 6px}
-  /* The rail grid is 6 stage tracks + 1 gap track + 5 outcome tracks; the
-     outcomes must be placed explicitly or auto-placement drops them into
-     the 8px gap. */
-  .obs-pipeline .pipeline-stage:nth-child(1){grid-row:1}
-  .obs-pipeline .pipeline-stage:nth-child(2){grid-row:2}
-  .obs-pipeline .pipeline-stage:nth-child(3){grid-row:3}
-  .obs-pipeline .pipeline-stage:nth-child(4){grid-row:4}
-  .obs-pipeline .pipeline-stage:nth-child(5){grid-row:5}
-  .obs-pipeline .pipeline-stage:nth-child(6){grid-row:6}
-  .obs-pipeline .pipeline-outcome:nth-child(7){grid-row:8}
-  .obs-pipeline .pipeline-outcome:nth-child(8){grid-row:9}
-  .obs-pipeline .pipeline-outcome:nth-child(9){grid-row:10}
-  .obs-pipeline .pipeline-outcome:nth-child(10){grid-row:11}
-  .obs-pipeline .pipeline-outcome:nth-child(11){grid-row:12}
+  .obs-pipeline .pipeline-stage + .pipeline-outcome{margin-top:8px}
   .obs-pipeline .pipeline-stage:hover,.obs-pipeline .pipeline-outcome:hover{background:var(--panel2)}
   .obs-pipeline .pipeline-stage.is-selected,.obs-pipeline .pipeline-outcome.is-selected{
     background:var(--panel2);box-shadow:inset 2px 0 0 var(--blue)}
   .obs-pipeline .pipeline-node{width:8px;height:8px;border-radius:999px;background:var(--dim);
-    flex-shrink:0;transition:background .18s}
+    transition:background .18s}
   .obs-pipeline .pipeline-stage.is-active .pipeline-node{background:var(--blue);
     box-shadow:0 0 0 3px rgba(80,140,255,.14)}
   /* connector between consecutive process rows */
@@ -106,7 +96,7 @@
   .obs-pipeline .pipeline-stage[data-stage="analysing"]::after{background:rgba(80,140,255,.8)}
   .obs-pipeline .pipeline-stage.handoff::after{background:var(--blue);
     box-shadow:0 0 8px rgba(80,140,255,.85)}
-  .obs-pipeline .pipeline-outcome.handoff .pipeline-branch{color:var(--blue)}
+  .obs-pipeline .pipeline-outcome.handoff .pipeline-branch{border-color:var(--blue)}
   .obs-pipeline .pipeline-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
     font-size:13px;font-weight:500;color:var(--ink)}
   .obs-pipeline .pipeline-count{font-variant-numeric:tabular-nums;font-weight:600;font-size:15px;
@@ -116,9 +106,9 @@
   /* terminal outcomes — CSS-drawn branch hooks (font-independent) */
   .obs-pipeline .pipeline-branch{width:11px;height:8px;margin-left:3px;margin-top:-5px;
     border-left:2px solid var(--dim);border-bottom:2px solid var(--dim);
-    border-bottom-left-radius:2px;flex-shrink:0}
+    border-bottom-left-radius:2px}
   /* the branch run: a short line from the Analysing node into the outcomes */
-  .obs-pipeline .pipeline-outcome:nth-child(7)::before{content:"";position:absolute;left:9px;
+  .obs-pipeline .pipeline-stage + .pipeline-outcome::before{content:"";position:absolute;left:9px;
     top:calc(-50% - 4px);height:calc(50% + 20px);width:2px;background:rgba(80,140,255,.65)}
   .obs-pipeline .pipeline-outcome.is-complete .pipeline-branch{border-color:var(--ok)}
   .obs-pipeline .pipeline-outcome.is-complete .pipeline-count{color:var(--ok)}

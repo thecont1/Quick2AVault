@@ -202,6 +202,11 @@ function buildModelDropdown(which, provider, savedModel, models) {
     otherOpt.onclick = () => {
       const mid = prompt("Enter the model ID:") || "";
       if (!mid) return;
+      // The select must actually contain the value before assignment —
+      // setting sel.value to an unknown option silently keeps the old one.
+      if (!Array.from(sel.options).some((o) => o.value === mid)) {
+        sel.add(new Option(mid + " (user-entered)", mid));
+      }
       sel.value = mid;
       sel.dispatchEvent(new Event("change"));
     };

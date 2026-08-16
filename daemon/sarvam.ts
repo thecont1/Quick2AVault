@@ -376,7 +376,10 @@ export class SarvamProvider {
       if (phone) issuerIdentifiers.phone = phone;
       parties.push({
         name: issuerName,
-        kind: isOwner(issuerName) ? "person" : "organisation",
+        // Ownership affects the ROLE only; kind derives from the
+        // identifiers — a GSTIN-bearing issuer is an organisation even
+        // when the business owner's name appears on the invoice.
+        kind: gstin ? "organisation" : "person",
         role: isOwner(issuerName) ? "owner" : "issuer",
         identifiers: issuerIdentifiers,
       });

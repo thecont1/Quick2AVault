@@ -308,13 +308,20 @@ console.log("\n── §A.5: the FX conversion is wired into the analysis flow")
 // the wiring: runAnalyseJob must stamp the home value using a rate fetched
 // as on the TRANSACTION date. The rate_cache seed keeps it offline.
 {
+  // Isolated temp vault: the raw file is seeded too, so runAnalyseJob does
+  // not warn about a missing raw_path, and everything is cleaned up with
+  // the db.
+  const fxVault = fs.mkdtempSync(path.join(os.tmpdir(), "q2v-curr-fx-"));
   const db = openDatabase(":memory:");
-  const ports = testPorts("/tmp/q2v-curr-fx");
+  const ports = testPorts(fxVault);
+  const fxRaw = path.join(fxVault, "usd-flow.pdf");
+  const fxMd = path.join(fxVault, "usd-flow.md");
+  fs.writeFileSync(fxRaw, "%PDF-1.4 fake raw bytes for the flow test");
   db.prepare(
     `INSERT INTO documents (id, sha256, original_filename, raw_path, markdown_path, markdown_chars, doc_type, received_at)
      VALUES (?,?,?,?,?,?,?,?)`,
-  ).run("doc_usd_flow", "sha_usd_flow", "usd-flow.pdf", "/tmp/usd-flow.pdf", "/tmp/usd-flow.md", 100, "merchant_invoice", "2026-08-09T00:00:00.000Z");
-  fs.writeFileSync("/tmp/usd-flow.md", "# Invoice\n\nTotal: 597.85 USD");
+  ).run("doc_usd_flow", "sha_usd_flow", "usd-flow.pdf", fxRaw, fxMd, 100, "merchant_invoice", "2026-08-09T00:00:00.000Z");
+  fs.writeFileSync(fxMd, "# Invoice\n\nTotal: 597.85 USD");
   db.exec(`CREATE TABLE IF NOT EXISTS rate_cache (base_currency TEXT NOT NULL, quote_currency TEXT NOT NULL, rate_date TEXT NOT NULL, rate REAL NOT NULL, source TEXT NOT NULL, fetched_at TEXT NOT NULL, PRIMARY KEY(base_currency, quote_currency, rate_date, source))`);
   db.prepare("INSERT OR REPLACE INTO rate_cache VALUES ('USD','INR','2026-05-29',84.0,'frankfurter',?)")
     .run(new Date().toISOString());
@@ -356,6 +363,7 @@ console.log("\n── §A.5: the FX conversion is wired into the analysis flow")
     assert.equal(s.unconverted.income.length, 0);
   });
   db.close();
+  fs.rmSync(fxVault, { recursive: true, force: true });
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

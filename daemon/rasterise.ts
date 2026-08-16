@@ -219,10 +219,15 @@ export async function renderPage(req: RenderRequest): Promise<RenderResult> {
   }
 
   if (tools.sips) {
-    // sips cannot select a page. Refuse anything but page 1 rather than
-    // returning the wrong page with a 200.
+    // sips cannot select a page or decrypt. Refuse anything but an
+    // unencrypted page 1 rather than returning the wrong page with a 200.
     if (page !== 1) {
       throw new Error("only page 1 can be rendered without pdftoppm");
+    }
+    if (req.password) {
+      throw new Error(
+        "sips cannot decrypt the PDF — install pdftoppm (poppler) to render password-protected documents",
+      );
     }
     // Loud, once per process: pdftoppm is the intended backend and its absence
     // silently caps a multi-page document at its first page. A warning in the

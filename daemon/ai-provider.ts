@@ -323,14 +323,25 @@ export function createOpenAiProvider(cfg: AiConfig, logger: Logger): AiProvider 
       } catch (err) {
         // Some models reject a FORCED tool_choice (DeepSeek-family thinking
         // mode: "Thinking mode does not support this tool_choice"). Retry
-        // with tool_choice "auto" — the prompt still makes the tool call
-        // effectively mandatory, and a model-chosen call is accepted.
+        // with tool_choice "auto" ONLY for that class of error — auth,
+        // rate-limit and network failures must not burn a second call.
+        const rawErr = err as { message?: string; status?: number };
+        const msg = String(rawErr?.message ?? err ?? "");
+        const toolChoiceError =
+          (typeof rawErr?.status === "number" && rawErr.status >= 400 && rawErr.status < 500) ||
+          /tool_choice/i.test(msg);
+        if (!toolChoiceError) {
+          logger.error("extraction failed", { filename, err: msg });
+          return null;
+        }
         try {
           const parsed = await doCall(false);
           if (parsed) {
             logger.info("extraction: succeeded with tool_choice auto", { filename });
             return normalise(parsed);
           }
+          logger.warn("extraction: auto-tool-choice retry returned no tool call", { filename });
+          return null;
         } catch (err2) {
           logger.error("extraction failed (retry with tool_choice auto)", {
             filename,
@@ -338,8 +349,6 @@ export function createOpenAiProvider(cfg: AiConfig, logger: Logger): AiProvider 
           });
           return null;
         }
-        logger.error("extraction failed", { filename, err: (err as Error)?.message });
-        return null;
       }
     },
   };

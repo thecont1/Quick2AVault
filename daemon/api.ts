@@ -9,7 +9,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import * as fsp from "node:fs/promises";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
@@ -196,7 +196,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
   // restart orphaned the open page's token, so its next API call 401'd,
   // checkAuth reloaded the page, and a restart-heavy session turned into a
   // reload loop — content flashing then vanishing. The vault DB keeps the
-  // TTL semantics without the restart fragility.
+  // TTL semantics without the restart fragility. Only SHA-256 hashes of
+  // the tokens are stored, so a leaked vault file cannot replay a session.
+  const hashToken = (t: string): string => createHash("sha256").update(t).digest("hex");
   try {
     db.exec("CREATE TABLE IF NOT EXISTS ui_sessions (token TEXT PRIMARY KEY, expires INTEGER NOT NULL)");
     for (const r of db.prepare("SELECT token, expires FROM ui_sessions").all() as { token: string; expires: number }[]) {
@@ -217,19 +219,20 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
     const now = Date.now();
     for (const [t, exp] of uiSessions) if (exp <= now) uiSessions.delete(t);
     const token = randomBytes(32).toString("base64url");
-    uiSessions.set(token, now + UI_SESSION_TTL_MS);
+    const key = hashToken(token);
+    uiSessions.set(key, now + UI_SESSION_TTL_MS);
     try {
-      db.prepare("INSERT OR REPLACE INTO ui_sessions (token, expires) VALUES (?, ?)").run(token, now + UI_SESSION_TTL_MS);
+      db.prepare("INSERT OR REPLACE INTO ui_sessions (token, expires) VALUES (?, ?)").run(key, now + UI_SESSION_TTL_MS);
     } catch { /* non-fatal */ }
     return token;
   };
 
   const uiSessionValid = (token: string): boolean => {
-    const exp = uiSessions.get(token);
+    const exp = uiSessions.get(hashToken(token));
     if (exp === undefined) return false;
     if (exp <= Date.now()) {
-      uiSessions.delete(token);
-      try { db.prepare("DELETE FROM ui_sessions WHERE token=?").run(token); } catch { /* non-fatal */ }
+      uiSessions.delete(hashToken(token));
+      try { db.prepare("DELETE FROM ui_sessions WHERE token=?").run(hashToken(token)); } catch { /* non-fatal */ }
       return false;
     }
     return true;
@@ -355,13 +358,109 @@ async function uiAssetVersion(): Promise<string> {
   }
 }
 
+/**
+ * Shared password-submit workflow for the intake-level and document-level
+ * endpoints. Both routes resolve their own intake row (distinct lookups)
+ * and then converge here: document-truth guards, the atomic writes, the
+ * post-commit PipelineStateChanged publication, logging, and the payload.
+ */
+function submitPasswordForDocument(
+  db: DatabaseSync,
+  ports: Ports,
+  args: { documentId: string; intakeId: number; password: string },
+):
+  | { ok: true; intake_id: number; document_id: string; state: string }
+  | { error: string; intake_id: number; document_id: string; state?: string } {
+  const pwDoc = db
+    .prepare("SELECT markdown_path, markdown_chars FROM documents WHERE id=?")
+    .get(args.documentId) as { markdown_path: string | null; markdown_chars: number | null } | undefined;
+  if (!pwDoc) {
+    return { error: "document_not_found", intake_id: args.intakeId, document_id: args.documentId };
+  }
+  if (pwDoc.markdown_path && pwDoc.markdown_chars) {
+    return {
+      error: "password_not_applicable",
+      intake_id: args.intakeId,
+      document_id: args.documentId,
+      state: "already_converted",
+    };
+  }
+  const activeConvert = db
+    .prepare("SELECT 1 FROM jobs WHERE document_id=? AND phase='convert' AND state IN ('pending','running') LIMIT 1")
+    .get(args.documentId);
+  if (activeConvert) {
+    return {
+      error: "password_already_processing",
+      intake_id: args.intakeId,
+      document_id: args.documentId,
+    };
+  }
+  const now = ports.clock.isoNow();
+  let prevState: string | null = null;
+  // All five writes (document password, intake state, pipeline state,
+  // pipeline event, convert job) are one unit — a partial write would
+  // leave an intake marked 'queued' with no convert job.
+  db.exec("BEGIN");
+  try {
+    db.prepare("UPDATE documents SET password=? WHERE id=?").run(args.password, args.documentId);
+    db.prepare(
+      `UPDATE intake_events
+          SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
+        WHERE id=?`,
+    ).run(now, now, now, args.intakeId);
+    // Reset the canonical pipeline state. The state machine has
+    // password_needed as terminal with no outgoing edges, and
+    // null → triaged is also illegal, so we insert the row directly
+    // at 'triaged' and publish the event manually after commit.
+    prevState = (db
+      .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+      .get(args.documentId) as { state: string } | undefined)?.state ?? null;
+    db.prepare(
+      `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+       ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+    ).run(args.documentId, "triaged", now);
+    db.prepare(
+      `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+       VALUES (?,?,?,?,?,?,?)`,
+    ).run(args.documentId, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+    enqueue(db, ports, args.documentId, "convert");
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+  // Publish only after commit so a rollback cannot emit a stale
+  // PipelineStateChanged over SSE.
+  ports.bus.publish({
+    type: "PipelineStateChanged",
+    document_id: args.documentId,
+    from_state: prevState,
+    to_state: "triaged",
+    source: "password-submit",
+    reason: "password submitted, re-enqueuing conversion",
+    at: now,
+  });
+  ports.logger.info("password submitted, re-enqueuing conversion", {
+    intake_id: args.intakeId,
+    document_id: args.documentId,
+  });
+  return { ok: true, intake_id: args.intakeId, document_id: args.documentId, state: "queued" };
+}
+
 // ── UI diagnostics ────────────────────────────────────────────────
 // (State lives inside createApi, next to uiSessions, so it survives across
 // requests. The routes below run per request and only touch that state.)
 
 // ── unauthenticated: health ──────────────────────────────────────────
 if (p === "/v1/diagnostics") {
-  if (req.method === "GET") return send(res, 200, { reports: uiDiagRing, count: uiDiagCount });
+  if (req.method !== "GET" && req.method !== "POST") return send(res, 405, { error: "method_not_allowed" });
+  // GET exposes browser-state reports — authenticated like every other
+  // read endpoint. POST stays open: it is fire-and-forget telemetry from
+  // the page, which may be reporting an auth failure that already happened.
+  if (req.method === "GET") {
+    if (!authed(req, url)) return send(res, 401, { error: "unauthorized" });
+    return send(res, 200, { reports: uiDiagRing, count: uiDiagCount });
+  }
   if (req.method === "POST") {
     const body = await readJson(req);
     uiDiagCount += 1;
@@ -476,94 +575,17 @@ if (p === "/v1/health") {
             return send(res, 409, { error: "intake has no document — password not applicable" });
           }
           // The reset exists only because password_needed is terminal with no
-          // outgoing edges. Re-enqueuing conversion for a document that is
-          // already converting, analysing, or complete would rewind the
-          // canonical pipeline and start a second conversion pass.
-          // Applicability comes from the DOCUMENT, not the intake row: a
-          // previous failed attempt can leave the intake stuck at 'queued'
-          // while the document is genuinely still waiting on a password.
-          const pwDoc = db
-            .prepare("SELECT markdown_path, markdown_chars FROM documents WHERE id=?")
-            .get(intake.document_id) as
-            | { markdown_path: string | null; markdown_chars: number | null }
-            | undefined;
-          if (pwDoc?.markdown_path && pwDoc.markdown_chars) {
-            return send(res, 409, {
-              error: "password_not_applicable",
-              intake_id: id,
-              document_id: intake.document_id,
-              state: "already_converted",
-            });
-          }
-          const activeConvert = db
-            .prepare("SELECT 1 FROM jobs WHERE document_id=? AND phase='convert' AND state IN ('pending','running') LIMIT 1")
-            .get(intake.document_id);
-          if (activeConvert) {
-            return send(res, 409, {
-              error: "password_already_processing",
-              intake_id: id,
-              document_id: intake.document_id,
-            });
-          }
-          const now = ports.clock.isoNow();
-          let prevState: string | null = null;
-          // All five writes (document password, intake state, pipeline state,
-          // pipeline event, convert job) are one unit — a partial write would
-          // leave an intake marked 'queued' with no convert job.
-          db.exec("BEGIN");
-          try {
-            // Store the password on the document.
-            db.prepare("UPDATE documents SET password=? WHERE id=?")
-              .run(password, intake.document_id);
-            // Update the intake state back to queued so the UI shows progress.
-            db.prepare(
-              `UPDATE intake_events
-                  SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
-                WHERE id=?`,
-            ).run(now, now, now, id);
-            // Reset the canonical pipeline state. The state machine has
-            // password_needed as terminal with no outgoing edges, and
-            // null → triaged is also illegal, so we insert the row directly
-            // at 'triaged' and publish the event manually after commit.
-            prevState = (db
-              .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
-              .get(intake.document_id) as { state: string } | undefined)?.state ?? null;
-            db.prepare(
-              `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
-               ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
-            ).run(intake.document_id, "triaged", now);
-            db.prepare(
-              `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
-               VALUES (?,?,?,?,?,?,?)`,
-            ).run(intake.document_id, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
-            // Re-enqueue the convert job.
-            enqueue(db, ports, intake.document_id, "convert");
-            db.exec("COMMIT");
-          } catch (err) {
-            db.exec("ROLLBACK");
-            throw err;
-          }
-          // Publish only after commit so a rollback cannot emit a stale
-          // PipelineStateChanged over SSE.
-          ports.bus.publish({
-            type: "PipelineStateChanged",
-            document_id: intake.document_id,
-            from_state: prevState,
-            to_state: "triaged",
-            source: "password-submit",
-            reason: "password submitted, re-enqueuing conversion",
-            at: now,
+          // outgoing edges. Applicability comes from the DOCUMENT, not the
+          // intake row: a previous failed attempt can leave the intake stuck
+          // at 'queued' while the document is genuinely still waiting on a
+          // password. The shared helper owns the guards + atomic writes.
+          const result = submitPasswordForDocument(db, ports, {
+            documentId: intake.document_id,
+            intakeId: id,
+            password,
           });
-          ports.logger.info("password submitted, re-enqueuing conversion", {
-            intake_id: id,
-            document_id: intake.document_id,
-          });
-          return send(res, 200, {
-            ok: true,
-            intake_id: id,
-            document_id: intake.document_id,
-            state: "queued",
-          });
+          if ("error" in result) return send(res, result.error === "document_not_found" ? 404 : 409, result);
+          return send(res, 200, result);
         }
       }
 
@@ -605,80 +627,15 @@ if (p === "/v1/health") {
           }
           // Same document-truth guard as the intake-level endpoint: only a
           // document that is still awaiting conversion may be reset, and only
-          // when no conversion is already in flight.
-          const pwDoc = db
-            .prepare("SELECT markdown_path, markdown_chars FROM documents WHERE id=?")
-            .get(docId) as { markdown_path: string | null; markdown_chars: number | null } | undefined;
-          if (!pwDoc) return send(res, 404, { error: "document_not_found", document_id: docId });
-          if (pwDoc.markdown_path && pwDoc.markdown_chars) {
-            return send(res, 409, {
-              error: "password_not_applicable",
-              document_id: docId,
-              state: "already_converted",
-            });
-          }
-          const activeConvert = db
-            .prepare("SELECT 1 FROM jobs WHERE document_id=? AND phase='convert' AND state IN ('pending','running') LIMIT 1")
-            .get(docId);
-          if (activeConvert) {
-            return send(res, 409, {
-              error: "password_already_processing",
-              document_id: docId,
-            });
-          }
-          const now = ports.clock.isoNow();
-          let prevState: string | null = null;
-          // All five writes are one unit — see the intake-level endpoint.
-          db.exec("BEGIN");
-          try {
-            db.prepare("UPDATE documents SET password=? WHERE id=?").run(password, docId);
-            db.prepare(
-              `UPDATE intake_events
-                  SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
-                WHERE id=?`,
-            ).run(now, now, now, intake.id);
-            // Reset the canonical pipeline state. Same approach as the
-            // intake-level endpoint — insert directly at 'triaged' and
-            // publish manually after commit, since the state machine has no
-            // legal path from password_needed to triaged.
-            prevState = (db
-              .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
-              .get(docId) as { state: string } | undefined)?.state ?? null;
-            db.prepare(
-              `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
-               ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
-            ).run(docId, "triaged", now);
-            db.prepare(
-              `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
-               VALUES (?,?,?,?,?,?,?)`,
-            ).run(docId, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
-            enqueue(db, ports, docId, "convert");
-            db.exec("COMMIT");
-          } catch (err) {
-            db.exec("ROLLBACK");
-            throw err;
-          }
-          // Publish only after commit so a rollback cannot emit a stale
-          // PipelineStateChanged over SSE.
-          ports.bus.publish({
-            type: "PipelineStateChanged",
-            document_id: docId,
-            from_state: prevState,
-            to_state: "triaged",
-            source: "password-submit",
-            reason: "password submitted, re-enqueuing conversion",
-            at: now,
+          // when no conversion is already in flight. The shared helper owns
+          // the guards + atomic writes.
+          const result = submitPasswordForDocument(db, ports, {
+            documentId: docId,
+            intakeId: intake.id,
+            password,
           });
-          ports.logger.info("password submitted (by document), re-enqueuing conversion", {
-            intake_id: intake.id,
-            document_id: docId,
-          });
-          return send(res, 200, {
-            ok: true,
-            intake_id: intake.id,
-            document_id: docId,
-            state: "queued",
-          });
+          if ("error" in result) return send(res, result.error === "document_not_found" ? 404 : 409, result);
+          return send(res, 200, result);
         }
       }
 
@@ -778,15 +735,17 @@ if (p === "/v1/health") {
         if (rm && req.method === "POST") {
           const documentId = decodeURIComponent(rm[1]);
           const doc = db
-            .prepare("SELECT id, lifecycle, original_filename FROM documents WHERE id=?")
-            .get(documentId) as { id: string; lifecycle: string; original_filename: string | null } | undefined;
+            .prepare("SELECT id, lifecycle, original_filename, sha256 FROM documents WHERE id=?")
+            .get(documentId) as
+            | { id: string; lifecycle: string; original_filename: string | null; sha256: string | null }
+            | undefined;
           if (!doc) return send(res, 404, { error: "document_not_found", document_id: documentId });
           let restored = false;
           if (doc.lifecycle === "deleted") {
             // DELETE clears the disk pointers but keeps the original bytes on
             // disk — reprocessing a deleted document restores it from those
             // bytes. If the bytes are genuinely gone, the deletion stands.
-            const found = recoverRawFile(ports, doc.original_filename);
+            const found = await recoverRawFile(ports, doc.original_filename, doc.sha256);
             if (!found) {
               return send(res, 409, { error: "document_deleted", document_id: documentId });
             }
@@ -3210,8 +3169,10 @@ if (p === "/v1/health") {
         // actionable failure/retry information. The UI should not infer
         // completion from individual JobStateChanged events.
         case "/v1/intake/status": {
-          const limit = Number(url.searchParams.get("limit") ?? 100);
-          const offset = Number(url.searchParams.get("offset") ?? 0);
+          // Clamp the listing bounds: non-numeric limits default to 100,
+          // valid limits cap at 500, offsets are non-negative.
+          const limit = Math.min(Number(url.searchParams.get("limit") ?? 100) || 100, 500);
+          const offset = Math.max(Number(url.searchParams.get("offset") ?? 0) || 0, 0);
           const rows = db
             .prepare(
               `SELECT id, filename, source, kind, processing_state,
@@ -3370,7 +3331,8 @@ if (p === "/v1/health") {
             const doc = db
               .prepare(
                 `SELECT id, original_filename, ext, doc_type, source, received_at,
-                        converted_at, analysed_at, extraction_json, markdown_chars, lifecycle
+                        converted_at, analysed_at, extraction_json, markdown_path,
+                        markdown_chars, lifecycle
                    FROM documents WHERE id=?`,
               )
               .get(docId) as Record<string, unknown> | undefined;
@@ -3849,26 +3811,48 @@ function safeParse(s: string): unknown {
 /**
  * The DELETE flow clears a document's disk pointers but leaves the original
  * bytes under Raw/. Find them again by filename (uniquePath may have added
- * " (N)" suffixes), so a deleted document can be restored and reprocessed.
+ * " (N)" suffixes), and verify the candidate's SHA-256 matches the document
+ * so a same-named but different file can never be restored in its place.
  */
-function recoverRawFile(ports: Ports, filename: string | null): string | null {
+async function sha256File(p: string): Promise<string> {
+  const h = createHash("sha256");
+  const fd = await fsp.open(p, "r");
+  try {
+    const buf = Buffer.alloc(64 * 1024);
+    for (;;) {
+      const { bytesRead } = await fd.read(buf, 0, buf.length, null);
+      if (!bytesRead) break;
+      h.update(buf.subarray(0, bytesRead));
+    }
+  } finally {
+    await fd.close();
+  }
+  return h.digest("hex");
+}
+
+async function recoverRawFile(
+  ports: Ports,
+  filename: string | null,
+  sha256: string | null,
+): Promise<string | null> {
   if (!filename) return null;
   const esc = filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp(`^${esc}( \\(\\d+\\))?$`);
-  const walk = (dir: string): string | null => {
+  const walk = async (dir: string): Promise<string | null> => {
     let entries: fs.Dirent[];
     try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
+      entries = await fsp.readdir(dir, { withFileTypes: true });
     } catch {
       return null;
     }
     for (const entry of entries) {
       const p = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        const hit = walk(p);
+        const hit = await walk(p);
         if (hit) return hit;
       } else if (re.test(entry.name)) {
-        return p;
+        if (!sha256) return p;
+        if ((await sha256File(p)) === sha256) return p;
       }
     }
     return null;

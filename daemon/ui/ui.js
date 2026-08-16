@@ -80,7 +80,16 @@ setInterval(async () => {
   try {
     const h = await fetch("/v1/health", { headers: H }).then((r) => r.json());
     if (h && h.ui_version && UI_VERSION && String(h.ui_version) !== String(UI_VERSION)) {
-      location.reload();
+      // Reload only for a version pair we have NOT already tried — if a
+      // reload lands on the same mismatch (mid-edit, daemon serving a
+      // stale build), the watchdog must not reload forever.
+      const pair = UI_VERSION + "->" + String(h.ui_version);
+      let seen = false;
+      try { seen = sessionStorage.getItem("q2av_reload_pairs") === pair; } catch { /* storage blocked */ }
+      if (!seen) {
+        try { sessionStorage.setItem("q2av_reload_pairs", pair); } catch { /* storage blocked */ }
+        location.reload();
+      }
     }
   } catch {
     // daemon restarting — the next tick will sort it out

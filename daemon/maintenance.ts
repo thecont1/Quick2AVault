@@ -29,20 +29,25 @@ export interface DuplicateGroup {
   document_lifecycle: string | null;
   copies: number;
   files: { filename: string; created_at: string }[];
+  /** intake_events ids captured at listing time — the flush deletes ONLY
+   *  these rows, so copies that arrive during the flush survive for a
+   *  later sync. */
+  eventIds: number[];
 }
 
 export function listDuplicateGroups(db: DatabaseSync): DuplicateGroup[] {
   const rows = db
     .prepare(
-      `SELECT i.sha256, i.filename, i.created_at,
+      `SELECT i.id AS event_id, i.sha256, i.filename, i.created_at,
               d.original_filename AS original_filename, d.id AS document_id,
               d.lifecycle AS document_lifecycle
-         FROM intake_events i
-         LEFT JOIN documents d ON d.sha256 = i.sha256
-        WHERE i.kind='duplicate' AND i.sha256 IS NOT NULL
-        ORDER BY i.created_at DESC`,
+        FROM intake_events i
+        LEFT JOIN documents d ON d.sha256 = i.sha256
+       WHERE i.kind='duplicate' AND i.sha256 IS NOT NULL
+       ORDER BY i.created_at DESC`,
     )
     .all() as {
+    event_id: number;
     sha256: string;
     filename: string;
     created_at: string;
@@ -62,11 +67,13 @@ export function listDuplicateGroups(db: DatabaseSync): DuplicateGroup[] {
         document_lifecycle: r.document_lifecycle,
         copies: 0,
         files: [],
+        eventIds: [],
       };
       groups.set(r.sha256, g);
     }
     g.copies++;
     g.files.push({ filename: r.filename, created_at: r.created_at });
+    g.eventIds.push(r.event_id);
   }
   return [...groups.values()].sort((a, b) => b.copies - a.copies || a.sha256.localeCompare(b.sha256));
 }
@@ -137,8 +144,17 @@ export async function flushDuplicates(
     }
   }
 
-  // 2) Drop the duplicate intake rows (the flush result message is the audit).
-  db.prepare("DELETE FROM intake_events WHERE kind='duplicate' AND sha256 IS NOT NULL").run();
+  // 2) Drop ONLY the duplicate intake rows captured at listing time (the
+  //    flush result message is the audit). Rows inserted during the
+  //    awaited filesystem walk — including new copies of already-known
+  //    hashes — must survive for a later sync.
+  const idSet = new Set<number>();
+  for (const g of groups) for (const id of g.eventIds) idSet.add(id);
+  if (idSet.size > 0) {
+    const ids = [...idSet];
+    const holes = ids.map(() => "?").join(",");
+    db.prepare(`DELETE FROM intake_events WHERE id IN (${holes})`).run(...ids);
+  }
 
   // 3) Policy (b): re-process each affected document with the current
   //    pipeline. Copies are byte-identical, so reprocessing the original IS
