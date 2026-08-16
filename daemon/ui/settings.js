@@ -340,9 +340,7 @@ async function loadDuplicates() {
       if (btn) btn.disabled = true;
       return;
     }
-    summary.textContent = copies + " duplicate copies across " + groups.length + " groups. "
-      + "Re-delivered attachments (e.g. after a hard Gmail resync) land here; originals stay untouched. "
-      + "Review the archive in Documents Browser or Your Money → Duplicates.";
+    summary.textContent = copies + " duplicate copies across " + groups.length + " groups.";
     if (btn) btn.disabled = false;
   } catch (e) {
     summary.textContent = "could not load duplicates: " + String(e.message || e);

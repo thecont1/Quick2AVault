@@ -214,35 +214,33 @@
     </div>
   </div>
 
-<!-- ── Duplicate documents (post-resync maintenance) ─────────────── -->
-<div class="panel" id="dupPanel" style="margin-top:7px">
-  <h3>Duplicate documents</h3>
-  <div class="hint" style="margin:-6px 0 10px">A forced Gmail resync re-delivers attachments; byte-identical copies (same sha256) are set aside as duplicates and never re-processed. Flush them here.</div>
-  <div id="dupSummary" style="font:12px var(--mono);color:var(--dim);margin-bottom:8px">…</div>
-  <div class="dup-options">
-    <label class="danger-opt">
-      <input type="radio" name="dupPolicy" value="keep_originals" checked>
-      <span class="danger-opt-body">
-        <span class="danger-opt-title">Flush duplicates — keep originals</span>
-        <span class="danger-opt-desc">Deletes the archived duplicate files and their intake rows. Documents, transactions and analysis are untouched.</span>
-      </span>
-    </label>
-    <label class="danger-opt">
-      <input type="radio" name="dupPolicy" value="promote_newest">
-      <span class="danger-opt-body">
-        <span class="danger-opt-title">Flush duplicates and re-process the documents</span>
-        <span class="danger-opt-desc">Same flush, then re-runs conversion + analysis on every affected document with the current models (copies are byte-identical, so this is exactly "process the newest copy").</span>
-      </span>
-    </label>
+<!-- ── Manage Duplicates + Danger Zone: maintenance pair, side by side ── -->
+<div class="settings-cols" style="margin-top:7px">
+  <div class="dup-danger" id="dupPanel">
+    <h3>Manage Duplicates</h3>
+    <div id="dupSummary" style="font:11.5px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--dim);margin-bottom:12px">…</div>
+    <div class="danger-options">
+      <label class="danger-opt">
+        <input type="radio" name="dupPolicy" value="keep_originals" checked>
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">Flush duplicates — keep originals</span>
+          <span class="danger-opt-desc">Deletes the archived duplicate files and their intake rows. Documents, transactions and analysis are untouched.</span>
+        </span>
+      </label>
+      <label class="danger-opt">
+        <input type="radio" name="dupPolicy" value="promote_newest">
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">Flush duplicates and re-process</span>
+          <span class="danger-opt-desc">Same flush, then re-runs conversion + analysis on every affected document with the current models.</span>
+        </span>
+      </label>
+    </div>
+    <button class="danger-btn" id="dupFlushBtn" disabled>Flush duplicates</button>
+    <span class="msg" id="dupMsg" style="margin-left:10px"></span>
   </div>
-  <div class="save-row" style="margin-top:10px">
-    <button class="act" id="dupFlushBtn">Flush duplicates</button>
-    <span class="msg" id="dupMsg"></span>
-  </div>
-</div>
 
-<!-- Danger Zone — last item in Settings, matches Vault summary width. -->
-<div class="danger-zone">
+  <!-- Danger Zone -->
+  <div class="danger-zone" style="margin-top:0;max-width:none">
   <div class="danger-panel">
     <h3>Danger Zone</h3>
     <div class="danger-options">
