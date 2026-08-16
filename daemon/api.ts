@@ -331,8 +331,26 @@ async function uiAssetVersion(): Promise<string> {
   }
 }
 
+// ── UI diagnostics ────────────────────────────────────────────────
+// The page reports its browser state (UA, viewport, tab, loader table,
+// storage) here, fire-and-forget. GET reads the last N reports — this is
+// how we see what an end-user's browser is actually running.
+const uiDiagRing: Record<string, unknown>[] = [];
+let uiDiagCount = 0;
+
 // ── unauthenticated: health ──────────────────────────────────────────
-      if (p === "/v1/health") {
+if (p === "/v1/diagnostics") {
+  if (req.method === "GET") return send(res, 200, { reports: uiDiagRing, count: uiDiagCount });
+  if (req.method === "POST") {
+    const body = await readJson(req);
+    uiDiagCount += 1;
+    uiDiagRing.push({ n: uiDiagCount, at: new Date().toISOString(), ...(body && typeof body === "object" ? (body as Record<string, unknown>) : {}) });
+    if (uiDiagRing.length > 30) uiDiagRing.shift();
+    ports.logger.info("ui-diagnostics", body ?? {});
+    return send(res, 200, { recorded: true });
+  }
+}
+if (p === "/v1/health") {
         const jobs = db.prepare("SELECT state, COUNT(*) n FROM jobs GROUP BY state").all() as {
           state: string;
           n: number;

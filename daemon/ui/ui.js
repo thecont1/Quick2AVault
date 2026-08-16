@@ -30,9 +30,40 @@ function showErrBanner(msg, src) {
 }
 window.addEventListener("error", (e) => {
   showErrBanner((e.error && e.error.stack) || e.message || "Unknown error", "uncaught error");
+  diag({ kind: "error", msg: String((e.error && e.error.stack) || e.message || "Unknown error").slice(0, 500) });
 });
 window.addEventListener("unhandledrejection", (e) => {
   showErrBanner((e.reason && e.reason.stack) || String(e.reason), "unhandled rejection");
+  diag({ kind: "rejection", msg: String((e.reason && e.reason.stack) || e.reason).slice(0, 500) });
+});
+
+// ── diagnostics: report browser state to the daemon (fire-and-forget) ──
+function diag(extra) {
+  try {
+    let ls = {};
+    try { ls = { tab: localStorage.getItem("q2av_tab"), period: localStorage.getItem("q2av_period") }; } catch { ls = {}; }
+    fetch("/v1/diagnostics", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ua: navigator.userAgent,
+        vp: [window.innerWidth, window.innerHeight],
+        href: location.href,
+        tab: typeof activeTab !== "undefined" ? activeTab : null,
+        loaders: typeof TAB_LOADERS !== "undefined" && TAB_LOADERS
+          ? Object.keys(TAB_LOADERS).map((k) => k + ":" + typeof TAB_LOADERS[k])
+          : [],
+        ls,
+        ...extra,
+      }),
+    }).catch(() => {});
+  } catch { /* diagnostics must never break the page */ }
+}
+window.addEventListener("load", () => setTimeout(() => diag({ kind: "load" }), 1200));
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest && e.target.closest(".tabs button");
+  if (!b) return;
+  setTimeout(() => diag({ kind: "tab-click", target: b.dataset.tab }), 80);
 });
 
 // The daemon serves UI files live from disk. If they change under an open
