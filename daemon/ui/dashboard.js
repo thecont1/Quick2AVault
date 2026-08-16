@@ -110,17 +110,17 @@ function renderPipelineBoard() {
       + "<span class='pipeline-count" + (n ? "" : " zero") + "'>" + esc(n) + "</span></div>";
   };
   const OUTCOMES = [
-    { k: "complete", cls: "is-complete", g: "├" },
-    { k: "failed", cls: "is-failed", g: "├" },
-    { k: "duplicate", cls: "is-duplicate", g: "├" },
-    { k: "irrelevant", cls: "is-irrelevant", g: "├" },
-    { k: "password_needed", cls: "is-password", g: "└" },
+    { k: "complete", cls: "is-complete" },
+    { k: "failed", cls: "is-failed" },
+    { k: "duplicate", cls: "is-duplicate" },
+    { k: "irrelevant", cls: "is-irrelevant" },
+    { k: "password_needed", cls: "is-password" },
   ];
   const outcomeRow = (o) => {
     const st = FLOW_STATE[o.k] || { label: o.k };
     const n = pipelineDocCounts[o.k] || 0;
     return "<div class='pipeline-outcome " + o.cls + (docScope.state === o.k ? " is-selected" : "") + "' data-stage='" + esc(o.k) + "'>"
-      + "<span class='pipeline-branch'>" + o.g + "</span>"
+      + "<span class='pipeline-branch'></span>"
       + "<span class='pipeline-label'>" + esc(st.label) + "</span>"
       + "<span class='pipeline-count" + (n ? "" : " zero") + "'>" + esc(n) + "</span></div>";
   };
@@ -306,6 +306,15 @@ async function renderScopeList() {
     el.onclick = () => openDocumentDirect(el.dataset.id));
 }
 
+function animateDuplicateArrival() {
+  const row = document.querySelector('#board .pipeline-outcome.is-duplicate');
+  if (!row) return;
+  row.classList.add("pulse");
+  const c = row.querySelector(".pipeline-count");
+  if (c) { c.classList.add("flip"); setTimeout(() => c.classList.remove("flip"), 200); }
+  setTimeout(() => row.classList.remove("pulse"), 350);
+}
+
 async function refreshPipeline() {
   // Pipeline counters come from the authoritative whole-table intake
   // state; the Document Scope list refetches per the active scope.
@@ -354,6 +363,14 @@ function connect() {
         if (typeof refreshOpenDocIfMatch === "function") refreshOpenDocIfMatch(d.document_id);
       }
       else if (type === "DocumentReceived") onDocumentReceived();
+      // A duplicate re-arrival is set aside without any pipeline transition,
+      // so it would otherwise be silent: tick the Duplicate outcome live.
+      else if (type === "DocumentDuplicate") {
+        pipelineDocCounts["duplicate"] = (pipelineDocCounts["duplicate"] || 0) + 1;
+        pipelineCounts["duplicate"] = (pipelineCounts["duplicate"] || 0) + 1;
+        renderPipelineBoard();
+        animateDuplicateArrival();
+      }
       // JobStateChanged is a safety net: if any state change bypasses
       // PipelineStateChanged (e.g. a raw SQL update in the API layer),
       // the job event still fires and we refresh the pipeline counts

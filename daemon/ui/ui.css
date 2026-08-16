@@ -107,18 +107,25 @@
     color:var(--ink)}
   .obs-pipeline .pipeline-count.zero{color:var(--faint);opacity:.55}
   .obs-pipeline .pipeline-count.flip{animation:countFlip .18s ease-out}
-  /* terminal outcomes — branch stubs + restrained semantic colors */
-  .obs-pipeline .pipeline-branch{font:11px var(--mono);color:var(--dim);text-align:center}
-  .obs-pipeline .pipeline-outcome.is-complete .pipeline-branch,
+  /* terminal outcomes — CSS-drawn branch hooks (font-independent) */
+  .obs-pipeline .pipeline-branch{width:11px;height:8px;margin-left:3px;margin-top:-5px;
+    border-left:2px solid var(--dim);border-bottom:2px solid var(--dim);
+    border-bottom-left-radius:2px;flex-shrink:0}
+  /* the branch run: a short line from the Analysing node into the outcomes */
+  .obs-pipeline .pipeline-outcome:nth-child(7)::before{content:"";position:absolute;left:9px;
+    top:calc(-50% - 4px);height:calc(50% + 20px);width:2px;background:var(--line2)}
+  .obs-pipeline .pipeline-outcome.is-complete .pipeline-branch{border-color:var(--ok)}
   .obs-pipeline .pipeline-outcome.is-complete .pipeline-count{color:var(--ok)}
-  .obs-pipeline .pipeline-outcome.is-failed .pipeline-branch,
+  .obs-pipeline .pipeline-outcome.is-failed .pipeline-branch{border-color:var(--bad)}
   .obs-pipeline .pipeline-outcome.is-failed .pipeline-count{color:var(--bad)}
-  .obs-pipeline .pipeline-outcome.is-duplicate .pipeline-branch,
+  .obs-pipeline .pipeline-outcome.is-duplicate .pipeline-branch{border-color:var(--warn)}
   .obs-pipeline .pipeline-outcome.is-duplicate .pipeline-count{color:var(--warn)}
-  .obs-pipeline .pipeline-outcome.is-irrelevant .pipeline-branch,
+  .obs-pipeline .pipeline-outcome.is-irrelevant .pipeline-branch{border-color:var(--faint)}
   .obs-pipeline .pipeline-outcome.is-irrelevant .pipeline-count{color:var(--faint)}
-  .obs-pipeline .pipeline-outcome.is-password .pipeline-branch,
+  .obs-pipeline .pipeline-outcome.is-password .pipeline-branch{border-color:var(--gold)}
   .obs-pipeline .pipeline-outcome.is-password .pipeline-count{color:var(--gold)}
+  .obs-pipeline .pipeline-outcome.handoff .pipeline-branch{border-color:var(--blue)}
+  .obs-pipeline .pipeline-outcome.handoff .pipeline-count{color:var(--blue)}
   /* micro-handoff motion */
   .pipeline-dot{position:absolute;width:6px;height:6px;border-radius:999px;background:var(--blue);
     z-index:3;transition:top .45s cubic-bezier(.4,0,.2,1);pointer-events:none}
