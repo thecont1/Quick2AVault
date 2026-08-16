@@ -147,6 +147,12 @@ const PERIODS = [
   { key: "last_fy", label: "Last FY" },
   { key: "all", label: "All time" },
 ];
+// A stale stored period (from an older build's vocabulary) would poison
+// every data fetch with a value the API doesn't know. Migrate it.
+if (!PERIODS.some((p) => p.key === period)) {
+  period = "this_fy";
+  try { localStorage.setItem("q2av_period", period); } catch { /* ignore */ }
+}
 function renderPeriods() {
   const el = document.getElementById("periods");
   el.innerHTML = PERIODS.map((p) =>

@@ -10,8 +10,12 @@ async function refreshHealth() {
 // ── observability: money section ─────────────────────────────────
 async function refreshMoney() {
   const s = await api("/v1/snapshot?period=" + encodeURIComponent(period));
-  document.getElementById("moneyPeriod").textContent = "— " + s.period.label;
-  document.getElementById("income").textContent = money(s.income_minor);
+  if (!s || s.error) {
+    document.getElementById("moneyPeriod").textContent = "— period unavailable";
+    return;
+  }
+  document.getElementById("moneyPeriod").textContent = "— " + (s.period ? s.period.label : period);
+  document.getElementById("income").textContent = money(s.income_minor ?? 0);
   document.getElementById("spend").textContent = money(s.spending_minor);
   document.getElementById("invest").textContent = money(s.investments_net_minor);
   document.getElementById("xfer").textContent = money(s.transfers_minor);
