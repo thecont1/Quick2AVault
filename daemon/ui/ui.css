@@ -241,6 +241,8 @@
   .pp-opt.selected{background:color-mix(in srgb,var(--blue) 15%,transparent)}
   .pp-opt .pp-opt-logo{width:18px;height:18px;border-radius:3px;flex-shrink:0;object-fit:contain}
   .pp-opt .pp-opt-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pp-opt .pp-opt-sub{display:block;font:10px var(--mono);color:var(--faint);margin-top:2px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
   /* ── forms ────────────────────────────────────────────────────── */
   .field{margin-bottom:14px}
