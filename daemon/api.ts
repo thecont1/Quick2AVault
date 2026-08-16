@@ -1483,9 +1483,19 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           .prepare("SELECT value FROM app_settings WHERE key='jurisdiction.id'")
           .get() as { value?: string } | undefined)?.value ?? "IN";
 
-        // Build credential records for all providers
         const credMgr = secrets ? new CredentialManager(secrets) : null;
-        const providerIds = catalog.map((p) => p.id);
+        // Only the configured slots warrant a keychain read here. Reading every
+        // catalog provider spawns one `security` process per provider on macOS
+        // on each settings page load (the models.dev catalog has dozens). The
+        // UI looks up other providers' keys on demand once they are selected.
+        const primarySlot = readSlotConfig(db, "primary");
+        const secondarySlot = readSlotConfig(db, "secondary");
+        const providerIds = [
+          ...new Set([
+            ...(primarySlot ? [primarySlot.providerId] : []),
+            ...(secondarySlot ? [secondarySlot.providerId] : []),
+          ]),
+        ];
         const credRecords = credMgr
           ? await credMgr.getRecords(providerIds)
           : {};
@@ -1549,25 +1559,37 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
         if (b.primary) {
           const p = b.primary as unknown as { providerId: string; modelId: string; baseUrlOverride?: string };
-          if (typeof p.providerId === "string") {
-            writeSlotConfig(db, "primary", {
-              providerId: p.providerId,
-              modelId: p.modelId,
-              baseUrlOverride: p.baseUrlOverride,
-            });
-            saved.push("primary");
+          if (typeof p.providerId !== "string" || !p.providerId) {
+            return send(res, 400, { error: "invalid_slot", slot: "primary", reason: "providerId required" });
           }
+          // A missing modelId would otherwise bind undefined and throw a 500.
+          // Unknown provider/model pairs are intentionally allowed — the user
+          // can enter a model ID not yet in the catalog, and validateSlotConfig
+          // / reconfigure handle the fallback.
+          if (typeof p.modelId !== "string" || !p.modelId.trim()) {
+            return send(res, 400, { error: "invalid_slot", slot: "primary", reason: "modelId required" });
+          }
+          writeSlotConfig(db, "primary", {
+            providerId: p.providerId,
+            modelId: p.modelId,
+            baseUrlOverride: p.baseUrlOverride,
+          });
+          saved.push("primary");
         }
         if (b.secondary) {
           const s = b.secondary as unknown as { providerId: string; modelId: string; baseUrlOverride?: string };
-          if (typeof s.providerId === "string") {
-            writeSlotConfig(db, "secondary", {
-              providerId: s.providerId,
-              modelId: s.modelId,
-              baseUrlOverride: s.baseUrlOverride,
-            });
-            saved.push("secondary");
+          if (typeof s.providerId !== "string" || !s.providerId) {
+            return send(res, 400, { error: "invalid_slot", slot: "secondary", reason: "providerId required" });
           }
+          if (typeof s.modelId !== "string" || !s.modelId.trim()) {
+            return send(res, 400, { error: "invalid_slot", slot: "secondary", reason: "modelId required" });
+          }
+          writeSlotConfig(db, "secondary", {
+            providerId: s.providerId,
+            modelId: s.modelId,
+            baseUrlOverride: s.baseUrlOverride,
+          });
+          saved.push("secondary");
         }
 
         // Handle API key set/clear per provider
@@ -1599,10 +1621,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
 
           ai.reconfigure({
             apiKey: primKey ?? "",
-            baseUrl: primProvider?.baseUrl ?? newPrimary?.baseUrlOverride ?? "",
+            baseUrl: newPrimary?.baseUrlOverride ?? primProvider?.baseUrl ?? "",
             model: primModel?.id ?? newPrimary?.modelId ?? "",
             secondaryApiKey: secKey ?? "",
-            secondaryBaseUrl: secProvider?.baseUrl ?? newSecondary?.baseUrlOverride ?? "",
+            secondaryBaseUrl: newSecondary?.baseUrlOverride ?? secProvider?.baseUrl ?? "",
             secondaryModel: secModel?.id ?? newSecondary?.modelId ?? "",
             routingMode: "auto",
           });
@@ -2546,22 +2568,27 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
         const settingsRows = db.prepare("SELECT COUNT(*) as n FROM app_settings").get() as { n: number };
         deleted += settingsRows.n;
         db.prepare("DELETE FROM app_settings").run();
-        // Remove all AI API keys from the SecretStore.
+        // Remove all AI API keys from the SecretStore. "Forget everything" must
+        // mean everything: the flat legacy keys, the per-provider legacy keys
+        // (ai.api_key.<pid> / ai.secondary_api_key.<pid>), and the new
+        // CredentialManager keys (ai.provider_key.<pid>). Provider ids are
+        // derived from the catalog plus the legacy ids that predate it.
         if (secrets) {
-          for (const key of [
+          const catalogIds = loadCatalog().map((p) => p.id);
+          const legacyIds = [
+            "alibaba", "anthropic", "groq", "kimi", "minimax", "mimo",
+            "openai", "openrouter", "perplexity", "poolside", "sarvam",
+            "together", "custom",
+          ];
+          const ids = [...new Set([...catalogIds, ...legacyIds])];
+          const keysToRemove = [
             "ai.api_key",
             "ai.secondary.api_key",
-            "ai.api_key.alibaba", "ai.api_key.anthropic", "ai.api_key.groq",
-            "ai.api_key.kimi", "ai.api_key.minimax", "ai.api_key.mimo",
-            "ai.api_key.openai", "ai.api_key.openrouter", "ai.api_key.perplexity",
-            "ai.api_key.poolside", "ai.api_key.together", "ai.api_key.custom",
-            "ai.secondary_api_key.alibaba", "ai.secondary_api_key.anthropic",
-            "ai.secondary_api_key.groq", "ai.secondary_api_key.kimi",
-            "ai.secondary_api_key.minimax", "ai.secondary_api_key.mimo",
-            "ai.secondary_api_key.openai", "ai.secondary_api_key.openrouter",
-            "ai.secondary_api_key.perplexity", "ai.secondary_api_key.poolside",
-            "ai.secondary_api_key.together", "ai.secondary_api_key.custom",
-          ]) {
+            ...ids.map((pid) => `ai.api_key.${pid}`),
+            ...ids.map((pid) => `ai.secondary_api_key.${pid}`),
+            ...ids.map((pid) => `ai.provider_key.${pid}`),
+          ];
+          for (const key of keysToRemove) {
             try { await secrets.remove(key); } catch { /* already gone */ }
           }
         }
@@ -2876,7 +2903,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           const args: (string | number)[] = [];
           if (pipelineState) args.push(pipelineState);
           if (bounded) { args.push(period.from!, period.to!); }
-          args.push(Number(url.searchParams.get("limit") ?? 500));
+          args.push(Math.min(Number(url.searchParams.get("limit") ?? 500) || 500, 2000));
           return send(res, 200, {
             period: { label: period.label, key: period.key, from: period.from, to: period.to },
             state: stateParam,
@@ -3204,11 +3231,18 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               const v = extractionKey ? x[extractionKey] : x[field];
               if (v === undefined || v === null) return null;
               // issuer/vendor in the extraction are objects with a .name —
-              // flatten to the name so the UI shows a readable string.
-              const flat = (typeof v === "object" && v !== null && "name" in v)
-                ? String((v as { name: unknown }).name)
-                : String(v);
-              return { value: flat, source: "ai" as const, status: "proposed" as const };
+              // flatten to the name so the UI shows a readable string. Only use
+              // the name when it is a real value; a null/undefined name (or an
+              // object with no name) must not render the literal "null"/
+              // "undefined"/"[object Object]".
+              const named = typeof v === "object" && v !== null
+                ? (v as { name?: unknown }).name
+                : undefined;
+              if (named !== undefined && named !== null) {
+                return { value: String(named), source: "ai" as const, status: "proposed" as const };
+              }
+              if (typeof v === "object") return null;
+              return { value: String(v), source: "ai" as const, status: "proposed" as const };
             };
             const parties = db
               .prepare(
@@ -3981,17 +4015,23 @@ async function testProvider(cfg: {
   // completions). Test by probing the status endpoint with a dummy job ID.
   // A 401 means bad key; a 404 means the key is valid but the job doesn't
   // exist (which is exactly what we expect for a made-up ID).
-  if (cfg.baseUrl.includes("sarvam.ai")) {
+  // Match the host, not a substring: a baseUrl like "sarvam.ai.example.com"
+  // must never receive the API key. Parsing the URL also lets a malformed or
+  // missing baseUrl fall through to the generic provider test below.
+  let sarvamHost = "";
+  try { sarvamHost = new URL(cfg.baseUrl).hostname; } catch { /* invalid baseUrl */ }
+  if (sarvamHost === "sarvam.ai" || sarvamHost.endsWith(".sarvam.ai")) {
     const start = Date.now();
     try {
       const probeUrl = `${cfg.baseUrl.replace(/\/$/, "")}/job/test-probe/status`;
       const res = await fetch(probeUrl, {
         headers: { "api-subscription-key": cfg.apiKey },
+        signal: AbortSignal.timeout(15000),
       });
       const latency = Date.now() - start;
       // 401/403 = bad key; 404 = key is valid, job not found (expected)
       const authenticated = res.status !== 401 && res.status !== 403;
-      const reachable = res.status !== 0 && res.status < 500;
+      const reachable = res.status < 500;
       return {
         ...base,
         reachable,

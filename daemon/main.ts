@@ -176,7 +176,7 @@ async function main() {
   if (primSlot) {
     const provider = findProvider(catalog, primSlot.providerId);
     aiApiKey = (await credMgr.getKey(primSlot.providerId)) ?? "";
-    aiBaseUrl = provider?.baseUrl ?? primSlot.baseUrlOverride ?? "";
+    aiBaseUrl = primSlot.baseUrlOverride ?? provider?.baseUrl ?? "";
     aiModel = primSlot.modelId;
   } else {
     aiApiKey = (await secrets.get("ai.api_key")) ?? process.env.Q2AV_AI_API_KEY ?? process.env.ANTHROPIC_API_KEY ?? "";
@@ -190,7 +190,7 @@ async function main() {
   if (secSlot) {
     const provider = findProvider(catalog, secSlot.providerId);
     ai2ApiKey = (await credMgr.getKey(secSlot.providerId)) ?? "";
-    ai2BaseUrl = provider?.baseUrl ?? secSlot.baseUrlOverride ?? "";
+    ai2BaseUrl = secSlot.baseUrlOverride ?? provider?.baseUrl ?? "";
     ai2Model = secSlot.modelId;
   } else {
     ai2ApiKey = (await secrets.get("ai.secondary.api_key")) ?? "";
