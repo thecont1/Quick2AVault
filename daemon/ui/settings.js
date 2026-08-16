@@ -206,7 +206,68 @@ async function loadSettings() {
   // Auto-test both inference providers
   testAi("primary");
   testAi("secondary");
+
+  // ── Duplicate documents (post-resync maintenance) ──────────────
+  loadDuplicates();
 }
+
+// ── Duplicate flush ──────────────────────────────────────────────
+async function loadDuplicates() {
+  const summary = document.getElementById("dupSummary");
+  const list = document.getElementById("dupList");
+  const btn = document.getElementById("dupFlushBtn");
+  if (!summary || !list) return;
+  try {
+    const d = await api("/v1/maintenance/duplicates");
+    const groups = d.groups || [];
+    const copies = d.total_copies || 0;
+    if (!groups.length) {
+      summary.textContent = "No duplicates — clean.";
+      list.innerHTML = "";
+      if (btn) btn.disabled = true;
+      return;
+    }
+    summary.textContent = copies + " duplicate copies across " + groups.length + " groups. Re-delivered attachments (e.g. after a hard Gmail resync) land here; originals stay untouched.";
+    list.innerHTML = groups.map((g) =>
+      "<div class='irow'>"
+      + "<div><div class='fn'>" + esc(g.original_filename || (g.files[0] || {}).filename || "unknown") + "</div>"
+      + "<div class='meta'>" + esc(String(g.sha256).slice(0, 12)) + "… · " + g.copies + " cop" + (g.copies > 1 ? "ies" : "y")
+      + (g.document_id ? "" : " · <span class='err'>no live document</span>") + "</div></div>"
+      + "<span class='pill archived'>duplicate</span>"
+      + "<span class='age'>" + ago((g.files[0] || {}).created_at) + "</span></div>"
+    ).join("");
+    if (btn) btn.disabled = false;
+  } catch (e) {
+    summary.textContent = "could not load duplicates: " + String(e.message || e);
+  }
+}
+
+document.getElementById("dupFlushBtn").onclick = async () => {
+  const msg = document.getElementById("dupMsg");
+  const btn = document.getElementById("dupFlushBtn");
+  const policy = (document.querySelector('input[name="dupPolicy"]:checked') || {}).value || "keep_originals";
+  const what = policy === "promote_newest"
+    ? "Archived duplicates will be deleted AND every affected document will be re-processed with the current models."
+    : "Archived duplicate files will be deleted. Original documents are untouched.";
+  if (!confirm("Flush duplicate documents?\n\n" + what)) return;
+  btn.disabled = true;
+  msg.className = "msg";
+  msg.textContent = "Flushing…";
+  try {
+    const r = await apiPost("/v1/maintenance/flush-duplicates", { policy, confirm: "FLUSH" });
+    if (r && r.error) throw new Error(r.message || r.error);
+    msg.className = "msg ok";
+    msg.textContent = "Flushed " + (r.copies || 0) + " copies across " + (r.groups || 0) + " groups · "
+      + (r.deleted_files || 0) + " files deleted"
+      + (r.reprocessed ? " · re-processing " + r.reprocessed + " documents" : "");
+    loadDuplicates();
+    if (typeof refreshPipeline === "function") refreshPipeline();
+  } catch (e) {
+    msg.className = "msg err";
+    msg.textContent = "Failed: " + String(e.message || e);
+  }
+  btn.disabled = false;
+};
 
 /**
  * Map a base URL to a provider ID from the catalog.

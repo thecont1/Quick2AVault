@@ -1026,6 +1026,49 @@ export function enqueue(db: DatabaseSync, ports: Ports, documentId: string, phas
 }
 
 /**
+ * Reprocess core: start a new canonical pipeline epoch and enqueue a fresh
+ * convert job (which chains analyse on completion). Shared by the
+ * /v1/documents/:id/reprocess endpoint and the duplicate-flush maintenance
+ * path, so both use the exact same reset semantics.
+ *
+ * Throws for unknown or deleted documents; reactivates a removed one.
+ */
+export function enqueueReprocess(db: DatabaseSync, ports: Ports, documentId: string): "convert" {
+  const doc = db
+    .prepare("SELECT id, lifecycle FROM documents WHERE id=?")
+    .get(documentId) as { id: string; lifecycle: string } | undefined;
+  if (!doc) throw new Error(`document ${documentId} not found`);
+  if (doc.lifecycle === "deleted") throw new Error(`document ${documentId} is deleted`);
+
+  // Reprocess is a new canonical pipeline epoch. Preserve the append-only
+  // event history, but reset the current-state pointer and replay the
+  // legal prefix up to the phase the worker will enter. Weakening the
+  // state machine here would hide illegal transitions everywhere else.
+  db.exec("BEGIN");
+  try {
+    if (doc.lifecycle !== "active") {
+      db.prepare("UPDATE documents SET lifecycle='active' WHERE id=?").run(documentId);
+    }
+    db.prepare("DELETE FROM document_pipeline WHERE document_id=?").run(documentId);
+    const prefix = ["received", "stable", "hashed", "triaged"] as const;
+    for (const toState of prefix) {
+      transitionPipeline(db, {
+        documentId,
+        toState,
+        timestamp: ports.clock.isoNow(),
+        source: "reprocess",
+      });
+    }
+    enqueue(db, ports, documentId, "convert");
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return "convert";
+}
+
+/**
  * P1 — conversion. anydoc/plaintext/Vision-OCR -> canonical markdown v1.
  * AI never rewrites this text; it is the reading surface for every later claim.
  */

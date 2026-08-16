@@ -12,7 +12,8 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 
 import type { Ports } from "./ports.js";
-import { ingestFile, restoreIntake, reclassifyIntake, enqueue } from "./pipeline.js";
+import { ingestFile, restoreIntake, reclassifyIntake, enqueue, enqueueReprocess } from "./pipeline.js";
+import { listDuplicateGroups, flushDuplicates } from "./maintenance.js";
 import { listPacks, loadPack, fyKeyFor, fyRange, type JurisdictionPack } from "./jurisdiction.js";
 import { buildTreemap } from "./categories/spend-categories.js";
 import { deriveGmailAddress } from "./gmail/gmail-model.js";
@@ -722,32 +723,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           // this rescan, and a clean one just pays a cheap idempotent
           // re-convert. The convert job enqueues analyse on completion, so a
           // single "convert" enqueue drains the entire chain.
-          const phase = "convert";
-          // Reprocess is a new canonical pipeline epoch. Preserve the append-only
-          // event history, but reset the current-state pointer and replay the
-          // legal prefix up to the phase the worker will enter. Weakening the
-          // state machine here would hide illegal transitions everywhere else.
-          db.exec("BEGIN");
-          try {
-            if (doc.lifecycle !== "active") {
-              db.prepare("UPDATE documents SET lifecycle='active' WHERE id=?").run(documentId);
-            }
-            db.prepare("DELETE FROM document_pipeline WHERE document_id=?").run(documentId);
-            const prefix = ["received", "stable", "hashed", "triaged"] as const;
-            for (const toState of prefix) {
-              transitionPipeline(db, {
-                documentId,
-                toState,
-                timestamp: ports.clock.isoNow(),
-                source: "reprocess",
-              });
-            }
-            enqueue(db, ports, documentId, phase);
-            db.exec("COMMIT");
-          } catch (error) {
-            db.exec("ROLLBACK");
-            throw error;
-          }
+          const phase = enqueueReprocess(db, ports, documentId);
           return send(res, 200, { reprocessing: true, document_id: documentId, phase });
         }
       }
@@ -795,6 +771,32 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           try { removeFromIndex(db, documentId); } catch { /* index optional */ }
           return send(res, 200, { deleted: true, document_id: documentId });
         }
+      }
+
+      // ── maintenance: duplicate flush (post-resync housekeeping) ─────────
+      // A forced Gmail resync re-delivers every attachment; the sha256
+      // dedupe guard sets re-arrivals aside under Duplicates/ with an
+      // intake_events row of kind='duplicate'. GET lists the groups so the
+      // Settings panel can preview; POST flushes them under a policy.
+      if (p === "/v1/maintenance/duplicates" && req.method === "GET") {
+        const groups = listDuplicateGroups(db);
+        return send(res, 200, {
+          groups,
+          total_groups: groups.length,
+          total_copies: groups.reduce((n, g) => n + g.copies, 0),
+        });
+      }
+      if (p === "/v1/maintenance/flush-duplicates" && req.method === "POST") {
+        const b = await readJson(req);
+        const policy = b?.policy;
+        if (policy !== "keep_originals" && policy !== "promote_newest") {
+          return send(res, 400, { error: "policy must be 'keep_originals' or 'promote_newest'" });
+        }
+        if (b?.confirm !== "FLUSH") {
+          return send(res, 400, { error: "confirm: 'FLUSH' required" });
+        }
+        const result = await flushDuplicates(db, ports, policy);
+        return send(res, 200, { flushed: true, policy, ...result });
       }
 
       // ── claims: the inline-editing surface (work order 03 §P2) ───────────

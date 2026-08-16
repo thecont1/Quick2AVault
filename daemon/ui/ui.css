@@ -111,6 +111,9 @@
   /* ── intake table ─────────────────────────────────────────────── */
   .intake{border:1px solid var(--line);background:var(--panel);border-radius:6px;
           max-height:560px;overflow-y:auto;font:11.5px var(--mono)}
+  .dup-list{border:1px solid var(--line2);border-radius:5px;max-height:240px;
+            overflow-y:auto;font:11.5px var(--mono);background:var(--panel)}
+  .dup-list .irow{padding:7px 11px}
   .irow{padding:9px 13px;border-bottom:1px solid var(--line2);display:grid;
         grid-template-columns:1fr auto auto;gap:8px;align-items:baseline}
   .irow:last-child{border-bottom:0}
