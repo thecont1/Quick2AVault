@@ -88,6 +88,7 @@ export function resetToolCache() {
 export async function pageCapability(
   ext: string | null | undefined,
   rawPath: string,
+  password?: string,
 ): Promise<PageCapability> {
   const e = normaliseExt(ext);
   const tools = await detectTools();
@@ -105,7 +106,7 @@ export async function pageCapability(
         reason: "no PDF rasteriser available on this machine",
       };
     }
-    const pages = tools.pdfinfo ? await pdfPageCount(rawPath) : 1;
+    const pages = tools.pdfinfo ? await pdfPageCount(rawPath, password) : 1;
     return {
       kind: "rasterised",
       pages,
@@ -126,9 +127,10 @@ export async function pageCapability(
 }
 
 /** Page count via poppler. Falls back to 1 rather than throwing. */
-export async function pdfPageCount(file: string): Promise<number> {
+export async function pdfPageCount(file: string, password?: string): Promise<number> {
   try {
-    const { stdout } = await exec("pdfinfo", [file]);
+    const args = password ? ["-upw", password, file] : [file];
+    const { stdout } = await exec("pdfinfo", args);
     const m = stdout.match(/^Pages:\s+(\d+)/m);
     return m ? Math.max(1, Number(m[1])) : 1;
   } catch {
@@ -139,6 +141,8 @@ export async function pdfPageCount(file: string): Promise<number> {
 export interface RenderRequest {
   rawPath: string;
   ext: string | null | undefined;
+  /** Document password for encrypted PDFs (set by the unlock flow). */
+  password?: string;
   /** 1-based page number. */
   page: number;
   /** Target width in pixels. */
@@ -195,15 +199,16 @@ export async function renderPage(req: RenderRequest): Promise<RenderResult> {
     const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "q2v-ras-"));
     try {
       const prefix = path.join(tmp, "p");
-      await exec("pdftoppm", [
+      const args = [
         "-png",
         "-f", String(page),
         "-l", String(page),
         "-scale-to-x", String(width),
         "-scale-to-y", "-1",
-        rawPath,
-        prefix,
-      ]);
+      ];
+      if (req.password) args.push("-upw", req.password);
+      args.push(rawPath, prefix);
+      await exec("pdftoppm", args);
       const produced = (await fsp.readdir(tmp)).find((f) => f.endsWith(".png"));
       if (!produced) throw new Error("pdftoppm produced no page");
       await fsp.rename(path.join(tmp, produced), out);

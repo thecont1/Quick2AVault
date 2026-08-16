@@ -3400,7 +3400,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           const infoMatch = p.match(/^\/v1\/documents\/([^/]+)\/pageinfo$/);
           if (infoMatch) {
             const doc = db
-              .prepare("SELECT id, ext, raw_path FROM documents WHERE id = ?")
+              .prepare("SELECT id, ext, raw_path, password FROM documents WHERE id = ?")
               .get(infoMatch[1]) as Record<string, unknown> | undefined;
             if (!doc) {
               return send(res, 404, { error: "document_not_found", document_id: infoMatch[1] });
@@ -3410,7 +3410,11 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             if (!resolved.startsWith(vaultRoot + path.sep)) {
               return send(res, 403, { error: "outside_vault" });
             }
-            const cap = await pageCapability(doc.ext as string, resolved);
+            const cap = await pageCapability(
+              doc.ext as string,
+              resolved,
+              (doc.password as string | null) ?? undefined,
+            );
             return send(res, 200, {
               document_id: doc.id,
               kind: cap.kind,
@@ -3429,7 +3433,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           const pageMatch = p.match(/^\/v1\/documents\/([^/]+)\/page$/);
           if (pageMatch) {
             const doc = db
-              .prepare("SELECT id, ext, raw_path, sha256 FROM documents WHERE id = ?")
+              .prepare("SELECT id, ext, raw_path, sha256, password FROM documents WHERE id = ?")
               .get(pageMatch[1]) as Record<string, unknown> | undefined;
             if (!doc) {
               return send(res, 404, { error: "document_not_found", document_id: pageMatch[1] });
@@ -3441,7 +3445,11 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               return send(res, 403, { error: "outside_vault" });
             }
 
-            const cap = await pageCapability(doc.ext as string, resolved);
+            const cap = await pageCapability(
+              doc.ext as string,
+              resolved,
+              (doc.password as string | null) ?? undefined,
+            );
             if (cap.kind === "none") {
               // Not an error: an email with no attachment genuinely has no page.
               // 409 lets the client show "markdown only" rather than a failure.
@@ -3505,6 +3513,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               const out = await renderPage({
                 rawPath: resolved,
                 ext: doc.ext as string,
+                password: (doc.password as string | null) ?? undefined,
                 page: wanted,
                 width,
                 cacheDir: path.join(vaultRoot, ".cache", "pages"),
