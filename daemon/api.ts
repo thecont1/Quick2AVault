@@ -65,7 +65,8 @@ import {
   mergePeople,
   normaliseIdentifier,
   recordMergeCandidate,
-  UNIDENTIFIED_PERSON_ID,
+  unidentifiedEntity,
+  unidentifiedPerson,
 } from "./identity.js";
 import {
   DOC_TYPES,
@@ -410,32 +411,58 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           if (!intake.document_id) {
             return send(res, 409, { error: "intake has no document — password not applicable" });
           }
-          // Store the password on the document.
-          db.prepare("UPDATE documents SET password=? WHERE id=?")
-            .run(password, intake.document_id);
-          // Update the intake state back to queued so the UI shows progress.
+          // The reset exists only because password_needed is terminal with no
+          // outgoing edges. Re-enqueuing conversion for a document that is
+          // already converting, analysing, or complete would rewind the
+          // canonical pipeline and start a second conversion pass.
+          if (intake.processing_state !== "password_needed") {
+            return send(res, 409, {
+              error: "password_not_applicable",
+              intake_id: id,
+              document_id: intake.document_id,
+              state: intake.processing_state,
+            });
+          }
           const now = ports.clock.isoNow();
-          db.prepare(
-            `UPDATE intake_events
-                SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
-              WHERE id=?`,
-          ).run(now, now, now, id);
-          // Reset the canonical pipeline state via transitionPipeline so a
-          // PipelineStateChanged event is published for the SSE stream. The
-          // state machine has password_needed as terminal with no outgoing
-          // edges, and null → triaged is also illegal, so we insert the row
-          // directly at 'triaged' and publish the event manually.
-          const prevState = (db
-            .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
-            .get(intake.document_id) as { state: string } | undefined)?.state ?? null;
-          db.prepare(
-            `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
-             ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
-          ).run(intake.document_id, "triaged", now);
-          db.prepare(
-            `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
-             VALUES (?,?,?,?,?,?,?)`,
-          ).run(intake.document_id, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+          let prevState: string | null = null;
+          // All five writes (document password, intake state, pipeline state,
+          // pipeline event, convert job) are one unit — a partial write would
+          // leave an intake marked 'queued' with no convert job.
+          db.exec("BEGIN");
+          try {
+            // Store the password on the document.
+            db.prepare("UPDATE documents SET password=? WHERE id=?")
+              .run(password, intake.document_id);
+            // Update the intake state back to queued so the UI shows progress.
+            db.prepare(
+              `UPDATE intake_events
+                  SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
+                WHERE id=?`,
+            ).run(now, now, now, id);
+            // Reset the canonical pipeline state. The state machine has
+            // password_needed as terminal with no outgoing edges, and
+            // null → triaged is also illegal, so we insert the row directly
+            // at 'triaged' and publish the event manually after commit.
+            prevState = (db
+              .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+              .get(intake.document_id) as { state: string } | undefined)?.state ?? null;
+            db.prepare(
+              `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+               ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+            ).run(intake.document_id, "triaged", now);
+            db.prepare(
+              `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+               VALUES (?,?,?,?,?,?,?)`,
+            ).run(intake.document_id, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+            // Re-enqueue the convert job.
+            enqueue(db, ports, intake.document_id, "convert");
+            db.exec("COMMIT");
+          } catch (err) {
+            db.exec("ROLLBACK");
+            throw err;
+          }
+          // Publish only after commit so a rollback cannot emit a stale
+          // PipelineStateChanged over SSE.
           ports.bus.publish({
             type: "PipelineStateChanged",
             document_id: intake.document_id,
@@ -445,8 +472,6 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             reason: "password submitted, re-enqueuing conversion",
             at: now,
           });
-          // Re-enqueue the convert job.
-          enqueue(db, ports, intake.document_id, "convert");
           ports.logger.info("password submitted, re-enqueuing conversion", {
             intake_id: id,
             document_id: intake.document_id,
@@ -484,29 +509,50 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           if (!intake) {
             return send(res, 404, { error: "intake not found for document", document_id: docId });
           }
-          db.prepare("UPDATE documents SET password=? WHERE id=?").run(password, docId);
+          // Same guard as the intake-level endpoint: only a document waiting
+          // on a password may be reset. Rewinding a converting/analysing/
+          // complete document would start a second conversion pass.
+          if (intake.processing_state !== "password_needed") {
+            return send(res, 409, {
+              error: "password_not_applicable",
+              document_id: docId,
+              state: intake.processing_state,
+            });
+          }
           const now = ports.clock.isoNow();
-          db.prepare(
-            `UPDATE intake_events
-                SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
-              WHERE id=?`,
-          ).run(now, now, now, intake.id);
-          // Reset the canonical pipeline state and publish a
-          // PipelineStateChanged event for the SSE stream. Same approach as
-          // the intake-level endpoint above — insert directly at 'triaged'
-          // and publish manually, since the state machine has no legal path
-          // from password_needed to triaged.
-          const prevState = (db
-            .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
-            .get(docId) as { state: string } | undefined)?.state ?? null;
-          db.prepare(
-            `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
-             ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
-          ).run(docId, "triaged", now);
-          db.prepare(
-            `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
-             VALUES (?,?,?,?,?,?,?)`,
-          ).run(docId, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+          let prevState: string | null = null;
+          // All five writes are one unit — see the intake-level endpoint.
+          db.exec("BEGIN");
+          try {
+            db.prepare("UPDATE documents SET password=? WHERE id=?").run(password, docId);
+            db.prepare(
+              `UPDATE intake_events
+                  SET processing_state='queued', last_error=NULL, updated_at=?, stage_started_at=?, heartbeat_at=?
+                WHERE id=?`,
+            ).run(now, now, now, intake.id);
+            // Reset the canonical pipeline state. Same approach as the
+            // intake-level endpoint — insert directly at 'triaged' and
+            // publish manually after commit, since the state machine has no
+            // legal path from password_needed to triaged.
+            prevState = (db
+              .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
+              .get(docId) as { state: string } | undefined)?.state ?? null;
+            db.prepare(
+              `INSERT INTO document_pipeline(document_id, state, updated_at) VALUES(?,?,?)
+               ON CONFLICT(document_id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
+            ).run(docId, "triaged", now);
+            db.prepare(
+              `INSERT INTO pipeline_events (document_id, from_state, to_state, timestamp, source, reason, payload_json)
+               VALUES (?,?,?,?,?,?,?)`,
+            ).run(docId, prevState, "triaged", now, "password-submit", "password submitted, re-enqueuing conversion", "{}");
+            enqueue(db, ports, docId, "convert");
+            db.exec("COMMIT");
+          } catch (err) {
+            db.exec("ROLLBACK");
+            throw err;
+          }
+          // Publish only after commit so a rollback cannot emit a stale
+          // PipelineStateChanged over SSE.
           ports.bus.publish({
             type: "PipelineStateChanged",
             document_id: docId,
@@ -516,7 +562,6 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             reason: "password submitted, re-enqueuing conversion",
             at: now,
           });
-          enqueue(db, ports, docId, "convert");
           ports.logger.info("password submitted (by document), re-enqueuing conversion", {
             intake_id: intake.id,
             document_id: docId,
@@ -849,8 +894,10 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
               const partyRole = field === "issuer" ? "issuer" : "counterparty";
               try {
                 const entityId = resolveEntity(db, ports, value, "organisation", { subtype: "merchant" });
-                // Remove the old party link for this role, then set the new one.
-                db.prepare("DELETE FROM document_parties WHERE document_id=? AND role=?").run(subjectId, partyRole);
+                // Set the new link FIRST: setDocumentParty validates the role and
+                // throws ClaimRefused before mutating anything, so a refusal can
+                // no longer drop the old link. Only after it succeeds do we drop
+                // the superseded link for this role (leaving the new entity's row).
                 setDocumentParty(db, ports, {
                   documentId: subjectId,
                   entityId,
@@ -858,6 +905,9 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                   confidence: 1,
                   provenance: "user-confirmed",
                 });
+                db.prepare(
+                  "DELETE FROM document_parties WHERE document_id=? AND role=? AND entity_id<>?",
+                ).run(subjectId, partyRole, entityId);
               } catch (err) {
                 ports.logger.warn("could not relink party after edit", {
                   document_id: subjectId, field, value, err: (err as Error)?.message,
@@ -1276,37 +1326,44 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             documents: refs,
           });
         }
-        if (refs > 0) {
-          const UNIDENTIFIED_ID = UNIDENTIFIED_PERSON_ID;
-          const already = db.prepare("SELECT 1 FROM entities WHERE id=?").get(UNIDENTIFIED_ID);
-          if (!already) {
-            db.prepare(
-              `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
-               VALUES (?, 'person', 'Unidentified', 'confirmed', 1.0, 0, ?)`,
-            ).run(UNIDENTIFIED_ID, ports.clock.isoNow());
-          }
-          const rows = db
-            .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
-            .all(id) as { document_id: string; role: string }[];
-          for (const r of rows) {
-            db.prepare(
-              "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
-            ).run(r.document_id, UNIDENTIFIED_ID, r.role);
-          }
-          db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
-        }
+        // Reassign, clean up, and delete in one transaction — a failure partway
+        // must not leave parties reassigned to the placeholder while the entity
+        // row survives.
+        db.exec("BEGIN");
         try {
-          db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
-        } catch {
-          /* optional */
+          if (refs > 0) {
+            // The placeholder must share the deleted entity's kind, otherwise the
+            // document listing renders a *person* named "Unidentified" as the
+            // merchant/issuer of what was an organisation (or an organisation as
+            // the owner of what was a person).
+            const UNIDENTIFIED_ID = unidentifiedEntity(db, ports, row.kind);
+            const rows = db
+              .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
+              .all(id) as { document_id: string; role: string }[];
+            for (const r of rows) {
+              db.prepare(
+                "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+              ).run(r.document_id, UNIDENTIFIED_ID, r.role);
+            }
+            db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
+          }
+          try {
+            db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
+          } catch {
+            /* optional */
+          }
+          // Clean up transaction references that point to this entity.
+          try {
+            db.prepare("UPDATE transactions SET counterparty_entity_id=NULL WHERE counterparty_entity_id=?").run(id);
+          } catch {
+            /* column may not exist */
+          }
+          db.prepare("DELETE FROM entities WHERE id=?").run(id);
+          db.exec("COMMIT");
+        } catch (err) {
+          db.exec("ROLLBACK");
+          throw err;
         }
-        // Clean up transaction references that point to this entity.
-        try {
-          db.prepare("UPDATE transactions SET counterparty_entity_id=NULL WHERE counterparty_entity_id=?").run(id);
-        } catch {
-          /* column may not exist */
-        }
-        db.prepare("DELETE FROM entities WHERE id=?").run(id);
         ports.logger.warn("entity deleted", { id, name: row.display_name, kind: row.kind, reassigned: refs });
         return send(res, 200, { deleted: id, reassigned_documents: refs });
       }
@@ -2262,41 +2319,42 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
             documents: refs,
           });
         }
-        if (refs > 0) {
-          // Force-delete REASSIGNS document_parties to a well-known
-          // "Unidentified" placeholder person rather than deleting the rows.
-          // entity_id is NOT NULL and part of the primary key, so there is no
-          // FK-preserving way to null it out — and simply deleting the rows
-          // would silently detach evidence, which the work order forbids.
-          const UNIDENTIFIED_ID = UNIDENTIFIED_PERSON_ID;
-          const already = db.prepare("SELECT 1 FROM entities WHERE id=?").get(UNIDENTIFIED_ID);
-          if (!already) {
-            db.prepare(
-              `INSERT INTO entities (id, kind, display_name, status, confidence, is_member, created_at)
-               VALUES (?, 'person', 'Unidentified', 'confirmed', 1.0, 0, ?)`,
-            ).run(UNIDENTIFIED_ID, ports.clock.isoNow());
-          }
-          // A document may already have an Unidentified party in the same
-          // role (e.g. two deleted people both appeared as counterparty on
-          // the same document) — the composite primary key would collide, so
-          // reassign one at a time and let INSERT OR IGNORE absorb duplicates,
-          // then drop whatever the reassignment couldn't place.
-          const rows = db
-            .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
-            .all(id) as { document_id: string; role: string }[];
-          for (const r of rows) {
-            db.prepare(
-              "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
-            ).run(r.document_id, UNIDENTIFIED_ID, r.role);
-          }
-          db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
-        }
+        // Reassign and delete in one transaction — see the entity-delete route.
+        db.exec("BEGIN");
         try {
-          db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
-        } catch {
-          /* optional */
+          if (refs > 0) {
+            // Force-delete REASSIGNS document_parties to a well-known
+            // "Unidentified" placeholder person rather than deleting the rows.
+            // entity_id is NOT NULL and part of the primary key, so there is no
+            // FK-preserving way to null it out — and simply deleting the rows
+            // would silently detach evidence, which the work order forbids.
+            const UNIDENTIFIED_ID = unidentifiedPerson(db, ports);
+            // A document may already have an Unidentified party in the same
+            // role (e.g. two deleted people both appeared as counterparty on
+            // the same document) — the composite primary key would collide, so
+            // reassign one at a time and let INSERT OR IGNORE absorb duplicates,
+            // then drop whatever the reassignment couldn't place.
+            const rows = db
+              .prepare("SELECT document_id, role FROM document_parties WHERE entity_id=?")
+              .all(id) as { document_id: string; role: string }[];
+            for (const r of rows) {
+              db.prepare(
+                "INSERT OR IGNORE INTO document_parties (document_id, entity_id, role) VALUES (?,?,?)",
+              ).run(r.document_id, UNIDENTIFIED_ID, r.role);
+            }
+            db.prepare("DELETE FROM document_parties WHERE entity_id=?").run(id);
+          }
+          try {
+            db.prepare("DELETE FROM entity_aliases WHERE entity_id=?").run(id);
+          } catch {
+            /* optional */
+          }
+          db.prepare("DELETE FROM entities WHERE id=?").run(id);
+          db.exec("COMMIT");
+        } catch (err) {
+          db.exec("ROLLBACK");
+          throw err;
         }
-        db.prepare("DELETE FROM entities WHERE id=?").run(id);
         ports.logger.warn("person deleted", { id, name: row.display_name, reassigned: refs });
         return send(res, 200, {
           deleted: id,
