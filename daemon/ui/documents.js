@@ -276,9 +276,10 @@ function initDocActions(id, editableFields, dropdownFields, dateFields) {
       setMsg("Reprocessing…");
       try {
         const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/reprocess", {});
+        if (r && r.error) throw new Error(r.message || r.error);
         setMsg("Reprocessing (" + (r.phase || "analyse") + ")…", "ok");
       } catch (e) {
-        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        setMsg("Failed: " + String(e.message || e), "err");
       }
       reprocBtn.disabled = false;
     };
@@ -293,14 +294,15 @@ function initDocActions(id, editableFields, dropdownFields, dateFields) {
       excludeBtn.disabled = true;
       setMsg("Excluding…");
       try {
-        await apiPost("/v1/documents/" + encodeURIComponent(id) + "/remove-from-active", {});
+        const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/remove-from-active", {});
+        if (r && r.error) throw new Error(r.message || r.error);
         setMsg("Excluded from active.", "ok");
         // Collapse the detail panel — the doc is no longer active.
         collapseOpenDoc();
         // Refresh the document list to remove it.
         loadReview();
       } catch (e) {
-        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        setMsg("Failed: " + String(e.message || e), "err");
         excludeBtn.disabled = false;
       }
     };
@@ -330,7 +332,7 @@ function initDocActions(id, editableFields, dropdownFields, dateFields) {
         URL.revokeObjectURL(url);
         setMsg("Downloaded.", "ok");
       } catch (e) {
-        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        setMsg("Failed: " + String(e.message || e), "err");
       }
       downloadBtn.disabled = false;
     };
@@ -352,12 +354,13 @@ function initDocActions(id, editableFields, dropdownFields, dateFields) {
       deleteBtn.disabled = true;
       setMsg("Deleting…");
       try {
-        await apiDelete("/v1/documents/" + encodeURIComponent(id));
+        const r = await apiDelete("/v1/documents/" + encodeURIComponent(id));
+        if (r && r.error) throw new Error(r.message || r.error);
         setMsg("Deleted permanently.", "ok");
         collapseOpenDoc();
         loadReview();
       } catch (e) {
-        setMsg("Failed: " + esc(String(e.message || e)), "err");
+        setMsg("Failed: " + String(e.message || e), "err");
         deleteBtn.disabled = false;
       }
     };
@@ -428,8 +431,9 @@ function startEditField(id, row, dropdownFields, dateFields) {
     }
     if (newVal === currentValue) { restore(); return; }
     try {
-      await apiPatch("/v1/documents/" + encodeURIComponent(id) + "/claims",
+      const r = await apiPatch("/v1/documents/" + encodeURIComponent(id) + "/claims",
         { field, value: newVal });
+      if (r && r.error) throw new Error(r.message || r.error);
       row.dataset.value = newVal;
       const displayVal = isMoney && newVal ? money(Number(newVal)) : newVal;
       valSpan.innerHTML = esc(displayVal) + " <span style='color:var(--faint)'>· user</span>";
@@ -518,12 +522,13 @@ async function initDocViewer(id, ctx) {
     txtBtn.classList.toggle("on", m === "text");
     const pager = document.getElementById("pager-" + id);
     if (pager) pager.style.display = "none";
-    if (m === "image") renderPage(1);
+    if (m === "image") { currentPage = 1; renderPage(currentPage); }
     else renderText();
   }
 
   // ── Image mode ──
   let currentPage = 1;
+  let currentBlobUrl = null;
   const totalPages = info ? info.pages : 0;
   const pagerAvailable = info ? info.pager_available : false;
 
@@ -542,6 +547,8 @@ async function initDocViewer(id, ctx) {
       if (!r.ok) throw new Error("http_" + r.status);
       const blob = await r.blob();
       blobUrl = URL.createObjectURL(blob);
+      if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl);
+      currentBlobUrl = blobUrl;
     } catch {
       box.innerHTML = "<div class='viewer-fallback'>Failed to render page.</div>";
       return;
@@ -627,7 +634,7 @@ function renderPasswordPrompt(id, box) {
       }
     } catch (e) {
       if (msg) {
-        msg.textContent = "Failed: " + esc(String(e.message || e));
+        msg.textContent = "Failed: " + String(e.message || e);
         msg.className = "pw-msg err";
       }
       if (btn) btn.disabled = false;

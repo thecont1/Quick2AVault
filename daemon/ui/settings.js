@@ -39,6 +39,7 @@ function buildProviderDropdown(selectId, currentProviderId) {
 
   // Build hidden select options (for compatibility)
   let optHtml = "";
+  if (!currentProviderId) optHtml += `<option value="" selected>Select provider…</option>`;
   for (const tier of TIER_ORDER) {
     const providers = (grouped[tier] || []).sort((a, b) => a.name.localeCompare(b.name));
     if (providers.length === 0) continue;
@@ -346,8 +347,10 @@ function eligibleModelsForProvider(provider, slot, jurisdiction) {
     (m) => !m.jurisdictionTags || m.jurisdictionTags.includes(jurisdiction),
   );
 
+  const trustRank = { verified: 0, community: 1, unverified: 2 };
   const trustSort = (a, b) => {
-    if (a.trust !== b.trust) return a.trust === "verified" ? -1 : 1;
+    const t = trustRank[a.trust] - trustRank[b.trust];
+    if (t !== 0) return t;
     return a.displayName.localeCompare(b.displayName);
   };
 
@@ -520,11 +523,12 @@ async function saveAi(which) {
     // Prompt for custom model ID
     modelId = prompt("Enter the model ID:") || "";
     if (!modelId) return;
-    // Add it back as a regular option
-    modelSelect.innerHTML = modelSelect.innerHTML.replace(
-      "<option value='__other__'>Other model ID (advanced)…</option>",
-      `<option value="${esc(modelId)}">${esc(modelId)} (user-entered)</option><option value='__other__'>Other model ID (advanced)…</option>`,
-    );
+    // Insert it before the "__other__" entry, which stays at the bottom.
+    // (Rewriting innerHTML doesn't work — the browser normalises the single
+    // quotes to double quotes, so the string replace never matches.)
+    const otherOpt = modelSelect.querySelector("option[value='__other__']");
+    const newOpt = new Option(modelId + " (user-entered)", modelId);
+    modelSelect.insertBefore(newOpt, otherOpt);
     modelSelect.value = modelId;
   } else {
     modelId = modelSelect.value;
