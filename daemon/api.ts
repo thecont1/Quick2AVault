@@ -2955,6 +2955,29 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           const stateClause = pipelineState
             ? ` AND EXISTS (SELECT 1 FROM document_pipeline dp WHERE dp.document_id=d.id AND dp.state=?)`
             : "";
+          // Optional bucket scope (Income / Spending / Investments / Transfers):
+          // documents whose linked transactions fall in that bucket. Predicates
+          // are lifted from snapshot() and the /v1/transactions bucket filter —
+          // they must never drift apart, or the scope list stops summing to
+          // the figure it claims to explain.
+          const bucket = url.searchParams.get("bucket");
+          const INVEST = `(t.instrument_entity_id IS NOT NULL
+                           OR lower(COALESCE(t.category_id,'')) LIKE '%invest%'
+                           OR lower(COALESCE(t.impact_bucket,'')) LIKE '%invest%')`;
+          const bucketClause =
+            bucket === "income"
+              ? ` AND EXISTS (SELECT 1 FROM transaction_documents td JOIN transactions t ON t.id=td.transaction_id
+                              WHERE td.document_id=d.id AND t.direction='in' AND t.status <> 'scheduled')`
+              : bucket === "spending"
+                ? ` AND EXISTS (SELECT 1 FROM transaction_documents td JOIN transactions t ON t.id=td.transaction_id
+                                WHERE td.document_id=d.id AND t.direction='out' AND t.status <> 'scheduled' AND NOT ${INVEST})`
+                : bucket === "investments"
+                  ? ` AND EXISTS (SELECT 1 FROM transaction_documents td JOIN transactions t ON t.id=td.transaction_id
+                                  WHERE td.document_id=d.id AND t.direction='out' AND t.status <> 'scheduled' AND ${INVEST})`
+                  : bucket === "transfers"
+                    ? ` AND EXISTS (SELECT 1 FROM transaction_documents td JOIN transactions t ON t.id=td.transaction_id
+                                    WHERE td.document_id=d.id AND t.direction='transfer' AND t.status <> 'scheduled')`
+                    : "";
           const args: (string | number)[] = [];
           if (pipelineState) args.push(pipelineState);
           if (bounded) { args.push(period.from!, period.to!); }
@@ -2962,11 +2985,13 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
           return send(res, 200, {
             period: { label: period.label, key: period.key, from: period.from, to: period.to },
             state: stateParam,
+            bucket: bucket ?? null,
             documents: db
               .prepare(
                 `SELECT d.id, d.original_filename, d.ext, d.byte_size, d.doc_type, d.source,
                         d.sha256, d.markdown_chars, d.received_at, d.converted_at, d.analysed_at,
                         d.lifecycle,
+                        (SELECT dp.state FROM document_pipeline dp WHERE dp.document_id=d.id) AS pipeline_state,
                         COALESCE(
                           (SELECT fc.value FROM field_claims fc
                             WHERE fc.subject_type='document' AND fc.subject_id=d.id
@@ -2992,7 +3017,7 @@ export function createApi(db: DatabaseSync, ports: Ports, opts: ApiOptions) {
                           d.received_at
                         ) AS invoice_date
                  FROM documents d
-                 WHERE ${where}${stateClause}${periodClause}
+                 WHERE ${where}${stateClause}${periodClause}${bucketClause}
                  ORDER BY ${sort} LIMIT ?`,
               )
               .all(...args),

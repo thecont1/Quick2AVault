@@ -77,16 +77,23 @@ let pipelineStalled = 0;
 let pipelineFilter = null;
 
 function renderPipelineBoard() {
-  // Dashboard board — not clickable, just a status display.
+  // Dashboard board — each cell is a clickable Document Scope selector:
+  // clicking a state shows only the documents in that pipeline state, and
+  // the counter moves live as documents flow through it.
   const dashHtml = STATES.map((st) => {
     const n = pipelineCounts[st.k] || 0;
-    return "<div class='state " + esc(st.cls) + "'><div class='k'>" + esc(st.label) + "</div>"
+    const sel = docScope.state === st.k ? " selected" : "";
+    return "<div class='state clickable " + esc(st.cls) + sel + "' data-state='" + esc(st.k) + "'><div class='k'>" + esc(st.label) + "</div>"
       + "<div class='v " + (n ? "" : "zero") + "'>" + esc(n) + "</div></div>";
   }).join("") + (pipelineStalled
     ? "<div class='state stalled'><div class='k'>Stalled</div><div class='v'>" + esc(pipelineStalled) + "</div></div>"
     : "");
   const board = document.getElementById("board");
-  if (board) board.innerHTML = dashHtml;
+  if (board) {
+    board.innerHTML = dashHtml;
+    board.querySelectorAll(".state.clickable").forEach((cell) =>
+      cell.onclick = () => setStateScope(cell.dataset.state));
+  }
 
   // Documents Browser board — each cell is a clickable filter.
   const reviewHtml = STATES.map((st) => {
@@ -129,76 +136,90 @@ function onDocumentReceived() {
   renderPipelineBoard();
 }
 
-// ── intake queue: infinite scroll, 20 at a time ─────────────────
-// The queue keeps loading pages until the very first document ever
-// ingested is on screen. The box itself scrolls inside the viewport.
-const INTAKE_PAGE = 20;
-let intakeOffset = 0;
-let intakeTotal = null;
-let intakeLoading = false;
-let intakeExhausted = false;
+// ── Document Scope ──────────────────────────────────────────────
+// The left column is the live document list. Every cell in the dashboard —
+// period buttons, money heroes, pipeline state cells — narrows its scope,
+// and clicking a document opens the viewing/editing screen in the Documents
+// Browser. Live movement: a document entering the system visibly ticks the
+// pipeline counters down to Complete / Failed / Duplicate via SSE.
+let docScope = { state: null, bucket: null };
 
-function intakeRowHtml(e) {
-  const state = esc(e.processing_state);
-  const err = e.last_error ? "<span class='err'>" + esc(e.last_error) + "</span>" : "";
-  const stall = e.stalled ? "  <span class='stall'>STALLED</span>" : "";
-  const retry = e.retry_count ? "  · retry " + esc(e.retry_count) : "";
-  const docLink = e.document_id ? "  · doc " + esc(String(e.document_id).slice(0, 12)) : "";
-  const meta = "<div class='meta'>" + esc(e.kind) + " · " + esc(e.source) + retry
-    + docLink + (err ? "  · " + err : "") + stall + "</div>";
-  return "<div class='irow'>"
-    + "<div><div class='fn'>" + esc(e.filename) + "</div>" + meta + "</div>"
-    + "<span class='pill " + state + "'>" + state + "</span>"
-    + "<span class='age'>" + ago(e.updated_at || e.created_at) + "</span></div>";
+// Money heroes — click to scope documents by their linked bucket.
+document.querySelectorAll("#tab-obs .hero.click").forEach((h) =>
+  h.onclick = () => setBucketScope(h.dataset.bucket));
+
+function setStateScope(k) {
+  docScope.state = docScope.state === k ? null : k;
+  renderPipelineBoard();
+  renderScopeList();
 }
 
-async function loadIntakePage(append) {
-  if (intakeLoading || intakeExhausted) return;
-  intakeLoading = true;
+function setBucketScope(b) {
+  docScope.bucket = docScope.bucket === b ? null : b;
+  document.querySelectorAll("#tab-obs .hero.click").forEach((h) =>
+    h.classList.toggle("sel", h.dataset.bucket === docScope.bucket));
+  renderScopeList();
+}
+
+function scopeLabel() {
+  const parts = [];
+  if (docScope.state) parts.push((STATES.find((s) => s.k === docScope.state) || {}).label || docScope.state);
+  if (docScope.bucket) parts.push(docScope.bucket);
+  return parts.length ? parts.join(" · ") : "All documents";
+}
+
+async function renderScopeList() {
+  const box = document.getElementById("scopeList");
+  if (!box) return;
+  const url = "/v1/documents?limit=500&sort=received"
+    + "&period=" + encodeURIComponent(period)
+    + (docScope.state ? "&state=" + encodeURIComponent(docScope.state) : "")
+    + (docScope.bucket ? "&bucket=" + encodeURIComponent(docScope.bucket) : "");
+  let d;
   try {
-    const d = await api("/v1/intake/status?limit=" + INTAKE_PAGE + "&offset=" + intakeOffset);
-    const events = d.events || [];
-    intakeTotal = d.total ?? null;
-    const box = document.getElementById("intake");
-    if (append) {
-      box.insertAdjacentHTML("beforeend", events.map(intakeRowHtml).join(""));
-    } else {
-      box.innerHTML = events.length
-        ? events.map(intakeRowHtml).join("")
-        : "<div class='empty'>No intake events yet.</div>";
-    }
-    intakeOffset += events.length;
-    if (!events.length || (intakeTotal !== null && intakeOffset >= intakeTotal)) intakeExhausted = true;
-  } finally {
-    intakeLoading = false;
+    d = await api(url);
+  } catch {
+    box.innerHTML = "<div class='empty'>could not load documents.</div>";
+    return;
   }
-}
-
-function bindIntakeScroll() {
-  const box = document.getElementById("intake");
-  if (!box || box.dataset.infinite) return;
-  box.dataset.infinite = "1";
-  box.addEventListener("scroll", () => {
-    if (box.scrollTop + box.clientHeight >= box.scrollHeight - 80) {
-      loadIntakePage(true);
-    }
-  });
+  const docs = d.documents || [];
+  const label = document.getElementById("scopeLabel");
+  if (label) {
+    const stateLabel = d.period && d.period.label ? d.period.label + " · " : "";
+    label.textContent = stateLabel + scopeLabel() + " · " + docs.length
+      + " document" + (docs.length === 1 ? "" : "s");
+  }
+  if (!docs.length) {
+    box.innerHTML = "<div class='empty'>No documents in this scope."
+      + (docScope.state === "duplicate" || docScope.state === "irrelevant"
+        ? " Duplicate and irrelevant copies are intake items, not documents — flush duplicates from Settings."
+        : "")
+      + "</div>";
+    return;
+  }
+  box.innerHTML = docs.map((x) => {
+    const dt = String(x.invoice_date || x.received_at || "").slice(0, 10);
+    return "<div class='drow' data-id='" + esc(x.id) + "'>"
+      + "<div><div class='fn'>" + esc(x.original_filename) + "</div>"
+      + "<div class='meta'>" + esc(x.merchant || "Unidentified") + " · " + esc(x.doc_type || "unknown")
+      + (x.pipeline_state ? " · " + esc(x.pipeline_state) : "") + "</div></div>"
+      + "<span class='kind'>" + esc(x.source || "") + "</span>"
+      + "<span class='dt'>" + esc(dt) + "</span></div>";
+  }).join("");
+  box.querySelectorAll(".drow").forEach((el) =>
+    el.onclick = () => openDocumentDirect(el.dataset.id));
 }
 
 async function refreshPipeline() {
-  // Reset the queue to page 0. Counts come from the authoritative server
-  // state covering the WHOLE intake table, not just the visible page.
-  intakeOffset = 0;
-  intakeExhausted = false;
-  intakeLoading = false;
-  const intake = await api("/v1/intake/status?limit=" + INTAKE_PAGE + "&offset=0");
-  const counts = intake.counts || {};
+  // Pipeline counters come from the authoritative whole-table intake
+  // state; the Document Scope list refetches per the active scope.
+  const intake = await api("/v1/intake/status?limit=20&offset=0");
   pipelineCounts = {};
+  const counts = intake.counts || {};
   for (const k of Object.keys(counts)) pipelineCounts[k] = counts[k];
   pipelineStalled = intake.stalled || 0;
   renderPipelineBoard();
-  bindIntakeScroll();
-  await loadIntakePage(false);
+  renderScopeList();
 }
 
 // ── live event stream ────────────────────────────────────────────

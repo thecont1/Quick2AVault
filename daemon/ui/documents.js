@@ -99,6 +99,34 @@ function refreshOpenDocIfMatch(docId) {
   showDoc(openDocId, slot);
 }
 
+// Open a specific document in the Documents Browser: switch to the Review
+// tab and expand the document's row. If the current Review view does not
+// render that document (period/state scope excludes it), render the full
+// detail into the pinned slot above the list instead — the user always
+// reaches the viewing/editing screen for the exact document they clicked,
+// no matter which scope they were in.
+function openDocumentDirect(id) {
+  const tabBtn = document.querySelector('.tabs button[data-tab="review"]');
+  if (tabBtn) tabBtn.click();
+  const tryRow = () => {
+    const row = document.querySelector("#docList .drow[data-id='" + CSS.escape(id) + "']");
+    if (row) { toggleDoc(row, id); return true; }
+    return false;
+  };
+  if (tryRow()) return;
+  // loadReview() is async (triggered by the tab switch) — give it one beat
+  // before falling back to the pinned detail.
+  setTimeout(() => { if (!tryRow()) pinDoc(id); }, 800);
+}
+
+function pinDoc(id) {
+  const pin = document.getElementById("docPin");
+  if (!pin) return;
+  pin.style.display = "";
+  pin.scrollIntoView({ block: "start", behavior: "smooth" });
+  showDoc(id, pin);
+}
+
 async function showDoc(id, container) {
   const d = await api("/v1/documents/" + encodeURIComponent(id) + "/detail");
   const doc = d.document || {};

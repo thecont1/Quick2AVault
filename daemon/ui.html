@@ -57,15 +57,16 @@
     <div id="card"></div>
   </section>
 
-  <section>
-    <h2>Documents pipeline</h2>
-    <div class="board" id="board"></div>
-    <div class="pcols">
-      <div>
-        <div class="intake" id="intake"><div class="empty">waiting for intake…</div></div>
-      </div>
-    </div>
-  </section>
+  <div class="obs-cols">
+    <section class="obs-scope">
+      <h2>Document Scope <span class="sub" id="scopeLabel">All documents</span></h2>
+      <div class="scope-list" id="scopeList"><div class="empty">loading…</div></div>
+    </section>
+    <section class="obs-pipeline">
+      <h2>Document Pipeline</h2>
+      <div class="board" id="board"></div>
+    </section>
+  </div>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════
@@ -322,6 +323,7 @@
 
   <div class="panel">
     <h3>Documents <span style="color:var(--faint);font-weight:400;text-transform:none" id="docCount"></span></h3>
+    <div id="docPin" style="display:none"></div>
     <div id="docList"><div class="empty">loading…</div></div>
   </div>
 </div>

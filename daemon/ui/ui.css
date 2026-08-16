@@ -39,14 +39,29 @@
      queue scrolls (infinite scroll, 20 documents at a time). */
   #tab-obs.on{display:flex;flex-direction:column;overflow:hidden}
   #tab-obs.on>*{flex:0 0 auto;min-width:0}
-  #tab-obs.on>section:last-of-type{flex:1 1 auto;min-height:0;
-      display:flex;flex-direction:column;margin-bottom:0}
-  #tab-obs.on>section:last-of-type h2{flex:0 0 auto}
-  #tab-obs.on>section:last-of-type .board{flex:0 0 auto}
-  #tab-obs.on .pcols{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-  #tab-obs.on .pcols>div{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-  #tab-obs.on .intake{flex:1 1 auto;min-height:0;max-height:none}
+  #tab-obs.on .obs-cols{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:60% 40%;gap:18px}
+  #tab-obs.on .obs-cols>section{min-height:0;display:flex;flex-direction:column;margin-bottom:0}
   #tab-obs.on #card .card{max-height:200px;overflow-y:auto}
+
+  /* ── Document Scope list (left) ──────────────────────────────── */
+  .obs-scope .scope-list{flex:1 1 auto;min-height:0;overflow-y:auto;border:1px solid var(--line);
+    border-radius:6px;background:var(--panel);font:11.5px var(--mono)}
+  .scope-list .drow{padding:9px 13px;border-bottom:1px solid var(--line2);display:grid;
+    grid-template-columns:1fr auto auto;gap:8px;align-items:baseline;cursor:pointer}
+  .scope-list .drow:last-child{border-bottom:0}
+  .scope-list .drow:hover{background:var(--panel2)}
+  .scope-list .drow .fn{color:var(--ink);word-break:break-all}
+  .scope-list .drow .meta{color:var(--faint);font-size:10px;margin-top:3px}
+  .scope-list .kind{color:var(--faint);font-size:10px;text-transform:uppercase}
+  .scope-list .dt{color:var(--faint);font-size:10px;text-align:right;white-space:nowrap}
+
+  /* ── Document Pipeline (right): squarish live cells ─────────── */
+  .obs-pipeline .board{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
+    background:transparent;border:0;margin-bottom:0;overflow-y:auto;align-content:start}
+  .obs-pipeline .state{aspect-ratio:1/1;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;border-radius:8px;background:var(--panel);
+    border:1px solid var(--line);min-width:0;padding:4px}
+  .obs-pipeline .state .v{font:600 22px var(--mono)}
 
   /* ── period selector ──────────────────────────────────────────── */
   .periods{display:flex;gap:4px;margin-bottom:18px;flex-wrap:wrap}
