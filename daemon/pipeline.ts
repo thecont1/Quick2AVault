@@ -1047,6 +1047,14 @@ export function enqueueReprocess(db: DatabaseSync, ports: Ports, documentId: str
   // the prefix (received → stable → hashed → triaged) is legal by
   // construction, so the rows are written directly and nothing is
   // published until COMMIT succeeds.
+  //
+  // CONCURRENCY (ITO QA): two simultaneous reprocesses used to create two
+  // convert/analyse chains against one shared state pointer, and the stale
+  // chain crashed the daemon with illegal terminal transitions. The job
+  // id is the epoch: the newest job row for a document is the current
+  // epoch, and the worker skips any job that is not the newest. Here the
+  // reset first enqueues the fresh convert job, then retires every OLDER
+  // pending job for the document so only one chain can ever run.
   const prevState = (db
     .prepare("SELECT state FROM document_pipeline WHERE document_id=?")
     .get(documentId) as { state: string } | undefined)?.state ?? null;
@@ -1077,6 +1085,13 @@ export function enqueueReprocess(db: DatabaseSync, ports: Ports, documentId: str
       .prepare("INSERT INTO jobs (document_id, phase, state, created_at) VALUES (?,?,'pending',?)")
       .run(documentId, "convert", ports.clock.isoNow());
     jobId = Number(info.lastInsertRowid);
+    // Retire every older pending job for this document (its own convert
+    // chain, a password-submit convert, an earlier flush): the newest job
+    // row IS the current epoch, and stale jobs must never run.
+    db.prepare(
+      `UPDATE jobs SET state='done', last_error=?, finished_at=?
+        WHERE document_id=? AND state='pending' AND id < ?`,
+    ).run(`superseded by reprocess epoch ${jobId}`, now, documentId, jobId);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -2087,6 +2102,37 @@ export class JobWorker {
     return n;
   }
 
+  /**
+   * Epoch guard. The newest job row for a document is its current
+   * reprocess epoch; anything older was superseded by a later reset and
+   * must not write to the shared pipeline state (a stale chain would
+   * throw illegal terminal transitions and crash the daemon).
+   */
+  private jobIsCurrent(job: { id: number; document_id: string }): boolean {
+    const max = this.db
+      .prepare("SELECT MAX(id) m FROM jobs WHERE document_id=?")
+      .get(job.document_id) as { m: number | null };
+    return job.id >= (max.m ?? job.id);
+  }
+
+  /** Retire a superseded job so it is never claimed or reclaimed again. */
+  private staleOut(job: { id: number; document_id: string }, reason: string): void {
+    this.db
+      .prepare("UPDATE jobs SET state='done', last_error=?, finished_at=? WHERE id=?")
+      .run(reason, this.ports.clock.isoNow(), job.id);
+    this.ports.logger.info("job superseded by a newer reprocess — skipped", {
+      job: job.id,
+      document_id: job.document_id,
+    });
+  }
+
+  /** True when the job is still the document's newest (current epoch). */
+  private guard(job: { id: number; document_id: string }): boolean {
+    if (this.jobIsCurrent(job)) return true;
+    this.staleOut(job, "superseded by a newer reprocess epoch");
+    return false;
+  }
+
   start() {
     if (this.timer) return;
     this.reclaim();
@@ -2166,6 +2212,16 @@ export class JobWorker {
       }
       if (!job) return;
 
+      // EPOCH GUARD (ITO QA): the newest job row for a document is the
+      // current reprocess epoch. A job that is not the newest was
+      // superseded by a later reset — skip it entirely so a stale chain
+      // can never write to the shared pipeline state (which would throw
+      // illegal terminal transitions and crash the daemon).
+      if (!this.jobIsCurrent(job)) {
+        this.staleOut(job, "superseded by a newer reprocess epoch");
+        return;
+      }
+
       // The row was incremented by the claim, so this run is attempt N+1.
       // Thresholding on the stale pre-increment value gave one extra retry
       // than MAX_ATTEMPTS specified.
@@ -2176,6 +2232,7 @@ export class JobWorker {
         if (job.phase === "convert") {
           // Work order 07 §B1: update the aggregated intake state to reflect
           // the current stage, not just the raw job churn.
+          if (!this.guard(job)) return;
           updateIntakeForJob(this.db, this.ports, job.document_id, "processing", "converting");
           transitionIntakePipeline(
             this.db,
@@ -2186,6 +2243,7 @@ export class JobWorker {
           );
           await runConvertJob(this.db, this.ports, job.id, job.document_id);
         } else if (job.phase === "analyse") {
+          if (!this.guard(job)) return;
           updateIntakeForJob(this.db, this.ports, job.document_id, "processing", "analysing");
           transitionIntakePipeline(
             this.db,
@@ -2208,6 +2266,7 @@ export class JobWorker {
         // Work order 07 §B1: mark the intake as complete after the final phase.
         // The convert→analyse chain means the analyse job is the last one.
         if (job.phase === "analyse") {
+          if (!this.guard(job)) return;
           transitionIntakePipeline(
             this.db,
             this.ports,
@@ -2224,6 +2283,7 @@ export class JobWorker {
         // marked password_needed by runConvertJob. Mark the job as done (not
         // failed) so the worker doesn't retry it 3 times before giving up.
         if (msg.startsWith("PASSWORD_NEEDED:")) {
+          if (!this.guard(job)) return;
           this.db
             .prepare("UPDATE jobs SET state='done', last_error=?, finished_at=? WHERE id=?")
             .run(msg, this.ports.clock.isoNow(), job.id);
@@ -2248,6 +2308,7 @@ export class JobWorker {
         // Work order 07 §B3: if the job is permanently failed, mark the intake
         // as failed too so the UI shows a visible error, not indefinite pending.
         if (state === "failed") {
+          if (!this.guard(job)) return;
           transitionIntakePipeline(
             this.db,
             this.ports,
