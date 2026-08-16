@@ -32,26 +32,76 @@ const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 120_000;
 
 /**
- * JSON schema sent to Sarvam. The field names are ours; Sarvam extracts
- * whatever the schema describes. We map these to ExtractionResult after.
+ * JSON schema sent to Sarvam. This mirrors our ExtractionResult contract
+ * (daemon/extraction-contract.ts) so that every field the system expects
+ * can be populated by Sarvam's extraction.
  *
- * `total_amount` is a number in MAJOR units (rupees, not paise) — Sarvam
- * reads the printed amount. We convert to minor units in the mapping.
+ * Amounts are in MAJOR units (rupees, not paise) — Sarvam reads the printed
+ * amount. We convert to minor units (×100 for INR) in the mapping.
+ *
+ * Parties are flattened (issuer_*, customer_*) because Sarvam's schema is a
+ * flat object — nested arrays/objects are not reliably supported.
  */
 const SCHEMA = {
   type: "object",
   properties: {
-    invoice_number: { type: "string", description: "Invoice, bill, or receipt number" },
-    invoice_date: { type: "string", description: "Date the document was issued (dd/mm/yyyy or as printed)" },
-    total_amount: { type: "number", description: "Total payable amount in major currency units" },
+    // ── reference IDs ────────────────────────────────────────────────────
+    invoice_number: { type: "string", description: "Invoice, bill, or receipt number printed on the document" },
+    order_number: { type: "string", description: "Purchase order number, if different from invoice number" },
+    utr: { type: "string", description: "UTR / UPI transaction reference / RRN number" },
+    approval_code: { type: "string", description: "Card approval / auth code" },
+
+    // ── dates ────────────────────────────────────────────────────────────
+    invoice_date: { type: "string", description: "Date the document was issued (as printed: dd/mm/yyyy, dd-mm-yy, etc.)" },
+    due_date: { type: "string", description: "Due date or payment deadline, if stated" },
+
+    // ── money ────────────────────────────────────────────────────────────
+    total_amount: { type: "number", description: "Total payable amount in major currency units (e.g. 1445 for ₹1,445)" },
     subtotal: { type: "number", description: "Subtotal before tax, if shown" },
     tax_amount: { type: "number", description: "Total tax (GST) amount, if shown" },
-    currency: { type: "string", description: "Currency code or symbol (INR, Rs, etc.)" },
-    issuer_name: { type: "string", description: "Name of the merchant/seller/issuer" },
+    discount: { type: "number", description: "Discount amount, if any" },
+    currency: { type: "string", description: "Currency code or symbol as printed (INR, Rs, ₹, USD, $, etc.)" },
+
+    // ── issuer (merchant/seller) ─────────────────────────────────────────
+    issuer_name: { type: "string", description: "Name of the merchant, seller, or entity issuing the document" },
     issuer_gstin: { type: "string", description: "GSTIN of the issuer, if present" },
-    customer_name: { type: "string", description: "Name of the customer/buyer" },
-    payment_mode: { type: "string", description: "Payment method (UPI, Card, Cash, etc.)" },
+    issuer_address: { type: "string", description: "Address of the issuer" },
+    issuer_email: { type: "string", description: "Email of the issuer" },
+    issuer_phone: { type: "string", description: "Phone number of the issuer" },
+
+    // ── customer (buyer/owner) ───────────────────────────────────────────
+    customer_name: { type: "string", description: "Name of the customer, buyer, or person the document is addressed to" },
+    customer_gstin: { type: "string", description: "GSTIN of the customer, if present" },
+    customer_address: { type: "string", description: "Address of the customer" },
+
+    // ── payment ──────────────────────────────────────────────────────────
+    payment_mode: { type: "string", description: "Payment method as printed (UPI, Card, Cash, Netbanking, Cheque, etc.)" },
     place_of_supply: { type: "string", description: "Place of supply, if mentioned" },
+
+    // ── bank details (for invoices with bank info) ───────────────────────
+    bank_name: { type: "string", description: "Bank name, if the document includes bank details" },
+    bank_account_number: { type: "string", description: "Bank account number of the issuer" },
+    bank_ifsc: { type: "string", description: "IFSC code, if present" },
+
+    // ── line items ───────────────────────────────────────────────────────
+    line_items: {
+      type: "array",
+      description: "Itemised lines on the invoice/bill, if the document lists them",
+      items: {
+        type: "object",
+        properties: {
+          description: { type: "string", description: "Description of the item or service" },
+          quantity: { type: "number", description: "Quantity, if stated" },
+          rate: { type: "number", description: "Unit price in major currency units" },
+          amount: { type: "number", description: "Line total in major currency units" },
+          hsn_sac: { type: "string", description: "HSN/SAC code, if present" },
+        },
+      },
+    },
+
+    // ── document classification ──────────────────────────────────────────
+    document_type: { type: "string", description: "Type of document: tax_invoice, receipt, bank_statement, card_statement, contract_note, salary_slip, etc." },
+    purpose: { type: "string", description: "Purpose or description of the transaction" },
   },
 };
 
@@ -223,6 +273,9 @@ export class SarvamProvider {
    *
    * Sarvam returns amounts in major units (as printed). We convert to minor
    * units (paise for INR) by multiplying by 100.
+   *
+   * The schema sent to Sarvam mirrors our ExtractionResult contract, so
+   * every field here has a corresponding extraction target.
    */
   private mapResult(
     jobResult: { status: string; result?: Record<string, unknown> },
@@ -241,6 +294,10 @@ export class SarvamProvider {
       const n = typeof v === "number" ? v : Number(String(v).replace(/[^0-9.-]/g, ""));
       return Number.isFinite(n) ? n : null;
     };
+    const arr = (k: string): Record<string, unknown>[] => {
+      const v = r[k];
+      return Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+    };
 
     // Convert major → minor units (INR: ×100)
     const toMinor = (major: number | null): number | null =>
@@ -250,64 +307,108 @@ export class SarvamProvider {
     const subtotal = num("subtotal");
     const taxAmount = num("tax_amount");
 
-    // Parse date: Sarvam may return dd/mm/yyyy, dd-mm-yyyy, etc.
-    const rawDate = str("invoice_date");
-    const occurredAt = rawDate ? parseDate(rawDate) : null;
+    // Parse dates: Sarvam may return dd/mm/yyyy, dd-mm-yyyy, dd|mm/yy, etc.
+    const occurredAt = str("invoice_date") ? parseDate(str("invoice_date")!) : null;
+    const postedAt = str("due_date") ? parseDate(str("due_date")!) : null;
 
-    // Build parties
+    // Build parties with identifiers from the extracted fields
     const parties: ExtractedParty[] = [];
     const issuerName = str("issuer_name");
     if (issuerName) {
+      const issuerIdentifiers: Record<string, string> = {};
+      const gstin = str("issuer_gstin");
+      if (gstin) issuerIdentifiers.gstin = gstin;
+      const email = str("issuer_email");
+      if (email) issuerIdentifiers.email = email;
+      const phone = str("issuer_phone");
+      if (phone) issuerIdentifiers.phone = phone;
       parties.push({
         name: issuerName,
         kind: "organisation",
         role: "issuer",
-        identifiers: {},
+        identifiers: issuerIdentifiers,
       });
     }
     const customerName = str("customer_name");
     if (customerName) {
+      const customerIdentifiers: Record<string, string> = {};
+      const gstin = str("customer_gstin");
+      if (gstin) customerIdentifiers.gstin = gstin;
       parties.push({
         name: customerName,
         kind: "person",
         role: "owner",
-        identifiers: {},
+        identifiers: customerIdentifiers,
       });
     }
 
-    // Determine doc_type from the document content
-    const docType = inferDocType(r, filename);
+    // Determine doc_type: prefer Sarvam's classification, fall back to inference
+    const sarvamDocType = str("document_type")?.toLowerCase();
+    const docType = sarvamDocType ? mapDocType(sarvamDocType) : inferDocType(r, filename);
 
     // Payment rail mapping
     const paymentMode = str("payment_mode")?.toLowerCase() ?? "";
     let paymentRail: ExtractionResult["payment_rail"] = null;
     if (paymentMode.includes("upi")) paymentRail = "upi";
     else if (paymentMode.includes("card")) paymentRail = "card";
-    else if (paymentMode.includes("netbanking") || paymentMode.includes("bank")) paymentRail = "netbanking";
+    else if (paymentMode.includes("netbanking") || paymentMode.includes("net banking")) paymentRail = "netbanking";
+    else if (paymentMode.includes("auto") && paymentMode.includes("debit")) paymentRail = "auto_debit";
     else if (paymentMode.includes("cash")) paymentRail = "cash";
-    else if (paymentMode.includes("cheque")) paymentRail = "cheque";
+    else if (paymentMode.includes("cheque") || paymentMode.includes("check")) paymentRail = "cheque";
 
-    const currencyRaw = str("currency")?.toUpperCase() ?? "";
-    const currency = currencyRaw || (currencyRaw.includes("RS") || currencyRaw.includes("₹") ? "INR" : "INR");
+    // Currency: normalise common Indian variants to INR
+    const currencyRaw = str("currency") ?? "";
+    const currency = normaliseCurrency(currencyRaw);
+
+    // Line items — each item has its own description/amount/rate fields
+    const lineItems = arr("line_items").map((item) => {
+      const itemNum = (k: string): number | null => {
+        const v = item[k];
+        if (v === null || v === undefined) return null;
+        const n = typeof v === "number" ? v : Number(String(v).replace(/[^0-9.-]/g, ""));
+        return Number.isFinite(n) ? n : null;
+      };
+      return {
+        description: String(item.description ?? "").trim() || "Line item",
+        amount_minor: toMinor(itemNum("amount") ?? itemNum("rate")),
+      };
+    }).filter((li) => li.amount_minor !== null);
+
+    // Reference IDs — collect all that are present
+    const reference_ids: ExtractionResult["reference_ids"] = {};
+    const invoiceNo = str("invoice_number");
+    if (invoiceNo) reference_ids.invoice_no = invoiceNo;
+    const orderNo = str("order_number");
+    if (orderNo) reference_ids.order_no = orderNo;
+    const utr = str("utr");
+    if (utr) reference_ids.utr = utr;
+    const approvalCode = str("approval_code");
+    if (approvalCode) reference_ids.approval_code = approvalCode;
+
+    // Source of funds: if bank details are present, describe the account
+    const bankName = str("bank_name");
+    const bankAccount = str("bank_account_number");
+    const sourceOfFunds = bankName || bankAccount
+      ? [bankName, bankAccount ? `A/c ${bankAccount}` : null].filter(Boolean).join(", ")
+      : null;
 
     return {
       doc_type: docType,
       occurred_at: occurredAt,
-      posted_at: null,
+      posted_at: postedAt,
       amount_minor: toMinor(totalAmount),
       currency,
       subtotal_minor: toMinor(subtotal),
       tax_minor: toMinor(taxAmount),
+      line_items: lineItems.length > 0 ? lineItems : null,
       direction: null,
       payment_rail: paymentRail,
       parties,
-      reference_ids: {
-        invoice_no: str("invoice_number") ?? undefined,
-      },
+      reference_ids,
       counterparty_descriptor: issuerName,
-      source_of_funds_text: null,
+      source_of_funds_text: sourceOfFunds,
       destination_of_funds_text: null,
-      purpose_text: null,
+      purpose_text: str("purpose"),
       category_hint: null,
       is_wallet_topup: false,
       confidence: 0.85,
@@ -359,6 +460,41 @@ function inferDocType(r: Record<string, unknown>, filename: string): ExtractionR
     return "salary_slip";
   }
   return "unknown";
+}
+
+/**
+ * Map Sarvam's document_type string to our DocType enum. Sarvam may return
+ * variations like "tax_invoice", "Tax Invoice", "invoice", etc.
+ */
+function mapDocType(raw: string): ExtractionResult["doc_type"] {
+  const t = raw.toLowerCase().replace(/[\s-]/g, "_");
+  if (t.includes("tax_invoice") || t === "invoice") return "merchant_invoice";
+  if (t.includes("contract_note") || t.includes("trade")) return "contract_note";
+  if (t.includes("bank_statement")) return "bank_statement";
+  if (t.includes("card_statement")) return "card_statement";
+  if (t.includes("receipt")) return "payment_receipt";
+  if (t.includes("salary") || t.includes("payslip")) return "salary_slip";
+  if (t.includes("refund")) return "refund_note";
+  if (t.includes("wallet") || t.includes("topup")) return "wallet_topup_confirmation";
+  if (t.includes("bank_slip") || t.includes("slip")) return "bank_slip";
+  // Fall back to inference from the raw string
+  return inferDocType({ document_type: raw }, "");
+}
+
+/**
+ * Normalise currency strings. Sarvam may return "INR", "Rs", "₹", "Rs.",
+ * "Indian Rupee", etc. We need the ISO 4217 code.
+ */
+function normaliseCurrency(raw: string): string {
+  const c = raw.trim().toUpperCase();
+  if (!c) return "INR"; // Indian jurisdiction default
+  if (c === "INR" || c === "₹" || c.includes("RS") || c.includes("RUPEE")) return "INR";
+  if (c === "USD" || c === "$") return "USD";
+  if (c === "EUR" || c === "€") return "EUR";
+  if (c === "GBP" || c === "£") return "GBP";
+  // Already a 3-letter code? Return as-is.
+  if (/^[A-Z]{3}$/.test(c)) return c;
+  return raw.trim();
 }
 
 function sleep(ms: number): Promise<void> {
