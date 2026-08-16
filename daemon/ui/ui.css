@@ -39,6 +39,9 @@
      queue scrolls (infinite scroll, 20 documents at a time). */
   #tab-obs.on{display:flex;flex-direction:column;overflow:hidden}
   #tab-obs.on>*{flex:0 0 auto;min-width:0}
+  /* even vertical rhythm: 18px between each section (periods -> Money ->
+     columns); the global 28px section margin is overridden here */
+  #tab-obs.on section{margin-bottom:18px}
   #tab-obs.on .obs-cols{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:60% 40%;gap:18px}
   #tab-obs.on .obs-cols>section{min-height:0;display:flex;flex-direction:column;margin-bottom:0}
   #tab-obs.on #card .card{max-height:200px;overflow-y:auto}
