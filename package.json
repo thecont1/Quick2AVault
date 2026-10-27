@@ -28,7 +28,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
     "@firecrawl/anydoc": "0.1.6",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "openai": "^5.7.0"
   },
   "devDependencies": {
