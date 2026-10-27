@@ -40,7 +40,9 @@ bool _isWarm(Color c) {
 
 void main() {
   test('Spending is olive, so the band beneath it reads as spending', () {
-    // Olive thicket: green-dominant, muted, not blue.
+    // Olive thicket: pinned terrain values, none of them blue.
+    expect(VaultColors.spendInk, const Color(0xFF4E4A2E));
+    expect(VaultColors.spendFill, const Color(0xFFE7E5D4));
     expect(_isBlueish(VaultColors.spendInk), isFalse,
         reason: 'spendInk must not be blue — blue is marsh, not spending');
     expect(_isBlueish(VaultColors.spendFill), isFalse);
@@ -55,12 +57,14 @@ void main() {
   });
 
   test('Income is yellow open land — warm, not green', () {
-    expect(_isYellowish(VaultColors.incomeInk), isTrue,
-        reason: 'income is the yellow open-land region');
-    expect(_isYellowish(VaultColors.incomeFill), isTrue);
+    // Pinned to the terrain map: income = yellow open land.
+    expect(VaultColors.incomeInk, const Color(0xFF6A5A12));
+    expect(VaultColors.incomeFill, const Color(0xFFF7EFD2));
   });
 
   test('Investments is contour earth — warm brown', () {
+    expect(VaultColors.investInk, const Color(0xFF7A5528));
+    expect(VaultColors.investFill, const Color(0xFFEBDDC8));
     expect(_isWarm(VaultColors.investInk), isTrue,
         reason: 'investments are the brown contour earth');
     expect(_isBlueish(VaultColors.investInk), isFalse);
@@ -85,9 +89,9 @@ void main() {
   });
 
   test('transfer is blue marsh — cool, distinctly water', () {
-    // Marsh blue: a cool hue that reads as water/neutral terrain. It is a
-    // real colour family (not grey) but its meaning is "counts toward no
-    // total", enforced by being cool while spending is olive-yellow.
+    // Marsh blue: pinned terrain value; a cool hue that reads as water,
+    // while spending is olive-yellow.
+    expect(VaultColors.transfer, const Color(0xFF3D6C7E));
     expect(_isBlueish(VaultColors.transfer), isTrue,
         reason: 'transfer is the blue marsh region');
     expect(_isYellowish(VaultColors.transfer), isFalse);
