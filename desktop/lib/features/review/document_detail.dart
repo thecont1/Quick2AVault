@@ -139,68 +139,44 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
             ),
           ];
 
-    // First-fold layout: header + toggle stay pinned, the preview expands to
-    // fill the fold, and the metadata panels scroll beneath it.
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Editing ${document.filename}',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: VaultColors.ink,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 15,
+    // Flattened detail column: the preview frame and everything below it
+    // scroll as one vertical stream. The filename already sits in the left
+    // rail, so no header row here; the Document/Markdown switch floats inside
+    // the preview frame.
+    final paneHeight =
+        (MediaQuery.sizeOf(context).height * 0.52).clamp(320.0, 560.0);
+    return SingleChildScrollView(
+      key: ValueKey('document-detail-${document.id}'),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: paneHeight,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: widget.previewBuilder != null
+                      ? widget.previewBuilder!(context, _markdown)
+                      : _markdown
+                          ? _MarkdownPreview(markdown: document.markdown)
+                          : _DocumentPreview(filename: document.filename),
+                ),
+                Positioned(
+                  top: 8,
+                  left: 8,
+                  child: _FrameToggle(
+                    markdown: _markdown,
+                    documentAvailable: widget.documentAvailable,
+                    markdownAvailable: widget.markdownAvailable,
+                    onChanged: (value) => setState(() => _markdown = value),
                   ),
                 ),
-              ),
-              if (widget.onBack != null)
-                TextButton(
-                  onPressed: widget.onBack,
-                  child: const Text('Back to browse'),
-                ),
-            ],
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: _DocTabs(
-            markdown: _markdown,
-            documentAvailable: widget.documentAvailable,
-            markdownAvailable: widget.markdownAvailable,
-            onChanged: (value) => setState(() => _markdown = value),
-          ),
-        ),
-        const SizedBox(height: 14),
-        // The preview owns the first fold. Strong flex ratio: it takes
-        // ~90% of the remaining height; the metadata below shows only a sliver
-        // until the user scrolls.
-        Expanded(
-          flex: 9,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: widget.previewBuilder != null
-                ? widget.previewBuilder!(context, _markdown)
-                : _markdown
-                    ? _MarkdownPreview(markdown: document.markdown)
-                    : _DocumentPreview(filename: document.filename),
-          ),
-        ),
-        Flexible(
-          flex: 1,
-          child: SingleChildScrollView(
-            key: ValueKey('document-detail-${document.id}'),
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                FinancialImpactPanel(
+          const SizedBox(height: 20),
+          FinancialImpactPanel(
                   document: document,
                   onBucketChanged: (bucket) {
                     setState(() => _bucket = bucket);
@@ -343,9 +319,6 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
                 ),
               ],
             ),
-          ),
-        ),
-      ],
     );
   }
 
@@ -373,6 +346,75 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
       await _action(DocumentManageAction.deletePermanently);
     }
   }
+}
+
+/// The Document/Markdown switch floated inside the preview frame — compact,
+/// on a translucent chip so it reads as chrome over the page, never as a
+/// separate toolbar row.
+class _FrameToggle extends StatelessWidget {
+  final bool markdown;
+  final bool documentAvailable;
+  final bool markdownAvailable;
+  final ValueChanged<bool> onChanged;
+
+  const _FrameToggle({
+    required this.markdown,
+    required this.documentAvailable,
+    required this.markdownAvailable,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: VaultColors.panel.withValues(alpha: 0.92),
+    elevation: 2,
+    shadowColor: Colors.black.withValues(alpha: 0.2),
+    borderRadius: BorderRadius.circular(10),
+    child: Padding(
+      padding: const EdgeInsets.all(3),
+      child: SegmentedButton<bool>(
+        segments: [
+          ButtonSegment(
+            value: false,
+            enabled: documentAvailable,
+            label: const Text('Document'),
+          ),
+          ButtonSegment(
+            value: true,
+            enabled: markdownAvailable,
+            label: const Text('Markdown'),
+          ),
+        ],
+        selected: {markdown},
+        showSelectedIcon: false,
+        style: ButtonStyle(
+          backgroundColor: WidgetStateProperty.resolveWith((states) =>
+              states.contains(WidgetState.selected)
+                  ? VaultColors.accent.withValues(alpha: 0.12)
+                  : VaultColors.controlSubtle40),
+          foregroundColor: WidgetStateProperty.resolveWith((states) =>
+              states.contains(WidgetState.selected)
+                  ? VaultColors.accent
+                  : VaultColors.dim),
+          textStyle: WidgetStateProperty.all(
+            const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600),
+          ),
+          padding: WidgetStateProperty.all(
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          ),
+          shape: WidgetStateProperty.all(
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        ),
+        onSelectionChanged: (values) {
+          final value = values.first;
+          if ((value && markdownAvailable) || (!value && documentAvailable)) {
+            onChanged(value);
+          }
+        },
+      ),
+    ),
+  );
 }
 
 class _DocTabs extends StatelessWidget {
