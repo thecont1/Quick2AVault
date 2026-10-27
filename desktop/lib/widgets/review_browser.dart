@@ -27,6 +27,16 @@ import '../features/review/widgets.dart';
 import '../features/adapters.dart';
 import '../features/people/state.dart' as feature_people;
 
+enum _ReviewSort { newest, oldest, month, supplier }
+
+enum _ReviewStatus { all, course, done }
+
+class _RailGroup {
+  final String title;
+  final List<VaultDoc> items;
+  const _RailGroup(this.title, this.items);
+}
+
 class ReviewBrowser extends StatefulWidget {
   final VaultApi api;
   final String? initialDocumentId;
@@ -43,6 +53,12 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
   String _query = '';
   bool _loading = true;
   String? _error;
+
+  /// How the documents rail is ordered and grouped.
+  _ReviewSort _sort = _ReviewSort.supplier;
+  /// Selected month ('all' or 'YYYY-MM').
+  String _month = 'all';
+  _ReviewStatus _status = _ReviewStatus.all;
 
   /// Document vs Markdown for the right-hand pane.
   bool _showMarkdown = false;
@@ -164,19 +180,72 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
     }
   }
 
-  /// Filtered list. Matches filename, doc type and source so a search for
-  /// "swiggy" or "invoice" or "gmail" all work without a mode switch.
-  List<VaultDoc> get _visible {
-    if (_query.trim().isEmpty) return _docs;
-    final q = _query.toLowerCase();
-    return _docs
-        .where(
-          (d) =>
-              d.filename.toLowerCase().contains(q) ||
+  /// Filtered, sorted, grouped list for the rail. Query + status + month
+  /// filter first; then the rail is ordered per [_sort] with headers for the
+  /// grouped modes (month, supplier) so a long list can be skimmed.
+  List<_RailGroup> get _grouped {
+    final q = _query.trim().toLowerCase();
+    final list = _docs.where((d) {
+      if (q.isNotEmpty &&
+          !(d.filename.toLowerCase().contains(q) ||
               (d.docType ?? '').toLowerCase().contains(q) ||
-              (d.source ?? '').toLowerCase().contains(q),
-        )
-        .toList();
+              (d.source ?? '').toLowerCase().contains(q))) {
+        return false;
+      }
+      switch (_status) {
+        case _ReviewStatus.all:
+          break;
+        case _ReviewStatus.course:
+          if (d.analysed) return false;
+        case _ReviewStatus.done:
+          if (!d.analysed) return false;
+      }
+      if (_month != 'all') {
+        if (!d.receivedAt.startsWith(_month)) return false;
+      }
+      return true;
+    }).toList();
+
+    switch (_sort) {
+      case _ReviewSort.newest:
+        list.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
+        return list.isEmpty ? const [] : [_RailGroup('Newest', list)];
+      case _ReviewSort.oldest:
+        list.sort((a, b) => a.receivedAt.compareTo(b.receivedAt));
+        return list.isEmpty ? const [] : [_RailGroup('Oldest', list)];
+      case _ReviewSort.month:
+        final byMonth = <String, List<VaultDoc>>{};
+        for (final d in list) {
+          byMonth.putIfAbsent(d.receivedAt.substring(0, 7), () => []).add(d);
+        }
+        final keys = byMonth.keys.toList()..sort((a, b) => b.compareTo(a));
+        return [
+          for (final k in keys)
+            _RailGroup(k, byMonth[k]!..sort((a, b) => b.receivedAt.compareTo(a.receivedAt))),
+        ];
+      case _ReviewSort.supplier:
+        final bySupplier = <String, List<VaultDoc>>{};
+        for (final d in list) {
+          final key = (d.source ?? 'No source').trim().toLowerCase();
+          bySupplier.putIfAbsent(key, () => []).add(d);
+        }
+        final keys = bySupplier.keys.toList()..sort();
+        return [
+          for (final k in keys)
+            _RailGroup(
+              bySupplier[k]!.first.source ?? 'No source',
+              bySupplier[k]!..sort((a, b) => b.receivedAt.compareTo(a.receivedAt)),
+            ),
+        ];
+    }
+  }
+
+  /// Months present in the corpus ('YYYY-MM'), newest first, for the rail
+  /// month filter.
+  List<String> get _months {
+    final months = _docs.map((d) => d.receivedAt.substring(0, 7)).toSet();
+    final list = months.toList()..sort((a, b) => b.compareTo(a));
+    return list;
   }
 
   @override
@@ -193,11 +262,14 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
       );
     }
 
+    final groups = _grouped;
+    final shown = groups.fold<int>(0, (sum, g) => sum + g.items.length);
+
     return Column(
       children: [
         _Header(
           total: _docs.length,
-          shown: _visible.length,
+          shown: shown,
           onSearch: (v) => setState(() => _query = v),
         ),
         const Divider(height: 1, color: VaultColors.line),
@@ -207,10 +279,26 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
             children: [
               SizedBox(
                 width: 320,
-                child: _DocList(
-                  docs: _visible,
-                  selected: _selected,
-                  onSelect: _select,
+                child: Column(
+                  children: [
+                    _RailToolbar(
+                      sort: _sort,
+                      months: _months,
+                      month: _month,
+                      status: _status,
+                      onSort: (s) => setState(() => _sort = s),
+                      onMonth: (m) => setState(() => _month = m),
+                      onStatus: (s) => setState(() => _status = s),
+                    ),
+                    const Divider(height: 1, color: VaultColors.line),
+                    Expanded(
+                      child: _DocList(
+                        groups: groups,
+                        selected: _selected,
+                        onSelect: _select,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               const VerticalDivider(width: 1, color: VaultColors.line),
@@ -353,19 +441,20 @@ class _DocListSkeleton extends StatelessWidget {
 }
 
 class _DocList extends StatelessWidget {
-  final List<VaultDoc> docs;
+  final List<_RailGroup> groups;
   final VaultDoc? selected;
   final ValueChanged<VaultDoc> onSelect;
 
   const _DocList({
-    required this.docs,
+    required this.groups,
     required this.selected,
     required this.onSelect,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (docs.isEmpty) {
+    final total = groups.fold<int>(0, (sum, g) => sum + g.items.length);
+    if (total == 0) {
       return const Center(
         child: Text(
           'Nothing matches',
@@ -373,11 +462,42 @@ class _DocList extends StatelessWidget {
         ),
       );
     }
+
+    // Flat index over groups: String entries are group headers, VaultDoc
+    // entries are rows. One ListView keeps the rail virtualised and the
+    // headers sticky-feeling (they scroll with their section, which is the
+    // familiar pattern in file browsers).
+    final entries = <Object>[];
+    for (final g in groups) {
+      if (g.items.isEmpty) continue;
+      entries.add(g.title);
+      entries.addAll(g.items);
+    }
+
+    bool isHeader(Object e) => e is String;
+    bool isDoc(Object e) => e is VaultDoc;
+
     return ListView.builder(
       padding: const EdgeInsets.symmetric(vertical: 6),
-      itemCount: docs.length,
+      itemCount: entries.length,
       itemBuilder: (context, i) {
-        final d = docs[i];
+        final e = entries[i];
+        if (isHeader(e)) {
+          final title = e as String;
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(20, 14, 12, 4),
+            child: Text(
+              title,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.6,
+                color: VaultColors.dim,
+              ),
+            ),
+          );
+        }
+        final d = e as VaultDoc;
         final isSel = d.id == selected?.id;
         final palette = WorldScope.of(context);
         final metaParts = [
@@ -468,6 +588,190 @@ class _DocList extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+/// Compact sorting / filtering controls for the documents rail: one click on
+/// Sort reorders, one click on Month narrows to a single month, and the pills
+/// switch between all documents / on-course (unanalysed) / reviewed.
+class _RailToolbar extends StatelessWidget {
+  final _ReviewSort sort;
+  final List<String> months;
+  final String month;
+  final _ReviewStatus status;
+  final ValueChanged<_ReviewSort> onSort;
+  final ValueChanged<String> onMonth;
+  final ValueChanged<_ReviewStatus> onStatus;
+
+  const _RailToolbar({
+    required this.sort,
+    required this.months,
+    required this.month,
+    required this.status,
+    required this.onSort,
+    required this.onMonth,
+    required this.onStatus,
+  });
+
+  static const _sortLabels = {
+    _ReviewSort.supplier: 'Supplier',
+    _ReviewSort.month: 'Month',
+    _ReviewSort.newest: 'Newest',
+    _ReviewSort.oldest: 'Oldest',
+  };
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.tune, size: 14, color: VaultColors.dim),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _CompactDropdown<_ReviewSort>(
+                value: sort,
+                items: _sortLabels.entries
+                    .map(
+                      (e) => DropdownMenuItem(
+                        value: e.key,
+                        child: Text(e.value),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) onSort(v);
+                },
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _CompactDropdown<String>(
+                value: month,
+                items: [
+                  const DropdownMenuItem(value: 'all', child: Text('All months')),
+                  for (final m in months)
+                    DropdownMenuItem(value: m, child: Text(m)),
+                ],
+                onChanged: (v) {
+                  if (v != null) onMonth(v);
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.centerLeft,
+          child: Row(
+            children: [
+              _StatusPill(
+                label: 'All',
+                selected: status == _ReviewStatus.all,
+                onTap: () => onStatus(_ReviewStatus.all),
+              ),
+              const SizedBox(width: 6),
+              _StatusPill(
+                label: 'On course',
+                selected: status == _ReviewStatus.course,
+                onTap: () => onStatus(_ReviewStatus.course),
+              ),
+              const SizedBox(width: 6),
+              _StatusPill(
+                label: 'Reviewed',
+                selected: status == _ReviewStatus.done,
+                onTap: () => onStatus(_ReviewStatus.done),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _CompactDropdown<T> extends StatelessWidget {
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?> onChanged;
+
+  const _CompactDropdown({
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8),
+    decoration: BoxDecoration(
+      color: VaultColors.controlSubtle40,
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: VaultColors.line),
+    ),
+    child: DropdownButtonHideUnderline(
+      child: DropdownButton<T>(
+        value: value,
+        items: items,
+        onChanged: onChanged,
+        isDense: true,
+        isExpanded: true,
+        alignment: Alignment.centerLeft,
+        style: const TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: VaultColors.ink,
+        ),
+        icon: const Icon(
+          Icons.arrow_drop_down,
+          size: 16,
+          color: VaultColors.dim,
+        ),
+        borderRadius: BorderRadius.circular(10),
+        menuMaxHeight: 360,
+      ),
+    ),
+  );
+}
+
+class _StatusPill extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _StatusPill({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = WorldScope.of(context);
+    return Material(
+      color: selected
+          ? palette.accent.withValues(alpha: 0.10)
+          : VaultColors.controlSubtle40,
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(999),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: selected ? palette.accent : VaultColors.dim,
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
