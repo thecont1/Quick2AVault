@@ -20,7 +20,7 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { createGmailSyncSource, type GmailTransport } from "./gmail-api.js";
 import { extractGmailArtifacts, deriveGmailAddress, type GmailMessage } from "./gmail-model.js";
-import { runIncrementalGmailSync, type GmailSyncPort } from "./gmail-sync-core.js";
+import { runIncrementalGmailSync, isStaleHistoryError, type GmailSyncPort } from "./gmail-sync-core.js";
 import type { GmailOAuth } from "./oauth.js";
 import type { Ports } from "../ports.js";
 import { ingestFile } from "../pipeline.js";
@@ -271,7 +271,20 @@ export async function syncGmail(
     },
   };
 
-  const result = await runIncrementalGmailSync(port, checkpoint);
-  ports.logger.info("gmail: sync complete", result);
-  return result;
+  try {
+    const result = await runIncrementalGmailSync(port, checkpoint);
+    ports.logger.info("gmail: sync complete", result);
+    return result;
+  } catch (err) {
+  // Self-heal: if the stored history checkpoint has aged out of Google's
+  // retention window (404 on /history), the sync would be wedged forever —
+  // the cursor only advances on success. Reset it and retry once as a fresh
+  // pull so the next tick re-baselines from the mailbox instead.
+  if (!isStaleHistoryError(err)) throw err;
+  ports.logger.warn("gmail: stale history checkpoint (404) — resetting and retrying as fresh pull");
+  db.prepare("DELETE FROM app_settings WHERE key='gmail.history_id'").run();
+  const recovered = await runIncrementalGmailSync(port, null);
+  ports.logger.info("gmail: recovered via fresh pull", recovered);
+  return recovered;
+  }
 }

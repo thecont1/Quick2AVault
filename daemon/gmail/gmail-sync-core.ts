@@ -31,6 +31,18 @@ export interface GmailSyncRunResult {
 }
 
 /**
+ * True when the error is the stale-checkpoint signature: Gmail's History API
+ * returns 404 "Requested entity was not found" for a startHistoryId that has
+ * aged past Google's retention window. Every time transport error is the
+ * daemon's sync getting wedged on a dead cursor, so we can recognise it
+ * exactly rather than resetting on any failure.
+ */
+export function isStaleHistoryError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("Gmail API 404 on /history");
+}
+
+/**
  * Transactional incremental-sync core. The checkpoint advances only after every
  * message in the response has either been imported or identified as processed.
  */

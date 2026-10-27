@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { runIncrementalGmailSync, type GmailSyncPort } from "./gmail-sync-core.js";
+import { runIncrementalGmailSync, isStaleHistoryError, type GmailSyncPort } from "./gmail-sync-core.js";
 import type { GmailMessage } from "./gmail-model.js";
 
 const message = (id: string): GmailMessage => ({
@@ -96,5 +96,20 @@ await assert.rejects(
   /network failed/,
 );
 assert.deepEqual(failedCheckpoints, [], "A partial failure must not advance the history cursor");
+
+// isStaleHistoryError — recognise the wedged-cursor 404 exactly.
+assert.equal(
+  isStaleHistoryError(
+    new Error(
+      'Gmail API 404 on /history?startHistoryId=21480&historyTypes=messageAdded&maxResults=100: {"error":{"code":404,"message":"Requested entity was not found."}}',
+    ),
+  ),
+  true,
+  "Stale-checkpoint 404 must be detected",
+);
+assert.equal(isStaleHistoryError(new Error("Gmail API 404 on /messages/abc?format=full: not found")), false, "Other 404s are not stale-checkpoint errors");
+assert.equal(isStaleHistoryError(new Error("Gmail API 401: unauthorized")), false, "Auth errors are not stale-checkpoint errors");
+assert.equal(isStaleHistoryError(new Error("network failed")), false, "Network errors are not stale-checkpoint errors");
+assert.equal(isStaleHistoryError("Gmail API 404 on /history?startHistoryId=1"), true, "Non-Error carries the same signature");
 
 console.log("gmail sync core smoke: ok");
