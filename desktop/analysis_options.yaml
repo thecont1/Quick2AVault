@@ -33,3 +33,5 @@ analyzer:
 
 # Additional information about this file can be found at
 # https://dart.dev/guides/language/analysis-options
+
+# CI kick round 2: validate Flutter workflow on main incl. #31 (Oct 2026)
