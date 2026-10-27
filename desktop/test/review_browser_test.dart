@@ -449,7 +449,7 @@ void main() {
     await tester.pumpWidget(_host(api));
     await tester.pumpAndSettle();
 
-    expect(find.byTooltip('Not analysed yet'), findsOneWidget);
+    expect(find.byTooltip('On course — awaiting review'), findsOneWidget);
     expect(find.byTooltip('Analysed'), findsOneWidget);
   });
 

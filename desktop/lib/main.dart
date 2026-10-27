@@ -19,6 +19,7 @@ import 'api.dart';
 import 'menubar.dart';
 import 'window_store.dart';
 import 'theme.dart';
+import 'features/settings/worlds.dart';
 import 'widgets/drop_target.dart';
 import 'widgets/popup_view.dart';
 import 'widgets/period_bar.dart';
@@ -61,12 +62,18 @@ class Quick2AVaultApp extends StatelessWidget {
   const Quick2AVaultApp({super.key});
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'Quick2AVault',
-    debugShowCheckedModeBanner: false,
-    theme: vaultTheme,
-    home: const VaultHome(),
-  );
+  Widget build(BuildContext context) => ListenableBuilder(
+        listenable: worldPalette,
+        builder: (context, _) => WorldScope(
+          notifier: worldPalette,
+          child: MaterialApp(
+            title: 'Quick2AVault',
+            debugShowCheckedModeBanner: false,
+            theme: vaultThemeFor(worldPalette.value),
+            home: const VaultHome(),
+          ),
+        ),
+      );
 }
 
 class VaultHome extends ConsumerStatefulWidget {

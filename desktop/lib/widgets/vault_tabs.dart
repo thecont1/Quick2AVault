@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme.dart';
+import '../features/settings/worlds.dart';
 
 /// The surfaces a user can reach. One window, one place for everything.
 ///
@@ -92,6 +93,7 @@ class _Tab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = WorldScope.of(context);
     // A disabled tab must be UNMISTAKABLY inert. VaultColors.faint (#8E8E93)
     // sits only ~35 luminance points from dim (#6B6B70), which on screen read
     // as just another enabled tab — the "Charts" tab looked clickable and did
@@ -99,8 +101,8 @@ class _Tab extends StatelessWidget {
     final fg = !enabled
         ? VaultColors.faint.withValues(alpha: 0.45)
         : selected
-            ? VaultColors.accent
-            : VaultColors.dim;
+            ? palette.accent
+            : palette.dim;
 
     return Semantics(
       button: true,
@@ -121,7 +123,7 @@ class _Tab extends StatelessWidget {
                 // touching the bar's own border — the cheapest unambiguous
                 // signal, no fill or pill needed.
                 bottom: BorderSide(
-                  color: selected ? VaultColors.accent : Colors.transparent,
+                  color: selected ? palette.accent : Colors.transparent,
                   width: 2,
                 ),
               ),
@@ -142,7 +144,7 @@ class _Tab extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                   decoration: BoxDecoration(
-                    color: VaultColors.accent,
+                    color: palette.accent,
                     borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(

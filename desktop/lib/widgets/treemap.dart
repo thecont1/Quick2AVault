@@ -3,6 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../api.dart';
+import '../theme.dart';
+import '../features/settings/worlds.dart';
 
 /// Squarified treemap of spending by category.
 ///
@@ -146,13 +148,14 @@ double _worstRatio(List<TreemapNode> row, double side, double scale) {
 Color treemapFill(int rank, int count) {
   final t = count <= 1 ? 0.0 : rank / (count - 1);
   // Olive thicket ramp — the spending region's family (see theme.dart).
-  return Color.lerp(const Color(0xFF4E4A2E), const Color(0xFFE7E5D4), t)!;
+  final p = worldPalette.value;
+  return Color.lerp(p.spendInk, p.spendFill, t)!;
 }
 
 /// Readable ink for a given rank's fill.
 Color treemapInk(int rank, int count) {
   final t = count <= 1 ? 0.0 : rank / (count - 1);
-  return t < 0.55 ? Colors.white : const Color(0xFF3B3720);
+  return t < 0.55 ? Colors.white : worldPalette.value.spendInk;
 }
 
 class _Tile extends StatelessWidget {

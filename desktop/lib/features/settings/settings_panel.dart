@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import 'view.dart';
+import 'worlds.dart';
+import '../../theme.dart';
 
 class SettingsPanel extends StatelessWidget {
   final AppSettings settings;
@@ -18,13 +20,14 @@ class SettingsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
-    length: 2,
+    length: 3,
     child: Column(
       children: [
         const TabBar(
           tabs: [
             Tab(text: 'App Settings'),
             Tab(text: 'Jurisdiction Pack'),
+            Tab(text: 'World'),
           ],
         ),
         Expanded(
@@ -32,10 +35,141 @@ class SettingsPanel extends StatelessWidget {
             children: [
               AppSettingsView(initial: settings, onChanged: onSettingsChanged),
               JurisdictionPackView(pack: pack, onAddPack: onAddPack),
+              const WorldPickerView(),
             ],
           ),
         ),
       ],
+    ),
+  );
+}
+
+/// Choose the visual world (new-work roll: orienteering map, stamped paper,
+/// ticket wallet). In-memory for now; the app rebuilds to the palette.
+class WorldPickerView extends StatelessWidget {
+  const WorldPickerView({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final active = worldPalette.value;
+    return ListView(
+      padding: const EdgeInsets.all(20),
+      children: [
+        const Text(
+          'Visual world',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+            color: VaultColors.ink,
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'The whole app takes its ground, ink and accent from this world.',
+          style: TextStyle(color: VaultColors.dim, fontSize: 12.5),
+        ),
+        const SizedBox(height: 16),
+        for (final palette in const [
+          WorldPalette.orienteering,
+          WorldPalette.stampPaper,
+          WorldPalette.ticketWallet,
+        ]) ...[
+          _WorldTile(
+            palette: palette,
+            selected: palette.id == active.id,
+            onTap: () => worldPalette.value = palette,
+          ),
+          const SizedBox(height: 10),
+        ],
+      ],
+    );
+  }
+}
+
+class _WorldTile extends StatelessWidget {
+  final WorldPalette palette;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _WorldTile({
+    required this.palette,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: selected
+        ? palette.accent.withValues(alpha: 0.08)
+        : palette.panel,
+    borderRadius: BorderRadius.circular(12),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: selected ? palette.accent : palette.line,
+            width: selected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            // Swatch strip
+            Container(
+              width: 72,
+              height: 44,
+              decoration: BoxDecoration(
+                color: palette.bg,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: palette.line),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(7),
+                child: Row(
+                  children: [
+                    Expanded(child: ColoredBox(color: palette.incomeFill)),
+                    Expanded(child: ColoredBox(color: palette.spendFill)),
+                    Expanded(child: ColoredBox(color: palette.investFill)),
+                    Expanded(child: ColoredBox(color: palette.accent)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    palette.id.label,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: VaultColors.ink,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    palette.id.tagline,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: VaultColors.dim,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              selected ? Icons.radio_button_checked : Icons.radio_button_off,
+              color: selected ? palette.accent : VaultColors.faint,
+              size: 20,
+            ),
+          ],
+        ),
+      ),
     ),
   );
 }

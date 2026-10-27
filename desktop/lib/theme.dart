@@ -8,6 +8,8 @@ library;
 
 import 'package:flutter/material.dart';
 
+import 'features/settings/worlds.dart';
+
 class VaultColors {
   // Surfaces — the orienteering map ground: paper-white runnable forest,
   // olive thicket for secondary surfaces, brown contour hairlines.
@@ -128,7 +130,6 @@ final vaultTheme = ThemeData(
   ),
   fontFamily: '.AppleSystemUIFont',
   useMaterial3: true,
-
   // Glass Ledger component defaults — every default control across all tabs
   // inherits the tokens; per-surface override only where a surface needs to
   // be deliberately different (e.g. the Review toggle).
@@ -257,6 +258,20 @@ const moneyStyle = TextStyle(
   fontWeight: FontWeight.w700,
   letterSpacing: -0.8,
 );
+
+/// Theme for the active world. Component styles keep the token architecture;
+/// the world swap changes shell surfaces, primary accents and semantics
+/// (hero cards / treemap / course accents read the palette via WorldScope).
+ThemeData vaultThemeFor(WorldPalette palette) => vaultTheme.copyWith(
+      scaffoldBackgroundColor: palette.bg,
+      canvasColor: palette.bg,
+      colorScheme: ColorScheme.light(
+        surface: palette.panel,
+        primary: palette.accent,
+        secondary: palette.accent,
+        error: palette.warn,
+      ),
+    );
 
 /// A card in the reference style: soft fill, hairline border, round corners.
 BoxDecoration vaultCard({Color? border, Color? fill}) => BoxDecoration(

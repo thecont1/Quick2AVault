@@ -139,186 +139,206 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
             ),
           ];
 
-    return ListView(
-      key: ValueKey('document-detail-${document.id}'),
-      padding: const EdgeInsets.all(20),
+    // First-fold layout: header + toggle stay pinned, the preview expands to
+    // fill the fold, and the metadata panels scroll beneath it.
+    return Column(
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                'Editing ${document.filename}',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: VaultColors.ink,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 15,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Editing ${document.filename}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: VaultColors.ink,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                  ),
                 ),
               ),
-            ),
-            if (widget.onBack != null)
-              TextButton(
-                onPressed: widget.onBack,
-                child: const Text('Back to browse'),
-              ),
-          ],
+              if (widget.onBack != null)
+                TextButton(
+                  onPressed: widget.onBack,
+                  child: const Text('Back to browse'),
+                ),
+            ],
+          ),
         ),
         const SizedBox(height: 12),
-        _DocTabs(
-          markdown: _markdown,
-          documentAvailable: widget.documentAvailable,
-          markdownAvailable: widget.markdownAvailable,
-          onChanged: (value) => setState(() => _markdown = value),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: _DocTabs(
+            markdown: _markdown,
+            documentAvailable: widget.documentAvailable,
+            markdownAvailable: widget.markdownAvailable,
+            onChanged: (value) => setState(() => _markdown = value),
+          ),
         ),
         const SizedBox(height: 14),
-        if (widget.previewBuilder != null)
-          widget.previewBuilder!(context, _markdown)
-        else if (_markdown)
-          _MarkdownPreview(markdown: document.markdown)
-        else
-          _DocumentPreview(filename: document.filename),
-        const SizedBox(height: 20),
-        FinancialImpactPanel(
-          document: document,
-          onBucketChanged: (bucket) {
-            setState(() => _bucket = bucket);
-            _fieldChanged('financialImpact', bucket.apiValue);
-          },
-        ),
-        const SizedBox(height: 20),
-        DomainPanel(document: document),
-        if (document.currencyConversion case final conversion?) ...[
-          const SizedBox(height: 20),
-          CurrencyConversionRow(
-            conversion: conversion,
-            onCorrect: () =>
-                _fieldChanged('currencyConversion', conversion.rate),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: widget.previewBuilder != null
+                ? widget.previewBuilder!(context, _markdown)
+                : _markdown
+                    ? _MarkdownPreview(markdown: document.markdown)
+                    : _DocumentPreview(filename: document.filename),
           ),
-        ],
-        const SizedBox(height: 22),
-        Row(
-          children: [
-            const Expanded(
-              child: Text(
-                'Fields & evidence',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: VaultColors.ink,
-                ),
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-              decoration: BoxDecoration(
-                color: (document.confirmed ? VaultColors.ok : VaultColors.warn)
-                    .withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(999),
-              ),
-              child: Text(
-                document.confirmed ? 'All reviewed' : 'Needs review',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: document.confirmed ? VaultColors.ok : VaultColors.warn,
-                ),
-              ),
-            ),
-          ],
         ),
-        const SizedBox(height: 9),
-        for (final field in fields)
-          ProvenanceFieldRow(
-            field: field,
-            onChanged: (value) => _fieldChanged(field.id, value),
-          ),
-        const SizedBox(height: 16),
-        PartiesSection(
-          parties: document.parties,
-          choices: widget.roleCandidates ??
-              {
-                for (final role in DocumentPartyRole.values)
-                  role: document.parties
-                      .where((party) => party.entityId != null)
-                      .map(
-                        (party) => PartyChoice(
-                          id: party.entityId!,
-                          displayName: party.displayName ?? party.entityId!,
+        Flexible(
+          child: SingleChildScrollView(
+            key: ValueKey('document-detail-${document.id}'),
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                FinancialImpactPanel(
+                  document: document,
+                  onBucketChanged: (bucket) {
+                    setState(() => _bucket = bucket);
+                    _fieldChanged('financialImpact', bucket.apiValue);
+                  },
+                ),
+                const SizedBox(height: 20),
+                DomainPanel(document: document),
+                if (document.currencyConversion case final conversion?) ...[
+                  const SizedBox(height: 20),
+                  CurrencyConversionRow(
+                    conversion: conversion,
+                    onCorrect: () =>
+                        _fieldChanged('currencyConversion', conversion.rate),
+                  ),
+                ],
+                const SizedBox(height: 22),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Fields & evidence',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: VaultColors.ink,
                         ),
-                      )
-                      .toList(),
-              },
-          onChanged: widget.onPartyChanged == null
-              ? null
-              : (role, entityId) =>
-                    widget.onPartyChanged!(document.id, role, entityId),
-        ),
-        const SizedBox(height: 18),
-        _Disclosure(
-          label: 'Identity reasoning',
-          content:
-              document.identityReasoning ??
-              'Tokens, aliases and co-occurrence are available from the daemon.',
-        ),
-        _Disclosure(
-          label: 'Audit trail (${document.auditCount})',
-          content: document.auditEntries.isEmpty
-              ? 'No recorded changes yet.'
-              : document.auditEntries.join('\n'),
-        ),
-        if (widget.onTeachNow != null) ...[
-          const SizedBox(height: 10),
-          OutlinedButton.icon(
-            onPressed: widget.onTeachNow,
-            icon: const Icon(Icons.school_outlined),
-            label: const Text('Teach it now'),
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: (document.confirmed ? VaultColors.ok : VaultColors.warn)
+                            .withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        document.confirmed ? 'All reviewed' : 'Needs review',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: document.confirmed ? VaultColors.ok : VaultColors.warn,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 9),
+                for (final field in fields)
+                  ProvenanceFieldRow(
+                    field: field,
+                    onChanged: (value) => _fieldChanged(field.id, value),
+                  ),
+                const SizedBox(height: 16),
+                PartiesSection(
+                  parties: document.parties,
+                  choices: widget.roleCandidates ??
+                      {
+                        for (final role in DocumentPartyRole.values)
+                          role: document.parties
+                              .where((party) => party.entityId != null)
+                              .map(
+                                (party) => PartyChoice(
+                                  id: party.entityId!,
+                                  displayName: party.displayName ?? party.entityId!,
+                                ),
+                              )
+                              .toList(),
+                      },
+                  onChanged: widget.onPartyChanged == null
+                      ? null
+                      : (role, entityId) =>
+                            widget.onPartyChanged!(document.id, role, entityId),
+                ),
+                const SizedBox(height: 18),
+                _Disclosure(
+                  label: 'Identity reasoning',
+                  content:
+                      document.identityReasoning ??
+                      'Tokens, aliases and co-occurrence are available from the daemon.',
+                ),
+                _Disclosure(
+                  label: 'Audit trail (${document.auditCount})',
+                  content: document.auditEntries.isEmpty
+                      ? 'No recorded changes yet.'
+                      : document.auditEntries.join('\n'),
+                ),
+                if (widget.onTeachNow != null) ...[
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: widget.onTeachNow,
+                    icon: const Icon(Icons.school_outlined),
+                    label: const Text('Teach it now'),
+                  ),
+                ],
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => _action(DocumentManageAction.openOriginal),
+                      icon: const Icon(Icons.open_in_new, size: 16),
+                      label: const Text('Open original'),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _action(DocumentManageAction.openMarkdown),
+                      icon: const Icon(Icons.description_outlined, size: 16),
+                      label: const Text('Open Markdown'),
+                    ),
+                  ],
+                ),
+                const Divider(height: 30),
+                const Text(
+                  'Manage this document',
+                  style: TextStyle(color: VaultColors.dim, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton(
+                      onPressed: () => _action(DocumentManageAction.reprocess),
+                      child: const Text('Reprocess'),
+                    ),
+                    OutlinedButton(
+                      onPressed: () => _action(DocumentManageAction.removeFromActive),
+                      child: const Text('Remove from active'),
+                    ),
+                    TextButton(
+                      onPressed: () => _confirmDelete(context),
+                      child: const Text('Delete permanently'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Removing from active keeps the original file safe — you can restore or reprocess it anytime.',
+                  style: TextStyle(color: VaultColors.dim, fontSize: 11, height: 1.35),
+                ),
+              ],
+            ),
           ),
-        ],
-        const SizedBox(height: 16),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            TextButton.icon(
-              onPressed: () => _action(DocumentManageAction.openOriginal),
-              icon: const Icon(Icons.open_in_new, size: 16),
-              label: const Text('Open original'),
-            ),
-            TextButton.icon(
-              onPressed: () => _action(DocumentManageAction.openMarkdown),
-              icon: const Icon(Icons.description_outlined, size: 16),
-              label: const Text('Open Markdown'),
-            ),
-          ],
-        ),
-        const Divider(height: 30),
-        const Text(
-          'Manage this document',
-          style: TextStyle(color: VaultColors.dim, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            OutlinedButton(
-              onPressed: () => _action(DocumentManageAction.reprocess),
-              child: const Text('Reprocess'),
-            ),
-            OutlinedButton(
-              onPressed: () => _action(DocumentManageAction.removeFromActive),
-              child: const Text('Remove from active'),
-            ),
-            TextButton(
-              onPressed: () => _confirmDelete(context),
-              child: const Text('Delete permanently'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        const Text(
-          'Removing from active keeps the original file safe — you can restore or reprocess it anytime.',
-          style: TextStyle(color: VaultColors.dim, fontSize: 11, height: 1.35),
         ),
       ],
     );

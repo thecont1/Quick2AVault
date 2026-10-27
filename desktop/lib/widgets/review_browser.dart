@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../theme.dart';
+import '../features/settings/worlds.dart';
 import 'magnified_document.dart';
 import '../features/review/document_detail.dart';
 import '../features/review/widgets.dart';
@@ -378,6 +379,7 @@ class _DocList extends StatelessWidget {
       itemBuilder: (context, i) {
         final d = docs[i];
         final isSel = d.id == selected?.id;
+        final palette = WorldScope.of(context);
         final metaParts = [
           d.receivedAt.split('T').first,
           if (d.docType != null) d.docType!,
@@ -391,22 +393,35 @@ class _DocList extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
             decoration: BoxDecoration(
               color: isSel
-                  ? VaultColors.accent.withValues(alpha: 0.08)
+                  ? palette.accent.withValues(alpha: 0.08)
                   : Colors.transparent,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
               children: [
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 120),
-                  width: 3,
-                  height: isSel ? 30 : 0,
-                  margin: const EdgeInsets.only(right: 12),
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent,
-                    borderRadius: BorderRadius.circular(2),
+                if (isSel)
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    width: 3,
+                    height: 30,
+                    margin: const EdgeInsets.only(right: 12),
+                    decoration: BoxDecoration(
+                      color: palette.accent,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  )
+                else if (!d.analysed)
+                  // Course line: a faint purple rail marks the documents still
+                  // on the active course — the signature move of the world.
+                  Container(
+                    width: 2,
+                    height: 30,
+                    margin: const EdgeInsets.only(right: 12),
+                    decoration: BoxDecoration(
+                      color: palette.accent.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
-                ),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -436,15 +451,16 @@ class _DocList extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 // Analysed vs merely stored. The distinction matters: an
-                // unanalysed document contributes nothing to any total.
+                // unanalysed document contributes nothing to any total — and
+                // it is still on the course (the signature layer).
                 Tooltip(
-                  message: d.analysed ? 'Analysed' : 'Not analysed yet',
+                  message: d.analysed ? 'Analysed' : 'On course — awaiting review',
                   child: Icon(
                     Icons.circle,
                     size: 8,
                     color: d.analysed
-                        ? const Color(0xFF16663C)
-                        : VaultColors.lineBright,
+                        ? palette.ok
+                        : palette.accent.withValues(alpha: 0.55),
                   ),
                 ),
               ],
@@ -542,8 +558,10 @@ class _DetailState extends State<_Detail> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SizedBox(
-          height: 320,
+        // The preview owns the first fold: it expands to the space the pane
+        // gives it, so the document reads at full height. Metadata panels
+        // scroll beneath instead of crowding it.
+        Expanded(
           child: wantMarkdown
               ? _MarkdownPane(
                   markdown: widget.markdown,
