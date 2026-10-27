@@ -39,7 +39,7 @@
     "eslint": "^9.39.2",
     "eslint-plugin-import": "^2.31.0",
     "@morphllm/morphsdk": "^0.2.191",
-    "oxfmt": "^0.26.0",
+    "oxfmt": "^0.75.0",
     "tsx": "^4.20.5",
     "typescript": "^5.5.3"
   },
