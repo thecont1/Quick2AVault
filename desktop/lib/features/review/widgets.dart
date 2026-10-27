@@ -78,58 +78,91 @@ class FinancialImpactPanel extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final picker = DropdownButtonHideUnderline(
-              child: DropdownButton<ImpactBucket>(
-                isExpanded: true,
-                value: document.bucket,
-                onChanged: onBucketChanged == null
-                    ? null
-                    : (value) {
-                        if (value != null) onBucketChanged!(value);
-                      },
-                items: [
-                  for (final bucket in ImpactBucket.values)
-                    DropdownMenuItem(
-                      value: bucket,
-                      child: Text(
-                        bucket.label,
-                        overflow: TextOverflow.ellipsis,
+        const SizedBox(height: 14),
+        // Set bucket: a surfaced select, not a floating caret. The control
+        // sits inside a bordered field so the whole row reads as one input.
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Set bucket',
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.4,
+                color: VaultColors.dim,
+              ),
+            ),
+            const SizedBox(height: 6),
+            _SurfacedSelect(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<ImpactBucket>(
+                        isExpanded: true,
+                        value: document.bucket,
+                        onChanged: onBucketChanged == null
+                            ? null
+                            : (value) {
+                                if (value != null) onBucketChanged!(value);
+                              },
+                        items: [
+                          for (final bucket in ImpactBucket.values)
+                            DropdownMenuItem(
+                              value: bucket,
+                              child: Text(
+                                bucket.label,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
                       ),
                     ),
+                  ),
+                  const Icon(Icons.arrow_drop_down, color: VaultColors.dim),
                 ],
               ),
-            );
-            if (constraints.maxWidth < 380) {
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Set bucket',
-                    style: TextStyle(color: VaultColors.dim),
-                  ),
-                  const SizedBox(height: 6),
-                  picker,
-                ],
-              );
-            }
-            return Row(
-              children: [
-                const Text(
-                  'Set bucket',
-                  style: TextStyle(color: VaultColors.dim),
-                ),
-                const SizedBox(width: 12),
-                Expanded(child: picker),
-              ],
-            );
-          },
+            ),
+          ],
         ),
       ],
     ),
   );
+}
+
+class _SurfacedSelect extends StatefulWidget {
+  final Widget child;
+
+  const _SurfacedSelect({required this.child});
+
+  @override
+  State<_SurfacedSelect> createState() => _SurfacedSelectState();
+}
+
+/// A select field that lifts with the elevated-card shadow on hover —
+/// flat at rest, depth only as a response to the pointer.
+class _SurfacedSelectState extends State<_SurfacedSelect> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hover = true),
+        onExit: (_) => setState(() => _hover = false),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: VaultColors.panel,
+            border: Border.all(color: VaultColors.lineBright),
+            borderRadius: BorderRadius.circular(VaultRadius.control),
+            boxShadow: _hover ? VaultShadows.elevatedCard : null,
+          ),
+          child: widget.child,
+        ),
+      );
 }
 
 class ProvenanceFieldRow extends StatelessWidget {

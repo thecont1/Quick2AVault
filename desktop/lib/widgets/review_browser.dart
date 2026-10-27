@@ -181,7 +181,7 @@ class _ReviewBrowserState extends State<ReviewBrowser> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator.adaptive());
+      return const _DocListSkeleton();
     }
     if (_error != null) {
       return Center(
@@ -311,6 +311,46 @@ class _Header extends StatelessWidget {
   );
 }
 
+class _DocListSkeleton extends StatelessWidget {
+  const _DocListSkeleton();
+
+  @override
+  Widget build(BuildContext context) => ListView.builder(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        itemCount: 9,
+        itemBuilder: (context, i) => Container(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: VaultColors.controlSubtle40,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                height: 12,
+                decoration: BoxDecoration(
+                  color: VaultColors.line,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Container(
+                width: 140,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: VaultColors.line,
+                  borderRadius: BorderRadius.circular(5),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+}
+
 class _DocList extends StatelessWidget {
   final List<VaultDoc> docs;
   final VaultDoc? selected;
@@ -333,17 +373,40 @@ class _DocList extends StatelessWidget {
       );
     }
     return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 6),
       itemCount: docs.length,
       itemBuilder: (context, i) {
         final d = docs[i];
         final isSel = d.id == selected?.id;
+        final metaParts = [
+          d.receivedAt.split('T').first,
+          if (d.docType != null) d.docType!,
+          if (d.source != null) d.source!,
+        ];
         return InkWell(
           onTap: () => onSelect(d),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            color: isSel ? VaultColors.controlSubtle : null,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(
+              color: isSel
+                  ? VaultColors.accent.withValues(alpha: 0.08)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+            ),
             child: Row(
               children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 120),
+                  width: 3,
+                  height: isSel ? 30 : 0,
+                  margin: const EdgeInsets.only(right: 12),
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -354,25 +417,24 @@ class _DocList extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 13,
-                          fontWeight: isSel ? FontWeight.w600 : FontWeight.w400,
+                          fontWeight: isSel ? FontWeight.w600 : FontWeight.w500,
                           color: VaultColors.ink,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 3),
                       Text(
-                        [
-                          d.receivedAt.split('T').first,
-                          if (d.docType != null) d.docType!,
-                          if (d.source != null) d.source!,
-                        ].join(' · '),
+                        metaParts.join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontSize: 11,
-                          color: VaultColors.faint,
+                          color: VaultColors.dim,
                         ),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(width: 10),
                 // Analysed vs merely stored. The distinction matters: an
                 // unanalysed document contributes nothing to any total.
                 Tooltip(
@@ -740,8 +802,11 @@ class _DocumentPane extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: VaultColors.controlSubtle40,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(VaultRadius.card),
         border: Border.all(color: VaultColors.line),
+        // The preview is the Glass Ledger's floating surface: it detaches
+        // from the page at rest, so it carries the elevated-float shadow.
+        boxShadow: VaultShadows.elevatedFloat,
       ),
       clipBehavior: Clip.antiAlias,
       child: MagnifiedDocument(
@@ -792,8 +857,9 @@ class _MarkdownPane extends StatelessWidget {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: VaultColors.controlSubtle40,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(VaultRadius.card),
         border: Border.all(color: VaultColors.line),
+        boxShadow: VaultShadows.elevatedFloat,
       ),
       child: SingleChildScrollView(
         child: SelectableText(

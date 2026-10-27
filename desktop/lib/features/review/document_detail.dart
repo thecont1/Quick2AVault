@@ -150,7 +150,11 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
                 'Editing ${document.filename}',
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: VaultColors.dim),
+                style: const TextStyle(
+                  color: VaultColors.ink,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 15,
+                ),
               ),
             ),
             if (widget.onBack != null)
@@ -160,7 +164,7 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
               ),
           ],
         ),
-        const SizedBox(height: 10),
+        const SizedBox(height: 12),
         _DocTabs(
           markdown: _markdown,
           documentAvailable: widget.documentAvailable,
@@ -204,10 +208,20 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
                 ),
               ),
             ),
-            Text(
-              document.confirmed ? 'All reviewed' : 'Needs review',
-              style: TextStyle(
-                color: document.confirmed ? VaultColors.ok : VaultColors.warn,
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+              decoration: BoxDecoration(
+                color: (document.confirmed ? VaultColors.ok : VaultColors.warn)
+                    .withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                document.confirmed ? 'All reviewed' : 'Needs review',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: document.confirmed ? VaultColors.ok : VaultColors.warn,
+                ),
               ),
             ),
           ],
@@ -364,6 +378,29 @@ class _DocTabs extends StatelessWidget {
       ),
     ],
     selected: {markdown},
+    showSelectedIcon: false,
+    style: ButtonStyle(
+      // The default Material3 selected fill is a heavy green; the review
+      // surface uses quiet accent tints, so the toggle reads as chrome,
+      // not as a status colour.
+      backgroundColor: WidgetStateProperty.resolveWith((states) =>
+          states.contains(WidgetState.selected)
+              ? VaultColors.accent.withValues(alpha: 0.12)
+              : VaultColors.controlSubtle40),
+      foregroundColor: WidgetStateProperty.resolveWith((states) =>
+          states.contains(WidgetState.selected)
+              ? VaultColors.accent
+              : VaultColors.dim),
+      textStyle: WidgetStateProperty.all(
+        const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+      ),
+      padding: WidgetStateProperty.all(
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      ),
+      shape: WidgetStateProperty.all(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    ),
     onSelectionChanged: (values) {
       final value = values.first;
       if ((value && markdownAvailable) || (!value && documentAvailable)) {

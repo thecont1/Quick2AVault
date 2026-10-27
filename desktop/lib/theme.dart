@@ -85,6 +85,42 @@ class VaultRadius {
   static const control = 10.0;
 }
 
+/// Elevation tokens — the Glass Ledger's depth vocabulary.
+///
+/// Flat by default; shadow appears only on floating surfaces and on hover
+/// (see DESIGN.md → Elevation & Depth). Values are the soft, ambient
+/// shadows recorded in the design system sidecar.
+class VaultShadows {
+  /// Interactive cards, dropdown surfaces, popovers — on hover/press.
+  static const elevatedCard = <BoxShadow>[
+    BoxShadow(
+      color: Color(0x0D0F1C2D), // rgba(15,28,45,.05)
+      blurRadius: 2,
+      offset: Offset(0, 1),
+    ),
+    BoxShadow(
+      color: Color(0x140F1C2D), // rgba(15,28,45,.08)
+      blurRadius: 18,
+      offset: Offset(0, 6),
+    ),
+  ];
+
+  /// The document preview card — the one surface that detaches from the
+  /// page at rest.
+  static const elevatedFloat = <BoxShadow>[
+    BoxShadow(
+      color: Color(0x1A0F1C2D), // rgba(15,28,45,.10)
+      blurRadius: 8,
+      offset: Offset(0, 2),
+    ),
+    BoxShadow(
+      color: Color(0x1F0F1C2D), // rgba(15,28,45,.12)
+      blurRadius: 28,
+      offset: Offset(0, 10),
+    ),
+  ];
+}
+
 class VaultType {
   static const mono = 'Menlo';
 }
