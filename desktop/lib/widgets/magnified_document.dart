@@ -17,7 +17,7 @@
 //   * Nothing rebuilds during pointer movement except the lens itself: the
 //     position lives in a ValueNotifier and only a ValueListenableBuilder
 //     subscribes, so panning does not re-run the parent's build().
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 
 import '../theme.dart';
 
@@ -137,12 +137,16 @@ class _MagnifiedDocumentState extends State<MagnifiedDocument> {
         final canZoom = _intrinsic != null && _error == null;
 
         return MouseRegion(
+          // The system cursor is hidden once the lens is live — a visible
+          // arrow would sit exactly where the reader is trying to look.
           cursor: canZoom
-              ? SystemMouseCursors.zoomIn
+              ? SystemMouseCursors.none
               : MouseCursor.defer,
           onExit: (_) => _pos.value = null,
           onHover: (e) {
             if (!canZoom) return;
+            // Only over the actual document, never the letterboxed margins.
+            if (!_imageRect(box).contains(e.localPosition)) return;
             _pos.value = e.localPosition;
           },
           child: Stack(
@@ -207,32 +211,73 @@ class _Lens extends StatelessWidget {
       width: kLensRadius * 2,
       height: kLensRadius * 2,
       child: IgnorePointer(
-        child: ClipOval(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: VaultColors.panel,
-              border: Border.all(color: VaultColors.accent, width: 3),
-            ),
-            child: ClipOval(
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned(
-                    left: dx,
-                    top: dy,
-                    width: scaled.width,
-                    height: scaled.height,
-                    child: Image(
-                      image: image,
-                      fit: BoxFit.fill,
-                      // Nearest-neighbour would look crunchy; the point is to
-                      // read small type, so smooth upscaling wins.
-                      filterQuality: FilterQuality.high,
+        child: Container(
+          // Glassy mount: a soft outer shadow, a faint white rim, and a
+          // sheen highlight across the top-left of the lens.
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x33000000),
+                blurRadius: 22,
+                spreadRadius: 2,
+              ),
+              BoxShadow(
+                color: Color(0x22000000),
+                blurRadius: 6,
+                offset: Offset(0, 2),
+              ),
+            ],
+            border: Border.all(color: const Color(0x99FFFFFF), width: 2),
+          ),
+          child: ClipOval(
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: VaultColors.panel,
+                  ),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      Positioned(
+                        left: dx,
+                        top: dy,
+                        width: scaled.width,
+                        height: scaled.height,
+                        child: Image(
+                          image: image,
+                          fit: BoxFit.fill,
+                          // Nearest-neighbour would look crunchy; the point is
+                          // to read small type, so smooth upscaling wins.
+                          filterQuality: FilterQuality.high,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Glass sheen — a soft pool of light from the top-left, and a
+                // crisper inner rim so the circle reads as a lens.
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      center: const Alignment(-0.55, -0.55),
+                      radius: 0.9,
+                      colors: [
+                        Colors.white.withValues(alpha: 0.16),
+                        Colors.transparent,
+                      ],
+                    ),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.35),
+                      width: 1.5,
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ),
