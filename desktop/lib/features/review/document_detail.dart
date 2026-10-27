@@ -144,7 +144,7 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
     // rail, so no header row here; the Document/Markdown switch floats inside
     // the preview frame.
     final paneHeight =
-        (MediaQuery.sizeOf(context).height * 0.52).clamp(320.0, 560.0);
+        (MediaQuery.sizeOf(context).height * 0.84).clamp(420.0, 920.0);
     return SingleChildScrollView(
       key: ValueKey('document-detail-${document.id}'),
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
