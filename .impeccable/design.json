@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-27T23:30:00+05:30",
+  "title": "Design System: Quick2AVault",
+  "extensions": {
+    "colorMeta": {
+      "paper": { "role": "neutral", "displayName": "Paper", "canonical": "#FFFFFF" },
+      "control-ghost": { "role": "neutral", "displayName": "Control Ghost", "canonical": "#F7F7FA" },
+      "control-grey": { "role": "neutral", "displayName": "Control Grey", "canonical": "#F2F2F7" },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "#E5E5EA" },
+      "hairline-strong": { "role": "neutral", "displayName": "Hairline Strong", "canonical": "#D1D1D6" },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#1C1C1E" },
+      "slate": { "role": "neutral", "displayName": "Slate", "canonical": "#6B6B70" },
+      "fog": { "role": "neutral", "displayName": "Fog", "canonical": "#8E8E93" },
+      "ios-blue": { "role": "primary", "displayName": "iOS Blue", "canonical": "#0A84FF" },
+      "ledger-green": { "role": "secondary", "displayName": "Ledger Green", "canonical": "#34C759" },
+      "receipt-amber": { "role": "secondary", "displayName": "Receipt Amber", "canonical": "#FF9F0A" },
+      "transfer-slate": { "role": "tertiary", "displayName": "Transfer Slate", "canonical": "#5B6472" },
+      "revenue-mint-fill": { "role": "neutral", "displayName": "Revenue Mint Fill", "canonical": "#EAF6EE" },
+      "revenue-mint-hairline": { "role": "neutral", "displayName": "Revenue Mint Hairline", "canonical": "#CDE9D8" },
+      "revenue-green-deep": { "role": "secondary", "displayName": "Revenue Green Deep", "canonical": "#16663C" },
+      "spend-ice-fill": { "role": "neutral", "displayName": "Spend Ice Fill", "canonical": "#EAF2FD" },
+      "spend-ice-hairline": { "role": "neutral", "displayName": "Spend Ice Hairline", "canonical": "#CFE0F7" },
+      "spend-navy": { "role": "secondary", "displayName": "Spend Navy", "canonical": "#1B4F86" },
+      "invest-cream-fill": { "role": "neutral", "displayName": "Invest Cream Fill", "canonical": "#FDF0E6" },
+      "invest-cream-hairline": { "role": "neutral", "displayName": "Invest Cream Hairline", "canonical": "#F7DCC5" },
+      "invest-rust": { "role": "secondary", "displayName": "Invest Rust", "canonical": "#9A3412" }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "App title and the three money-card headings only." },
+      "headline": { "displayName": "Headline", "purpose": "Page and panel titles." },
+      "title": { "displayName": "Title", "purpose": "Document rows, section lead-ins, buttons." },
+      "body": { "displayName": "Body", "purpose": "Primary reading text and list rows." },
+      "label": { "displayName": "Label", "purpose": "Counts, chips, status pills, tab badges — Menlo uppercase." },
+      "money": { "displayName": "Money", "purpose": "Every monetary figure — tabular numerals, right-aligned." }
+    },
+    "shadows": [
+      { "name": "elevated-card", "value": "0 1px 2px rgba(15,28,45,0.05), 0 6px 18px rgba(15,28,45,0.08)", "purpose": "Interactive cards, dropdown surfaces, popovers." },
+      { "name": "elevated-float", "value": "0 2px 8px rgba(15,28,45,0.10), 0 10px 28px rgba(15,28,45,0.12)", "purpose": "Document preview card; surfaces that must detach from the page." }
+    ],
+    "motion": [
+      { "name": "ease-standard", "value": "cubic-bezier(0.35, 0, 0.25, 1)", "purpose": "Default easing for state transitions (hover, selection, toggle)." },
+      { "name": "duration-fast", "value": "120ms", "purpose": "Micro-interactions: row selection, tab underline, icon tints." },
+      { "name": "duration-standard", "value": "200ms", "purpose": "Standard state transitions." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single actionable accent; used sparingly.",
+      "html": "<button class=\"ds-btn-primary\">Reprocess</button>",
+      "css": ".ds-btn-primary{background:#0A84FF;color:#FFFFFF;font:600 15px '.AppleSystemUIFont',system-ui;padding:10px 16px;border:none;border-radius:10px;transition:background 120ms cubic-bezier(.35,0,.25,1);}.ds-btn-primary:hover{background:#0074E5;}.ds-btn-primary:focus-visible{outline:2px solid #0A84FF;outline-offset:2px;}.ds-btn-primary:active{background:#0060C9;}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary action on paper; hairline border.",
+      "html": "<button class=\"ds-btn-ghost\">Open Markdown</button>",
+      "css": ".ds-btn-ghost{background:#FFFFFF;color:#0A84FF;font:600 15px '.AppleSystemUIFont',system-ui;padding:10px 16px;border:1px solid #E5E5EA;border-radius:10px;transition:background 120ms cubic-bezier(.35,0,.25,1);}.ds-btn-ghost:hover{background:#F7F7FA;}.ds-btn-ghost:focus-visible{outline:2px solid #0A84FF;outline-offset:2px;}"
+    },
+    {
+      "name": "Search Input",
+      "kind": "input",
+      "refersTo": "input-search",
+      "description": "Dense, quiet search field seen in the Review header.",
+      "html": "<div style=\"position:relative\"><svg style=\"position:absolute;left:10px;top:50%;transform:translateY(-50%);width:15px;height:15px;fill:none;stroke:#6B6B70;stroke-width:1.8\" viewBox=\"0 0 24 24\"><circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"M21 21l-4.3-4.3\"/></svg><input class=\"ds-input-search\" placeholder=\"Search\"></div>",
+      "css": ".ds-input-search{background:#F7F7FA;color:#1C1C1E;font:400 13px '.AppleSystemUIFont',system-ui;padding:8px 12px 8px 30px;border:1px solid #E5E5EA;border-radius:10px;width:220px;outline:none;transition:border-color 120ms, box-shadow 120ms;}.ds-input-search::placeholder{color:#8E8E93;}.ds-input-search:focus{border-color:#D1D1D6;box-shadow:0 0 0 2px rgba(10,132,255,.25);}"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "chip-status",
+      "description": "Status/provenance pill; semantic tint at ~12% with semantic ink.",
+      "html": "<span class=\"ds-chip-status\">Analysed</span>",
+      "css": ".ds-chip-status{background:#EAF4EA;color:#34C759;font:600 10.5px Menlo,monospace;letter-spacing:.04em;text-transform:uppercase;padding:3px 10px;border-radius:999px;white-space:nowrap;}"
+    },
+    {
+      "name": "Ledger Card",
+      "kind": "card",
+      "refersTo": "card-ledger",
+      "description": "Hero money card: tinted fill family, 14px radius, hairline border.",
+      "html": "<div class=\"ds-card-ledger\"><div style=\"font:600 10.5px Menlo,monospace;letter-spacing:.04em;text-transform:uppercase;color:#6B6B70\">Income</div><div style=\"font:700 20px '.AppleSystemUIFont',system-ui;letter-spacing:-.8px;font-variant-numeric:tabular-nums;color:#16663C;margin-top:6px\">₹3,94,067</div></div>",
+      "css": ".ds-card-ledger{background:#EAF6EE;border:1px solid #CDE9D8;border-radius:14px;padding:18px 20px;transition:box-shadow 200ms cubic-bezier(.35,0,.25,1);}.ds-card-ledger:hover{box-shadow:0 1px 2px rgba(15,28,45,.05),0 6px 18px rgba(15,28,45,.08);}"
+    },
+    {
+      "name": "Review List Row",
+      "kind": "custom",
+      "refersTo": "custom-review-row",
+      "description": "Signature two-line row; selected state gets accent tint + indicator bar.",
+      "html": "<div class=\"ds-review-row\" role=\"button\" tabindex=\"0\"><span class=\"ds-review-bar\"></span><div style=\"flex:1;min-width:0\"><div class=\"ds-review-name\">invoice_CR269334.pdf</div><div class=\"ds-review-meta\">2026-10-27 · merchant_invoice · gmail</div></div><span class=\"ds-review-dot\"></span></div>",
+      "css": ".ds-review-row{display:flex;align-items:center;gap:12px;padding:11px 14px;margin:2px 12px;border-radius:10px;background:transparent;transition:background 120ms cubic-bezier(.35,0,.25,1);cursor:pointer;}.ds-review-row:hover{background:#F7F7FA;}.ds-review-row:focus-visible{outline:2px solid #0A84FF;outline-offset:1px;}.ds-review-bar{width:3px;height:0;border-radius:2px;background:#0A84FF;transition:height 120ms;}.ds-review-row.selected{background:rgba(10,132,255,.08);}.ds-review-row.selected .ds-review-bar{height:30px;}.ds-review-name{font:500 13px '.AppleSystemUIFont',system-ui;color:#1C1C1E;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.ds-review-row.selected .ds-review-name{font-weight:600;}.ds-review-meta{font:400 11px '.AppleSystemUIFont',system-ui;color:#6B6B70;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}.ds-review-dot{width:8px;height:8px;border-radius:999px;background:#34C759;}"
+    },
+    {
+      "name": "Tab",
+      "kind": "nav",
+      "refersTo": "nav-tab",
+      "description": "Horizontal tab for the shell; active = blue text + 2px underline.",
+      "html": "<div class=\"ds-tab selected\" role=\"tab\" aria-selected=\"true\"><svg style=\"width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8\" viewBox=\"0 0 24 24\"><path d=\"M4 19.5A2.5 2.5 0 0 1 6.5 17H20\"/><path d=\"M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z\"/></svg><span>Review</span><span class=\"ds-tab-badge\">8</span></div>",
+      "css": ".ds-tab{display:inline-flex;align-items:center;gap:7px;padding:14px 14px 11px;border-bottom:2px solid transparent;font:500 13px '.AppleSystemUIFont',system-ui;color:#6B6B70;cursor:pointer;transition:color 120ms;}.ds-tab:hover{color:#6B6B70;}.ds-tab.selected{color:#0A84FF;font-weight:600;border-bottom-color:#0A84FF;}.ds-tab-badge{background:#0A84FF;color:#fff;font:700 10.5px '.AppleSystemUIFont',system-ui;padding:1px 6px;border-radius:999px;}"
+    },
+    {
+      "name": "Financial Impact Select",
+      "kind": "input",
+      "refersTo": "input-select",
+      "description": "Surfaced select field: labelled, bordered, caret at right edge.",
+      "html": "<div><div style=\"font:600 10.5px Menlo,monospace;letter-spacing:.04em;text-transform:uppercase;color:#6B6B70;margin-bottom:6px\">Set bucket</div><div class=\"ds-select\"><div style=\"flex:1;color:#1C1C1E;font:400 13px '.AppleSystemUIFont',system-ui\">Uncategorized</div><svg style=\"width:18px;height:18px;fill:none;stroke:#6B6B70;stroke-width:1.8\" viewBox=\"0 0 24 24\"><path d=\"M6 9l6 6 6-6\"/></svg></div></div>",
+      "css": ".ds-select{display:flex;align-items:center;gap:8px;background:#FFFFFF;border:1px solid #D1D1D6;border-radius:10px;padding:6px 12px;cursor:pointer;transition:box-shadow 120ms;}.ds-select:hover{box-shadow:0 1px 2px rgba(15,28,45,.05),0 6px 18px rgba(15,28,45,.08);}.ds-select:focus-within{outline:2px solid #0A84FF;outline-offset:1px;}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Glass Ledger — scrutable, every entry transparent",
+    "overview": "Quick2AVault is a local-first personal finance vault: every rupee a transaction, every transaction evidenced. The interface behaves like a ledger made of glass — you can always see the entry, the source, and the reasoning behind it. Nothing is hidden behind mystery meat; every number has a path back to a document and every extracted field shows its provenance.\n\nThe tone is refined and restrained: an iOS-calm, light surface where precision is the personality. Density is comfortable, not cramped; interaction is quiet; colour is deployed semantically (income mint, spending ice, investment cream) rather than decoratively. The app is a tool for trust — for a household, for shared decisions — so it never performs; it simply shows the truth, legibly.",
+    "keyCharacteristics": [
+      "One window, one place: tabs are selectors over state, never hidden routers.",
+      "Everything is evidence-first: provenance pills, confidence badges, audit trails.",
+      "Money is typographic: tabular figures, right-aligned totals, never reflowing.",
+      "Honest states: disabled = visibly disabled; absent = clearly labelled.",
+      "iOS-native restraint: system UI type, hairline borders, soft tinted fills."
+    ],
+    "rules": [
+      { "name": "The One Voice Rule", "body": "iOS Blue is used on ≤10% of any given screen. Its rarity is the point; when everything is actionable, nothing is.", "section": "colors" },
+      { "name": "The Tabular Figures Rule", "body": "Every monetary figure uses tabular numerals and is right-aligned in its column. A digit change must never shift the layout.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "At rest, nothing casts a shadow. Elevation appears only as a response to state (hover, press, or a floating overlay).", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep every amount in tabular figures, right-aligned.",
+      "Do show provenance — every extracted field wears a source pill and confidence.",
+      "Do keep selected row and detail pane in visual agreement (accent bar + tint).",
+      "Do use the semantic tint families for money status; never borrow one card's color for another's meaning.",
+      "Do surface honest states: a disabled tab looks disabled; a missing capability is labelled."
+    ],
+    "donts": [
+      "Don't use Unbounded for body text or anything below 15px.",
+      "Don't use pure black (#000) — ink is #1C1C1E.",
+      "Don't shadow resting surfaces; shadows are for hover/float only.",
+      "Don't hide actions in a menubar-only router; everything reachable is one click away.",
+      "Don't let digits reflow; never change layout width as money updates.",
+      "Don't invent status colors — amber means \"needs review\", green means \"confirmed/analysed\", blue means \"actionable\"."
+    ]
+  }
+}
