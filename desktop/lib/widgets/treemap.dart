@@ -145,13 +145,14 @@ double _worstRatio(List<TreemapNode> row, double side, double scale) {
 /// the same spend must not change colour when you resize the window.
 Color treemapFill(int rank, int count) {
   final t = count <= 1 ? 0.0 : rank / (count - 1);
-  return Color.lerp(const Color(0xFF1D4ED8), const Color(0xFFDBEAFE), t)!;
+  // Olive thicket ramp — the spending region's family (see theme.dart).
+  return Color.lerp(const Color(0xFF4E4A2E), const Color(0xFFE7E5D4), t)!;
 }
 
 /// Readable ink for a given rank's fill.
 Color treemapInk(int rank, int count) {
   final t = count <= 1 ? 0.0 : rank / (count - 1);
-  return t < 0.55 ? Colors.white : const Color(0xFF0F2A6B);
+  return t < 0.55 ? Colors.white : const Color(0xFF3B3720);
 }
 
 class _Tile extends StatelessWidget {

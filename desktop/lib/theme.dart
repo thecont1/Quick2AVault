@@ -9,56 +9,49 @@ library;
 import 'package:flutter/material.dart';
 
 class VaultColors {
-  // Surfaces
-  static const bg = Color(0xFFFFFFFF);
-  static const popover = Color(0xFFFFFFFF);
-  static const panel = Color(0xFFFFFFFF);
-  static const controlSubtle = Color(0xFFF2F2F7); // iOS grouped background
-  static const controlSubtle40 = Color(0xFFF7F7FA);
-  static const line = Color(0xFFE5E5EA);
-  static const lineBright = Color(0xFFD1D1D6);
+  // Surfaces — the orienteering map ground: paper-white runnable forest,
+  // olive thicket for secondary surfaces, brown contour hairlines.
+  static const bg = Color(0xFFFBF9F3);
+  static const popover = Color(0xFFFFFFFC);
+  static const panel = Color(0xFFFFFFFC);
+  static const controlSubtle = Color(0xFFEFEBDF); // olive thicket tint
+  static const controlSubtle40 = Color(0xFFF6F3E9);
+  static const line = Color(0xFFE2DCCB); // contour hairline
+  static const lineBright = Color(0xFFCFC7AE); // contour, heavier
 
   // Text
-  static const primary = Color(0xFF1C1C1E);
-  static const secondary = Color(0xFF6B6B70);
-  static const tertiary = Color(0xFF8E8E93);
+  static const primary = Color(0xFF26241F);
+  static const secondary = Color(0xFF615C50);
+  static const tertiary = Color(0xFF8B856F);
   static const ink = primary;
   static const dim = secondary;
   static const faint = tertiary;
 
-  // ── the three money cards ────────────────────────────────────────────────
-  // Spending is BLUE and Investments are peach/brown. This is a deliberate
-  // swap of the original assignment: the "where it went" band breaks SPENDING
-  // down by category and is drawn in the blue treemap ramp, so spending had to
-  // own blue for the chart to read as belonging to the card above it. A legend
-  // in one hue under a total in another is just a puzzle for the reader.
-  static const incomeFill = Color(0xFFEAF6EE);
-  static const incomeBorder = Color(0xFFCDE9D8);
-  static const incomeInk = Color(0xFF16663C);
+  // ── the three money cards — map regions ─────────────────────────────
+  // Income = yellow open land. Spending = olive thicket. Investments = the
+  // brown contour earth. Transfers = blue marsh (water, neutral).
+  static const incomeFill = Color(0xFFF7EFD2);
+  static const incomeBorder = Color(0xFFE8D99F);
+  static const incomeInk = Color(0xFF6A5A12);
 
-  static const spendFill = Color(0xFFEAF2FD);
-  static const spendBorder = Color(0xFFCFE0F7);
-  static const spendInk = Color(0xFF1B4F86);
+  static const spendFill = Color(0xFFE7E5D4);
+  static const spendBorder = Color(0xFFCBC7A8);
+  static const spendInk = Color(0xFF4E4A2E);
 
-  static const investFill = Color(0xFFFDF0E6);
-  static const investBorder = Color(0xFFF7DCC5);
-  static const investInk = Color(0xFF9A3412);
+  static const investFill = Color(0xFFEBDDC8);
+  static const investBorder = Color(0xFFD5BFA0);
+  static const investInk = Color(0xFF7A5528);
 
   // Accents
-  static const accent = Color(0xFF0A84FF); // iOS blue — selected segment
-  static const learning = Color(0xFF34C759); // graduation-cap pill
-  static const ok = Color(0xFF34C759);
-  static const warn = Color(0xFFFF9F0A);
+  static const accent = Color(0xFF6748A8); // course purple — the active layer
+  static const learning = Color(0xFF4E7C3B); // open-land olive-green
+  static const ok = Color(0xFF4E7C3B);
+  static const warn = Color(0xFFB47A1F);
 
   // Direction language
   static const out = spendInk;
   static const income = incomeInk;
-  // Transfers get their OWN slate, no longer an alias of investInk. With the
-  // card swap that alias would have painted transfers the same brown as
-  // Investments — two different meanings in one colour. Slate also carries the
-  // right message: a transfer between accounts you own is excluded from every
-  // hero total, so it should not wear the livery of a category that counts.
-  static const transfer = Color(0xFF5B6472);
+  static const transfer = Color(0xFF3D6C7E); // blue marsh
 
   static Color forDirection(String d) => switch (d) {
         'in' => income,
@@ -66,16 +59,16 @@ class VaultColors {
         _ => out,
       };
 
-  /// Watchlist / category palette, in the reference's order.
+  /// Watchlist / category palette — map-legend hues.
   static const categorySwatches = <Color>[
-    Color(0xFF5FBF8F), // discretionary — green
-    Color(0xFFF0A05A), // eating out — orange
-    Color(0xFF5AA9E6), // ordering in — blue
-    Color(0xFFA78BFA), // groceries — purple
-    Color(0xFFE8697D), // AI expense — red
-    Color(0xFFF2C94C), // rent & utilities — yellow
-    Color(0xFF7DD3C0),
-    Color(0xFFB8A6E8),
+    Color(0xFF6B9E52), // discretionary — green
+    Color(0xFFC68A3B), // eating out — ochre
+    Color(0xFF5E8FA8), // ordering in — lake blue
+    Color(0xFF8B74A8), // groceries — heather purple
+    Color(0xFFA85E5E), // AI expense — rust
+    Color(0xFFB8A24E), // rent & utilities — tannin yellow
+    Color(0xFF5FA399),
+    Color(0xFF9E93AE),
   ];
 }
 
