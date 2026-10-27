@@ -131,9 +131,125 @@ final vaultTheme = ThemeData(
   colorScheme: const ColorScheme.light(
     surface: VaultColors.panel,
     primary: VaultColors.accent,
+    secondary: VaultColors.accent,
   ),
   fontFamily: '.AppleSystemUIFont',
   useMaterial3: true,
+
+  // Glass Ledger component defaults — every default control across all tabs
+  // inherits the tokens; per-surface override only where a surface needs to
+  // be deliberately different (e.g. the Review toggle).
+  filledButtonTheme: FilledButtonThemeData(
+    style: ButtonStyle(
+      backgroundColor: WidgetStateProperty.resolveWith((states) =>
+          states.contains(WidgetState.disabled)
+              ? VaultColors.controlSubtle
+              : states.contains(WidgetState.hovered)
+                  ? const Color(0xFF0074E5)
+                  : VaultColors.accent),
+      foregroundColor: WidgetStateProperty.all(VaultColors.panel),
+      textStyle: WidgetStateProperty.all(const TextStyle(
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+      )),
+      padding: WidgetStateProperty.all(
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      ),
+      shape: WidgetStateProperty.all(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(VaultRadius.control)),
+      ),
+    ),
+  ),
+  outlinedButtonTheme: OutlinedButtonThemeData(
+    style: ButtonStyle(
+      foregroundColor: WidgetStateProperty.resolveWith((states) =>
+          states.contains(WidgetState.hovered)
+              ? VaultColors.accent
+              : VaultColors.ink),
+      backgroundColor: WidgetStateProperty.resolveWith((states) =>
+          states.contains(WidgetState.hovered)
+              ? VaultColors.controlSubtle40
+              : VaultColors.panel),
+      side: WidgetStateProperty.all(BorderSide(color: VaultColors.line)),
+      textStyle: WidgetStateProperty.all(const TextStyle(
+        fontSize: 15,
+        fontWeight: FontWeight.w600,
+      )),
+      padding: WidgetStateProperty.all(
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      ),
+      shape: WidgetStateProperty.all(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(VaultRadius.control)),
+      ),
+    ),
+  ),
+  textButtonTheme: TextButtonThemeData(
+    style: ButtonStyle(
+      foregroundColor: WidgetStateProperty.all(VaultColors.accent),
+      textStyle: WidgetStateProperty.all(const TextStyle(
+        fontSize: 14,
+        fontWeight: FontWeight.w600,
+      )),
+    ),
+  ),
+  inputDecorationTheme: InputDecorationTheme(
+    filled: true,
+    fillColor: VaultColors.controlSubtle40,
+    isDense: true,
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+    hintStyle: const TextStyle(color: VaultColors.tertiary, fontSize: 13),
+    border: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(VaultRadius.control),
+      borderSide: const BorderSide(color: VaultColors.line),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(VaultRadius.control),
+      borderSide: const BorderSide(color: VaultColors.line),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: BorderRadius.circular(VaultRadius.control),
+      borderSide: const BorderSide(color: VaultColors.lineBright),
+    ),
+  ),
+  chipTheme: ChipThemeData(
+    backgroundColor: VaultColors.controlSubtle,
+    selectedColor: VaultColors.accent.withValues(alpha: 0.12),
+    side: const BorderSide(color: VaultColors.line),
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(VaultRadius.pill)),
+    labelStyle: const TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w600,
+      color: VaultColors.secondary,
+    ),
+    secondaryLabelStyle: const TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w600,
+      color: VaultColors.accent,
+    ),
+    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+  ),
+  segmentedButtonTheme: SegmentedButtonThemeData(
+    style: ButtonStyle(
+      backgroundColor: WidgetStateProperty.resolveWith((states) =>
+          states.contains(WidgetState.selected)
+              ? VaultColors.accent.withValues(alpha: 0.12)
+              : VaultColors.controlSubtle40),
+      foregroundColor: WidgetStateProperty.resolveWith((states) =>
+          states.contains(WidgetState.selected)
+              ? VaultColors.accent
+              : VaultColors.secondary),
+      textStyle: WidgetStateProperty.all(const TextStyle(
+        fontSize: 12.5,
+        fontWeight: FontWeight.w600,
+      )),
+      padding: WidgetStateProperty.all(
+        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      ),
+      shape: WidgetStateProperty.all(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(VaultRadius.control)),
+      ),
+    ),
+  ),
 );
 
 /// Unbounded — the display face for the app title and the three money card

@@ -97,7 +97,7 @@ class _SearchBoxState extends State<SearchBox> {
           height: 34,
           decoration: BoxDecoration(
             color: VaultColors.controlSubtle,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(VaultRadius.control),
             border: Border.all(color: VaultColors.line),
           ),
           child: Row(children: [
@@ -178,7 +178,7 @@ class _SearchBoxState extends State<SearchBox> {
         decoration: BoxDecoration(
           color: VaultColors.panel,
           border: Border.all(color: VaultColors.line),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(VaultRadius.control),
         ),
         child: SingleChildScrollView(child: child),
       );
