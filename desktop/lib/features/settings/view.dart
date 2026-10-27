@@ -10,7 +10,16 @@ export 'state.dart';
 class AppSettingsView extends StatefulWidget {
   final AppSettings initial;
   final ValueChanged<AppSettings>? onChanged;
-  const AppSettingsView({super.key, required this.initial, this.onChanged});
+  /// Optional content appended inside the settings list (e.g. the Themes
+  /// section) so the tab stays one scroll view — no nested viewports.
+  final Widget? trailing;
+
+  const AppSettingsView({
+    super.key,
+    required this.initial,
+    this.onChanged,
+    this.trailing,
+  });
 
   @override
   State<AppSettingsView> createState() => _AppSettingsViewState();
@@ -36,10 +45,8 @@ class _AppSettingsViewState extends State<AppSettingsView> {
   }
 
   @override
-  Widget build(BuildContext context) => ListView(
-    key: const PageStorageKey('app-settings'),
-    padding: const EdgeInsets.all(24),
-    children: [
+  Widget build(BuildContext context) {
+    final children = <Widget>[
       const Text(
         'App Settings',
         style: TextStyle(
@@ -125,8 +132,21 @@ class _AppSettingsViewState extends State<AppSettingsView> {
           ),
         ],
       ),
-    ],
-  );
+    ];
+    if (widget.trailing != null) {
+      children.addAll(const [
+        SizedBox(height: 24),
+        Divider(height: 1),
+        SizedBox(height: 16),
+      ]);
+      children.add(widget.trailing!);
+    }
+    return ListView(
+      key: const PageStorageKey('app-settings'),
+      padding: const EdgeInsets.all(24),
+      children: children,
+    );
+  }
 }
 
 class JurisdictionPackView extends StatelessWidget {

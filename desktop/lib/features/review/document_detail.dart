@@ -178,7 +178,11 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
           ),
         ),
         const SizedBox(height: 14),
+        // The preview owns the first fold. Strong flex ratio: it takes
+        // ~90% of the remaining height; the metadata below shows only a sliver
+        // until the user scrolls.
         Expanded(
+          flex: 9,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: widget.previewBuilder != null
@@ -189,6 +193,7 @@ class _DocumentDetailPanelState extends State<DocumentDetailPanel> {
           ),
         ),
         Flexible(
+          flex: 1,
           child: SingleChildScrollView(
             key: ValueKey('document-detail-${document.id}'),
             padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),

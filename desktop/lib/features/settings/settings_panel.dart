@@ -32,17 +32,17 @@ class SettingsPanel extends StatelessWidget {
         Expanded(
           child: TabBarView(
             children: [
-              ListView(
-                padding: const EdgeInsets.only(bottom: 28),
-                children: [
-                  AppSettingsView(initial: settings, onChanged: onSettingsChanged),
-                  const SizedBox(height: 24),
-                  const Divider(height: 1),
-                  const SizedBox(height: 16),
-                  const _ThemesHeading(),
-                  const SizedBox(height: 10),
-                  const ThemePickerView(compact: true),
-                ],
+              AppSettingsView(
+                initial: settings,
+                onChanged: onSettingsChanged,
+                trailing: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ThemesHeading(),
+                    SizedBox(height: 10),
+                    ThemePickerView(compact: true),
+                  ],
+                ),
               ),
               JurisdictionPackView(pack: pack, onAddPack: onAddPack),
             ],
