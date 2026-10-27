@@ -14,7 +14,25 @@ async function loadReview() {
   // elements are about to be replaced, so a dangling detail slot would
   // reference a removed card.
   collapseOpenDoc();
+  // A list reload or filter/period change means the pinned slot's document
+  // is no longer part of this view — hide it so it cannot linger above a
+  // list it doesn't belong to.
+  hidePin();
   const gen = ++reviewLoadGen;
+  // The Duplicate board cell shows the duplicate archive instead of the
+  // documents list — duplicates are intake items, not documents. The
+  // archive is lifetime, so the period buttons don't apply (hide them).
+  const periodsRow = document.getElementById("periodsReview");
+  if (pipelineFilter === "duplicate") {
+    if (periodsRow) periodsRow.style.display = "none";
+    renderDuplicatesInto(document.getElementById("docList"), {
+      gen,
+      labelEl: document.getElementById("docCount"),
+      labelPrefix: "· ",
+    });
+    return;
+  }
+  if (periodsRow) periodsRow.style.display = "";
   let url = "/v1/documents?period=" + encodeURIComponent(period) + "&limit=500";
   if (pipelineFilter) url += "&state=" + encodeURIComponent(pipelineFilter);
   const d = await api(url);
@@ -54,7 +72,7 @@ async function loadReview() {
       + "<div><div class='fn'>" + esc(x.original_filename) + "</div>"
       + "<div class='meta'>" + esc(x.doc_type || "unknown") + " · " + esc(x.ext || "")
       + " · " + esc(x.markdown_chars || 0) + " chars · " + esc(x.lifecycle) + "</div></div>"
-      + "<span class='kind'>" + esc(x.source) + "</span>"
+      + "<span class='kind'>" + esc(sourceLabel(x.source)) + "</span>"
       + "<span class='dt'>" + esc(invDate) + "</span></div>";
   }
   if (lastMerchant !== null) html += "</div>";
@@ -89,6 +107,67 @@ function toggleDoc(row, id) {
   showDoc(id, slot);
 }
 
+// ── duplicate archive renderer (shared by Documents Browser + Your Money) ─
+// Duplicates are byte-identical re-arrivals set aside by the sha256 guard —
+// intake items, not documents. Each row shows the duplicated filename, the
+// copy span and whether the linked original is alive; clicking a row opens
+// the original document (via the pinned slot when the list filter hides it).
+async function renderDuplicatesInto(container, opts = {}) {
+  if (!container) return;
+  let d = null;
+  try {
+    d = await api("/v1/maintenance/duplicates");
+  } catch {
+    // d stays null — the empty state below explains itself
+  }
+  if (opts.gen !== undefined && opts.gen !== (opts.genCheck || (() => reviewLoadGen))()) return;
+  const groups = (d && d.groups) || [];
+  const total = (d && d.total_copies) || 0;
+  if (opts.labelEl) {
+    opts.labelEl.textContent = (opts.labelPrefix || "") + groups.length + " group" + (groups.length === 1 ? "" : "s")
+      + " · " + total + " cop" + (total === 1 ? "y" : "ies");
+  }
+  if (!groups.length) {
+    container.innerHTML = "<div class='empty'>No duplicates — every arrival is unique.</div>";
+    return;
+  }
+  let html = opts.hint !== false
+    ? "<div class='empty dup-hint'>Byte-identical re-arrivals set aside by the sha256 guard. Click a row to open the linked original. Flush: Settings → Duplicate documents.</div>"
+    : "";
+  for (const g of groups) {
+    const files = g.files || [];
+    const first = files.length ? String(files[files.length - 1].created_at).slice(0, 10) : "?";
+    const last = files.length ? String(files[0].created_at).slice(0, 10) : "?";
+    // Only an active original can be opened (the detail endpoint serves
+    // active docs; removed -> 404, deleted -> 410 by design). Deleted
+    // originals are restorable via reprocess — hence the hint.
+    const lc = g.document_lifecycle || null;
+    const orphan = !g.document_id || lc !== "active";
+    const linkNote = !g.document_id
+      ? " · <span class='err'>no live document</span>"
+      : lc === "deleted"
+        ? " · <span class='err'>original deleted · reprocess restores</span>"
+        : lc === "removed"
+          ? " · <span class='err'>original removed</span>"
+          : " · original linked";
+    const sha = g.sha256 ? String(g.sha256).slice(0, 12) : "unknown";
+    const copies = Number.isFinite(Number(g.copies)) ? String(g.copies) : "?";
+    html += "<div class='drow" + (orphan ? " orphan" : "") + "' data-id='" + (orphan ? "" : esc(g.document_id || "")) + "'>"
+      + "<div><div class='fn'>" + esc(g.original_filename || (files[0] || {}).filename || "unknown") + "</div>"
+      + "<div class='meta'>" + esc(sha) + "… · " + esc(copies) + " cop" + (copies === "1" ? "y" : "ies")
+      + " · " + esc(first) + " → " + esc(last)
+      + linkNote + "</div></div>"
+      + "<span class='kind'>" + esc(copies) + "×</span>"
+      + "<span class='dt'>" + esc(last) + "</span></div>";
+  }
+  container.innerHTML = html;
+  container.querySelectorAll(".drow").forEach((el) => {
+    el.onclick = () => {
+      if (el.dataset.id) openDocumentDirect(el.dataset.id);
+    };
+  });
+}
+
 // Refresh the open document's detail when a pipeline state change arrives
 // via SSE — this is how the user sees reprocessing progress.
 function refreshOpenDocIfMatch(docId) {
@@ -99,8 +178,93 @@ function refreshOpenDocIfMatch(docId) {
   showDoc(openDocId, slot);
 }
 
+// Open a specific document in the Documents Browser: switch to the Review
+// tab and expand the document's row. If the current Review view does not
+// render that document (period/state scope excludes it), render the full
+// detail into the pinned slot above the list instead — the user always
+// reaches the viewing/editing screen for the exact document they clicked,
+// no matter which scope they were in.
+function openDocumentDirect(id) {
+  const tabBtn = document.querySelector('.tabs button[data-tab="review"]');
+  const switching = tabBtn && !tabBtn.classList.contains("on");
+  const tryRow = () => {
+    const row = document.querySelector("#docList .drow[data-id='" + CSS.escape(id) + "']");
+    if (row) { toggleDoc(row, id); hidePin(); return true; }
+    return false;
+  };
+  if (tryRow()) return;
+  if (switching) {
+    // The tab switch runs loadReview() async; synchronise the row lookup
+    // on that completion promise instead of a fixed timeout (the tab
+    // handler stashes the promise in __lastLoaderPromise). Only fall back
+    // to the pinned slot once loading has actually finished.
+    tabBtn.click();
+    Promise.resolve(window.__lastLoaderPromise).then(() => {
+      if (!tryRow()) pinDoc(id);
+    });
+  } else {
+    pinDoc(id);
+  }
+}
+
+function hidePin() {
+  const pin = document.getElementById("docPin");
+  if (pin) pin.style.display = "none";
+}
+
+function pinDoc(id) {
+  const pin = document.getElementById("docPin");
+  if (!pin) return;
+  pin.style.display = "";
+  pin.scrollIntoView({ block: "start", behavior: "smooth" });
+  showDoc(id, pin);
+}
+
 async function showDoc(id, container) {
-  const d = await api("/v1/documents/" + encodeURIComponent(id) + "/detail");
+  let d;
+  try {
+    d = await api("/v1/documents/" + encodeURIComponent(id) + "/detail");
+  } catch (err) {
+    // A network/daemon failure must never leave the loading placeholder
+    // (or a blank slot) — render the same non-blank error state.
+    container.innerHTML = "<div class='empty doc-err'>could not load this document"
+      + " — " + esc(String((err && err.message) || err || "request failed"))
+      + "</div>";
+    return;
+  }
+  if (d && d.error) {
+    // Never leave the slot blank: deleted/removed documents explain
+    // themselves and offer the restore path (reprocess revives a deleted
+    // document when its original bytes still exist on disk).
+    const gone = d.error === "document_deleted" || d.error === "document_removed";
+    container.innerHTML = "<div class='empty doc-err'>" + esc(d.error)
+      + (gone ? " — this document was deleted. If the original bytes still exist, reprocessing restores it."
+        : " — could not open this document.")
+      + (gone ? "<br><button class='act' id='docRestoreBtn' style='margin-top:10px'>Reprocess to restore</button>" : "")
+      + "</div>";
+    const btn = container.querySelector("#docRestoreBtn");
+    if (btn) {
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = "reprocessing…";
+        try {
+          const r = await apiPost("/v1/documents/" + encodeURIComponent(id) + "/reprocess", {});
+          if (r && r.error) {
+            // Re-enable so the user can retry once the conflict clears.
+            btn.disabled = false;
+            btn.textContent = "refused: " + r.error;
+            return;
+          }
+          btn.textContent = "restored — reprocessing…";
+          showDoc(id, container);
+        } catch {
+          btn.disabled = false;
+          btn.textContent = "failed — see daemon log";
+        }
+      };
+    }
+    return;
+  }
   const doc = d.document || {};
   const x = d.extraction || {};
   const parties = d.parties || [];

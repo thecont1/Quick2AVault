@@ -4,11 +4,108 @@ const H = { Authorization: "Bearer " + TOKEN };
 
 // If the daemon restarts, the token changes and API calls return 401.
 // Auto-reload the page to pick up the new token embedded in the HTML.
+// With persisted sessions this should be rare; the guard prevents a
+// reload storm if it ever fires repeatedly.
+let authReloading = false;
 function checkAuth(r) {
-  if (r.status === 401) location.reload();
+  if (r.status === 401 && !authReloading) {
+    authReloading = true;
+    setTimeout(() => location.reload(), 150);
+  }
   return r;
 }
 const api = (p) => fetch(p, { headers: H }).then(checkAuth).then((r) => r.json());
+// The folder watcher is the Drop folder — display it as such.
+const sourceLabel = (s) => (s === "folder" ? "DROP" : s);
+
+// ── error surfacing ──────────────────────────────────────────────
+// Any uncaught error or rejected promise paints a red banner instead of a
+// silent blank tab. This turns a user's browser into a diagnostic surface.
+function showErrBanner(msg, src) {
+  let b = document.getElementById("errBanner");
+  if (!b) {
+    b = document.createElement("div");
+    b.id = "errBanner";
+    b.style.cssText =
+      "position:fixed;bottom:10px;left:10px;right:10px;z-index:99999;" +
+      "background:#7f1d1d;color:#fff;font:11px/1.5 Menlo,monospace;" +
+      "padding:10px 14px;border-radius:8px;white-space:pre-wrap;max-height:40vh;overflow:auto";
+    document.body.appendChild(b);
+  }
+  b.textContent = "[" + src + "]\n" + msg;
+}
+window.addEventListener("error", (e) => {
+  showErrBanner((e.error && e.error.stack) || e.message || "Unknown error", "uncaught error");
+  diag({ kind: "error", msg: String((e.error && e.error.stack) || e.message || "Unknown error").slice(0, 500) });
+});
+window.addEventListener("unhandledrejection", (e) => {
+  showErrBanner((e.reason && e.reason.stack) || String(e.reason), "unhandled rejection");
+  diag({ kind: "rejection", msg: String((e.reason && e.reason.stack) || e.reason).slice(0, 500) });
+});
+
+// ── diagnostics: report browser state to the daemon (fire-and-forget) ──
+function diag(extra) {
+  try {
+    let ls = {};
+    try { ls = { tab: localStorage.getItem("q2av_tab"), period: localStorage.getItem("q2av_period") }; } catch { ls = {}; }
+    fetch("/v1/diagnostics", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ua: navigator.userAgent,
+        vp: [window.innerWidth, window.innerHeight],
+        href: location.href,
+        tab: typeof activeTab !== "undefined" ? activeTab : null,
+        loaders: typeof TAB_LOADERS !== "undefined" && TAB_LOADERS
+          ? Object.keys(TAB_LOADERS).map((k) => k + ":" + typeof TAB_LOADERS[k])
+          : [],
+        ls,
+        ...extra,
+      }),
+    }).catch(() => {});
+  } catch { /* diagnostics must never break the page */ }
+}
+window.addEventListener("load", () => setTimeout(() => diag({ kind: "load" }), 1200));
+document.addEventListener("click", (e) => {
+  const b = e.target && e.target.closest && e.target.closest(".tabs button");
+  if (!b) return;
+  setTimeout(() => diag({ kind: "tab-click", target: b.dataset.tab }), 80);
+});
+
+// The daemon serves UI files live from disk. If they change under an open
+// page (deploy, edit while browsing), reload once — the versioned asset
+// URLs guarantee the whole set comes back fresh together. This closes the
+// stale/mixed-cache class of "blank tab" bugs permanently.
+setInterval(async () => {
+  try {
+    const h = await fetch("/v1/health", { headers: H }).then((r) => r.json());
+    if (h && h.ui_version && UI_VERSION && String(h.ui_version) !== String(UI_VERSION)) {
+      // Reload only for a version pair we have NOT already tried — if a
+      // reload lands on the same mismatch (mid-edit, daemon serving a
+      // stale build), the watchdog must not reload forever.
+      const pair = UI_VERSION + "->" + String(h.ui_version);
+      let seen = false;
+      try { seen = sessionStorage.getItem("q2av_reload_pairs") === pair; } catch { /* storage blocked */ }
+      if (!seen) {
+        try { sessionStorage.setItem("q2av_reload_pairs", pair); } catch { /* storage blocked */ }
+        location.reload();
+      }
+    }
+  } catch {
+    // daemon restarting — the next tick will sort it out
+  }
+}, 15000);
+
+// Stamp the UI build in a fixed corner badge — confirms which code a
+// browser actually runs (the footer gets repopulated by setFooter later).
+try {
+  const badge = document.createElement("div");
+  badge.style.cssText =
+    "position:fixed;bottom:8px;right:10px;z-index:9999;" +
+    "font:10px Menlo,monospace;color:#999;opacity:.75;pointer-events:none";
+  badge.textContent = "ui " + UI_VERSION;
+  document.body.appendChild(badge);
+} catch { /* ignore */ }
 const apiPost = (p, body) => fetch(p, {
   method: "POST", headers: { ...H, "content-type": "application/json" },
   body: JSON.stringify(body || {}),
@@ -65,6 +162,12 @@ const PERIODS = [
   { key: "last_fy", label: "Last FY" },
   { key: "all", label: "All time" },
 ];
+// A stale stored period (from an older build's vocabulary) would poison
+// every data fetch with a value the API doesn't know. Migrate it.
+if (!PERIODS.some((p) => p.key === period)) {
+  period = "this_fy";
+  try { localStorage.setItem("q2av_period", period); } catch { /* ignore */ }
+}
 function renderPeriods() {
   const el = document.getElementById("periods");
   el.innerHTML = PERIODS.map((p) =>

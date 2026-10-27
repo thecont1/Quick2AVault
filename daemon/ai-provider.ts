@@ -293,7 +293,7 @@ export function createOpenAiProvider(cfg: AiConfig, logger: Logger): AiProvider 
           ? `${markdown.slice(0, 16000)}\n\n[...truncated...]\n\n${markdown.slice(-8000)}`
           : markdown;
 
-      try {
+      const doCall = async (forced: boolean): Promise<Record<string, unknown> | null> => {
         const res = await client.chat.completions.create({
           model,
           max_tokens: cfg.maxTokens ?? 8192,
@@ -304,19 +304,51 @@ export function createOpenAiProvider(cfg: AiConfig, logger: Logger): AiProvider 
             },
           ],
           tools: [OPENAI_TOOL],
-          tool_choice: { type: "function", function: { name: "record_extraction" } },
+          tool_choice: forced
+            ? { type: "function", function: { name: "record_extraction" } }
+            : "auto",
         });
-
         const toolCall = res.choices[0]?.message?.tool_calls?.[0];
         if (!toolCall || toolCall.type !== "function" || !toolCall.function?.arguments) {
-          logger.warn("extraction: no function tool_call returned", { filename });
           return null;
         }
-        const parsed = JSON.parse(toolCall.function.arguments);
-        return normalise(parsed as Record<string, unknown>);
-      } catch (err) {
-        logger.error("extraction failed", { filename, err: (err as Error)?.message });
+        return JSON.parse(toolCall.function.arguments) as Record<string, unknown>;
+      };
+
+      try {
+        const parsed = await doCall(true);
+        if (parsed) return normalise(parsed);
+        logger.warn("extraction: no function tool_call returned", { filename });
         return null;
+      } catch (err) {
+        // Some models reject a FORCED tool_choice (DeepSeek-family thinking
+        // mode: "Thinking mode does not support this tool_choice"). Retry
+        // with tool_choice "auto" ONLY for that class of error — auth,
+        // rate-limit and network failures must not burn a second call.
+        const rawErr = err as { message?: string; status?: number };
+        const msg = String(rawErr?.message ?? err ?? "");
+        const toolChoiceError =
+          (typeof rawErr?.status === "number" && rawErr.status >= 400 && rawErr.status < 500) ||
+          /tool_choice/i.test(msg);
+        if (!toolChoiceError) {
+          logger.error("extraction failed", { filename, err: msg });
+          return null;
+        }
+        try {
+          const parsed = await doCall(false);
+          if (parsed) {
+            logger.info("extraction: succeeded with tool_choice auto", { filename });
+            return normalise(parsed);
+          }
+          logger.warn("extraction: auto-tool-choice retry returned no tool call", { filename });
+          return null;
+        } catch (err2) {
+          logger.error("extraction failed (retry with tool_choice auto)", {
+            filename,
+            err: (err2 as Error)?.message,
+          });
+          return null;
+        }
       }
     },
   };

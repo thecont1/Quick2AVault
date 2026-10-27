@@ -580,6 +580,8 @@ function minor(value: string): number {
 
 function dateISO(raw: string): string | undefined {
   const value = raw.replace(/[\s*_#]+$/g, "").trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (iso) return value;
   const numeric = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
   if (numeric) return `${numeric[3]}-${numeric[2].padStart(2, "0")}-${numeric[1].padStart(2, "0")}`;
   const english = /^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})$/.exec(value);

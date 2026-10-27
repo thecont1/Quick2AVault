@@ -57,16 +57,23 @@
     <div id="card"></div>
   </section>
 
-  <section>
-    <h2>Documents pipeline</h2>
-    <div class="board" id="board"></div>
-    <div class="pcols">
-      <div>
-        <h2 style="margin-top:4px">Intake <span class="sub" id="intakeCount">— items</span></h2>
-        <div class="intake" id="intake"><div class="empty">waiting for intake…</div></div>
-      </div>
-    </div>
-  </section>
+  <div class="obs-cols">
+    <section class="obs-scope">
+      <header class="obs-card-head">
+        <h2>Document Scope</h2>
+        <span class="sub" id="scopeLabel">All documents</span>
+      </header>
+      <div class="scope-list" id="scopeList"><div class="empty">loading…</div></div>
+    </section>
+    <section class="obs-pipeline">
+      <header class="obs-card-head">
+        <h2>Document Pipeline</h2>
+        <span class="sub">live intake status</span>
+      </header>
+      <div class="pipeline-rail" id="board"></div>
+      <div class="pipeline-footer" id="pipelineFooter"></div>
+    </section>
+  </div>
 </div>
 
 <!-- ════════════════════════════════════════════════════════════════════════
@@ -103,6 +110,7 @@
         <div class="field">
           <label>Model</label>
           <select id="aiModel"><option value="">select a provider first</option></select>
+          <div class="provider-picker" id="aiModelPicker" style="display:none"></div>
           <div class="hint" id="aiModelNote"></div>
         </div>
         <div class="save-row">
@@ -137,6 +145,7 @@
         <div class="field" id="ai2ModelRow">
           <label>Model</label>
           <select id="ai2Model"><option value="">select a provider first</option></select>
+          <div class="provider-picker" id="ai2ModelPicker" style="display:none"></div>
           <div class="hint" id="ai2ModelNote"></div>
         </div>
         <div class="save-row">
@@ -205,8 +214,33 @@
     </div>
   </div>
 
-<!-- Danger Zone — last item in Settings, matches Vault summary width. -->
-<div class="danger-zone">
+<!-- ── Manage Duplicates + Danger Zone: maintenance pair, side by side ── -->
+<div class="settings-cols" style="margin-top:7px">
+  <div class="dup-danger" id="dupPanel">
+    <h3>Manage Duplicates</h3>
+    <div id="dupSummary" style="font:11.5px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--dim);margin-bottom:12px">…</div>
+    <div class="danger-options">
+      <label class="danger-opt">
+        <input type="radio" name="dupPolicy" value="keep_originals" checked>
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">Flush duplicates — keep originals</span>
+          <span class="danger-opt-desc">Deletes the archived duplicate files and their intake rows. Documents, transactions and analysis are untouched.</span>
+        </span>
+      </label>
+      <label class="danger-opt">
+        <input type="radio" name="dupPolicy" value="promote_newest">
+        <span class="danger-opt-body">
+          <span class="danger-opt-title">Flush duplicates and re-process</span>
+          <span class="danger-opt-desc">Same flush, then re-runs conversion + analysis on every affected document with the current models.</span>
+        </span>
+      </label>
+    </div>
+    <button class="danger-btn" id="dupFlushBtn" disabled>Flush duplicates</button>
+    <span class="msg" id="dupMsg" style="margin-left:10px"></span>
+  </div>
+
+  <!-- Danger Zone -->
+  <div class="danger-zone">
   <div class="danger-panel">
     <h3>Danger Zone</h3>
     <div class="danger-options">
@@ -241,6 +275,7 @@
     <button class="danger-btn" id="flushBtn" disabled>Flush Data</button>
     <span class="msg" id="flushMsg" style="margin-left:10px"></span>
   </div>
+</div>
 </div>
 </div>
 
@@ -293,6 +328,7 @@
 
   <div class="panel">
     <h3>Documents <span style="color:var(--faint);font-weight:400;text-transform:none" id="docCount"></span></h3>
+    <div id="docPin" style="display:none"></div>
     <div id="docList"><div class="empty">loading…</div></div>
   </div>
 </div>
@@ -332,7 +368,8 @@
 <footer id="footer"></footer>
 
 <!-- Scripts loaded in order: shared utils, then feature modules, then init. -->
-<script>const TOKEN = "%%TOKEN%%";</script>
+<script>const TOKEN = "%%TOKEN%%";
+const UI_VERSION = "%%UIVERSION%%";</script>
 <script src="/ui/ui.js"></script>
 <script src="/ui/dashboard.js"></script>
 <script src="/ui/settings.js"></script>
@@ -343,6 +380,9 @@
 // ── tab navigation + init ────────────────────────────────────────
 // TAB_LOADERS references functions from all feature modules, so it
 // must be defined after all scripts have loaded.
+// The most recent tab loader's completion promise (stashed by the tab
+// click handler) — openDocumentDirect awaits it instead of a timeout.
+let __lastLoaderPromise = null;
 const TAB_LOADERS = {
   settings: loadSettings,
   people: loadPeople,
@@ -355,7 +395,9 @@ document.getElementById("tabs").querySelectorAll("button").forEach((b) =>
     localStorage.setItem("q2av_tab", activeTab);
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.id === "tab-" + activeTab));
-    if (TAB_LOADERS[activeTab]) TAB_LOADERS[activeTab]();
+    // Stash the loader's completion promise — openDocumentDirect
+    // synchronises its row lookup on it instead of a fixed timeout.
+    __lastLoaderPromise = TAB_LOADERS[activeTab] ? TAB_LOADERS[activeTab]() : null;
   });
 // Restore the saved tab on load.
 document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x.dataset.tab === activeTab));

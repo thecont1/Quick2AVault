@@ -3,7 +3,7 @@ import tsParser from "@typescript-eslint/parser";
 import tsPlugin from "@typescript-eslint/eslint-plugin";
 
 export default [
-  { ignores: ["build/**", "desktop/**", "node_modules/**"] },
+  { ignores: ["build/**", "desktop/**", "node_modules/**", "daemon/ui/*.js"] },
   js.configs.recommended,
   {
     files: ["daemon/**/*.ts"],
