@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api.dart';
 import '../theme.dart';
+import '../features/settings/worlds.dart';
 import 'period_bar.dart';
 import 'treemap.dart';
 
@@ -224,14 +225,16 @@ class _MoneyTriple extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Column(children: [
+  Widget build(BuildContext context) {
+    final palette = WorldScope.of(context);
+    return Column(children: [
         _MoneyCard(
           label: 'Income',
           bucket: 'income',
           minor: snapshot.incomeMinor,
-          fill: VaultColors.incomeFill,
-          border: VaultColors.incomeBorder,
-          ink: VaultColors.incomeInk,
+          fill: palette.incomeFill,
+          border: palette.incomeBorder,
+          ink: palette.incomeInk,
           documents: snapshot.incomeDocs,
           selected: selected == 'income',
           onTap: () => onSelect('income'),
@@ -241,9 +244,9 @@ class _MoneyTriple extends StatelessWidget {
           label: 'Spending',
           bucket: 'spending',
           minor: snapshot.spendingMinor,
-          fill: VaultColors.spendFill,
-          border: VaultColors.spendBorder,
-          ink: VaultColors.spendInk,
+          fill: palette.spendFill,
+          border: palette.spendBorder,
+          ink: palette.spendInk,
           documents: snapshot.spendingDocs,
           selected: selected == 'spending',
           onTap: () => onSelect('spending'),
@@ -264,14 +267,15 @@ class _MoneyTriple extends StatelessWidget {
           label: 'Investments',
           bucket: 'investments',
           minor: snapshot.investmentsMinor,
-          fill: VaultColors.investFill,
-          border: VaultColors.investBorder,
-          ink: VaultColors.investInk,
+          fill: palette.investFill,
+          border: palette.investBorder,
+          ink: palette.investInk,
           documents: snapshot.investmentDocs,
           selected: selected == 'investments',
           onTap: () => onSelect('investments'),
         ),
       ]);
+  }
 }
 
 class _MoneyCard extends StatelessWidget {

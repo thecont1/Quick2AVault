@@ -20,22 +20,31 @@ class SettingsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
-    length: 3,
+    length: 2,
     child: Column(
       children: [
         const TabBar(
           tabs: [
             Tab(text: 'App Settings'),
             Tab(text: 'Jurisdiction Pack'),
-            Tab(text: 'World'),
           ],
         ),
         Expanded(
           child: TabBarView(
             children: [
-              AppSettingsView(initial: settings, onChanged: onSettingsChanged),
+              ListView(
+                padding: const EdgeInsets.only(bottom: 28),
+                children: [
+                  AppSettingsView(initial: settings, onChanged: onSettingsChanged),
+                  const SizedBox(height: 24),
+                  const Divider(height: 1),
+                  const SizedBox(height: 16),
+                  const _ThemesHeading(),
+                  const SizedBox(height: 10),
+                  const ThemePickerView(compact: true),
+                ],
+              ),
               JurisdictionPackView(pack: pack, onAddPack: onAddPack),
-              const WorldPickerView(),
             ],
           ),
         ),
@@ -44,31 +53,42 @@ class SettingsPanel extends StatelessWidget {
   );
 }
 
-/// Choose the visual world (new-work roll: orienteering map, stamped paper,
-/// ticket wallet). In-memory for now; the app rebuilds to the palette.
-class WorldPickerView extends StatelessWidget {
-  const WorldPickerView({super.key});
+class _ThemesHeading extends StatelessWidget {
+  const _ThemesHeading();
+
+  @override
+  Widget build(BuildContext context) => const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Themes',
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+              color: VaultColors.ink,
+            ),
+          ),
+          SizedBox(height: 3),
+          Text(
+            'The whole app takes its ground, ink and accent from the selected theme.',
+            style: TextStyle(color: VaultColors.dim, fontSize: 12.5),
+          ),
+        ],
+      );
+}
+
+/// Theme picker (the visual worlds). [compact] keeps the tiles tighter for
+/// embedding inside App Settings.
+class ThemePickerView extends StatelessWidget {
+  final bool compact;
+
+  const ThemePickerView({super.key, this.compact = false});
 
   @override
   Widget build(BuildContext context) {
     final active = worldPalette.value;
-    return ListView(
-      padding: const EdgeInsets.all(20),
+    return Column(
       children: [
-        const Text(
-          'Visual world',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w700,
-            color: VaultColors.ink,
-          ),
-        ),
-        const SizedBox(height: 4),
-        const Text(
-          'The whole app takes its ground, ink and accent from this world.',
-          style: TextStyle(color: VaultColors.dim, fontSize: 12.5),
-        ),
-        const SizedBox(height: 16),
         for (final palette in const [
           WorldPalette.orienteering,
           WorldPalette.stampPaper,
@@ -77,6 +97,7 @@ class WorldPickerView extends StatelessWidget {
           _WorldTile(
             palette: palette,
             selected: palette.id == active.id,
+            compact: compact,
             onTap: () => worldPalette.value = palette,
           ),
           const SizedBox(height: 10),
@@ -89,11 +110,13 @@ class WorldPickerView extends StatelessWidget {
 class _WorldTile extends StatelessWidget {
   final WorldPalette palette;
   final bool selected;
+  final bool compact;
   final VoidCallback onTap;
 
   const _WorldTile({
     required this.palette,
     required this.selected,
+    required this.compact,
     required this.onTap,
   });
 
@@ -107,7 +130,7 @@ class _WorldTile extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(12),
       child: Container(
-        padding: const EdgeInsets.all(14),
+        padding: EdgeInsets.all(compact ? 10 : 14),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
@@ -119,8 +142,8 @@ class _WorldTile extends StatelessWidget {
           children: [
             // Swatch strip
             Container(
-              width: 72,
-              height: 44,
+              width: compact ? 60 : 72,
+              height: compact ? 36 : 44,
               decoration: BoxDecoration(
                 color: palette.bg,
                 borderRadius: BorderRadius.circular(8),
