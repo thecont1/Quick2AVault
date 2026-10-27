@@ -136,23 +136,34 @@ class _MagnifiedDocumentState extends State<MagnifiedDocument> {
         final box = Size(constraints.maxWidth, constraints.maxHeight);
         final canZoom = _intrinsic != null && _error == null;
 
+        final imageRect = _imageRect(box);
+
         return MouseRegion(
-          // The system cursor is hidden once the lens is live — a visible
-          // arrow would sit exactly where the reader is trying to look.
-          cursor: canZoom
-              ? SystemMouseCursors.none
-              : MouseCursor.defer,
+          // Outer region: only responsible for clearing the lens when the
+          // pointer leaves the whole pane. The cursor stays visible here —
+          // it is hidden only over the document itself (inner region).
+          cursor: MouseCursor.defer,
           onExit: (_) => _pos.value = null,
-          onHover: (e) {
-            if (!canZoom) return;
-            // Only over the actual document, never the letterboxed margins.
-            if (!_imageRect(box).contains(e.localPosition)) return;
-            _pos.value = e.localPosition;
-          },
           child: Stack(
             fit: StackFit.expand,
             children: [
               Image(image: widget.image, fit: BoxFit.fitHeight),
+              if (canZoom)
+                // Exactly the document's perimeter: hide the cursor only
+                // here, so the arrow never obscures the text being read.
+                Positioned(
+                  left: imageRect.left,
+                  top: imageRect.top,
+                  width: imageRect.width,
+                  height: imageRect.height,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.none,
+                    onExit: (_) => _pos.value = null,
+                    onHover: (e) => _pos.value =
+                        e.localPosition + Offset(imageRect.left, imageRect.top),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
               if (canZoom)
                 ValueListenableBuilder<Offset?>(
                   valueListenable: _pos,
@@ -162,7 +173,7 @@ class _MagnifiedDocumentState extends State<MagnifiedDocument> {
                       image: widget.image,
                       pointer: pos,
                       box: box,
-                      imageRect: _imageRect(box),
+                      imageRect: imageRect,
                     );
                   },
                 ),
